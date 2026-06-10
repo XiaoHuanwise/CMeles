@@ -10,6 +10,7 @@
 build
 buildDebug
 builds
+CMakeFiles
 ThirdParty
 # Ignore .DS_Store sometimes created by OS X.
 .DS_Store
