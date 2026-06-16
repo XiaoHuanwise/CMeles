@@ -99,7 +99,7 @@ conda activate cmeles
 ### 3.3 配置conda环境
 ```bash
 # 如果项目没有提供 environment.yml，可以手动安装必要的依赖：
-conda install -y -c conda-forge gcc gxx gfortran gcc_impl_linux-64 gxx_impl_linux-64 gfortran_impl_linux-64 eigen cmake openblas blas lapack openmp ocl-icd-system
+conda install -y -c conda-forge gcc gxx gfortran gcc_impl_linux-64 gxx_impl_linux-64 gfortran_impl_linux-64 eigen hdf5 highfive cmake openblas blas lapack openmp ocl-icd-system
 ```
 
 

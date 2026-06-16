@@ -13,10 +13,15 @@ list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/third_party/.occa_install")
 
 add_executable(CMeles CMeles.cpp)
 
-# add_subdirectory(src)
+add_subdirectory(src)
 
 find_package(Eigen3 REQUIRED CONFIG)
 target_link_libraries(CMeles PRIVATE Eigen3::Eigen)
 
 find_package(OCCA REQUIRED CONFIG)
 target_link_libraries(CMeles PRIVATE OCCA::libocca)
+
+target_include_directories(CMeles PRIVATE ${CMAKE_SOURCE_DIR}/third_party/tomlplusplus)
+
+find_package(HighFive REQUIRED CONFIG)
+target_link_libraries(CMeles PRIVATE HighFive::HighFive)
