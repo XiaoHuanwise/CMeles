@@ -1,6 +1,6 @@
 # CMeles 开发环境配置指南
 
-> **最后编辑日期：2026-06-10**
+> **最后编辑日期：2026-07-17**
 >
 > ⚠️ **本指南适用于 Linux 环境（Ubuntu 22.04.5 LTS）**，其他发行版或系统可能需要做相应调整。
 
@@ -26,7 +26,17 @@ sudo apt update
 sudo apt install -y git curl wget
 # 对于AMD GPU，使用OpenCL（可选，根据实际需求安装，不推荐安装）
 sudo apt install -y mesa-opencl-icd
-# mesa-opencl-icd装了之后可以在occa info看到opencl平台和设备信息，但是他使用opencl1.1的接口，cmeles需要opencl2.0以上的接口，通过直接按照显卡的对应驱动解决。但是这样occa info可能看不到opencl平台和设备信息。这并不影响cmeles的使用，因为cmeles直接调用显卡驱动的opencl接口，不依赖occa info的信息。
+```
+
+mesa-opencl-icd装了之后可以在occa info看到opencl平台和设备信息，但是它使用opencl1.1的接口，cmeles需要opencl2.0以上的接口，通过直接按照显卡的对应驱动解决。但是这样occa info可能看不到opencl平台和设备信息。这并不影响cmeles的使用，因为cmeles直接调用显卡驱动的opencl接口，不依赖occa info的信息。
+
+因此，安装mesa-opencl-icd并通过occa info看到opencl平台和设备信息之后，需要卸载mesa-opencl-icd，安装显卡驱动的opencl接口。
+
+```bash
+# 卸载mesa-opencl-icd
+sudo apt autoremove -y mesa-opencl-icd
+sudo apt update
+sudo apt upgrade -y
 ```
 
 ---
@@ -138,6 +148,12 @@ cmake --build build --parallel <number-of-threads>
 ctest --test-dir build --output-on-failure
 cmake --install build --prefix ../.occa_install
 ```
+
+按照 libocca 的 installation guide ，需要使用 module load occa 之后才可以 使用 occa info 查看系统硬件信息。需要注意一下几点：
+- module load occa 之后可能会导致 ctest 测试中的 openmp 后端测试失败，解决方法是使用 module unload occa 之后再运行 ctest 测试。
+- 若错误安装显卡驱动会导致 occa info 运行时报错。
+- 如[系统依赖](#1-系统依赖)中提到，使用 apt 安装 mesa-opencl-icd 可以使得 occa info 看到 opencl 设备信息。但是 ctest 会报错，解决方法是卸载 mesa-opencl-icd 并安装显卡驱动的 opencl 接口。此时 occa info 仅会显示 CPU 信息并且不会报错，且 ctest 可以通过所有测试。
+- occa info 采用字符串匹配的形式查看硬件信息，因此需要英语环境才能正确显示硬件信息。可使用命令 LANG=en_US occa info 查看硬件信息。
 
 ---
 

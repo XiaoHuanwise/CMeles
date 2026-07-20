@@ -43,12 +43,24 @@ CMeles 是一个基于 C++ 的可压缩流动求解器，采用间断 Galerkin�
 
 ## OCCA 核函数开发
 
-所有计算核函数定义在 `.okl` 文件中。编写核函数时需根据目标平台准备两套逻辑：
+所有计算核函数定义在 `.okl` 文件中。所有后端（GPU CUDA/HIP、CPU OpenMP/Serial）统一使用 `@tile` 对 elem 循环标注，无需宏定义切换不同代码路径。
 
-- **CPU 路径**：不使用 `block`/`@outer` 共享内存
-- **GPU 路径**：使用 `block`/`@outer` 共享内存以利用 GPU 的片上存储
+- **所有路径统一**：使用 `@tile(TILE_SIZE, @outer, @inner)` 对 elem 循环分块。`@tile` 自动拆分为外层 `@outer`（GPU 映射到 block、OpenMP 映射到 `#pragma omp parallel for`）和内层 `@inner`（GPU 映射到 thread、OpenMP/Serial 退化为普通串行循环），elem 内全部串行。当前不考虑 `@shared` 共享内存。
+- **SIMD 向量化**：不依赖 OKL 的 `@inner` 标注，而是由编译器在 `-O3 -march=native` 下自动对最内层连续内存访问循环进行向量化。
+- **平台间差异**：仅 `TILE_SIZE` 参数根据不同平台调优（GPU 推荐 256；CPU 按核数设置），OKL 源码本身完全一致。
 
-通过宏定义切换两套代码路径。
+> **OCCA/OKL 参考文档**：OCCA 的完整文档位于 `third_party/occa/docs/`，其中与核函数开发最相关的部分：
+> - `third_party/occa/docs/guide/okl/introduction.md` — OKL 基本概念（`@outer`/`@inner`/`@shared`/`@exclusive`）
+> - `third_party/occa/docs/guide/okl/loops-in-depth.md` — OKL 循环规则
+> - `third_party/occa/docs/guide/okl/attributes.md` — OKL 属性（`@dim`、`@tile` 等）
+> - `third_party/occa/docs/api/kernel/` — C++ API（`buildKernel`、`run`、`setRunDims` 等）
+> - `third_party/occa/examples/cpp/` — OKL 核函数示例（了解 `@outer`/`@inner`/`@tile`/`@shared` 的实际语法和用法时优先查阅）
+>
+> **在处理 OCCA/OKL 相关问题时，必须先阅读上述文档确认语法和限制，避免出现幻觉。** 关键规则总结：
+> - `@outer` 和 `@inner` 是**裸属性**，不用括号或数字：`for (...; @outer)`，**不是** `@outer(0)`
+> - OKL **支持嵌套 `@outer`**（多维 block grid，如 `fd2d.okl`），**也支持顺序 `@outer`**（不嵌套的多个 `@outer` 之间顺序执行）
+> - 多个 `@inner` 循环**允许存在**但要求**迭代次数必须相同**
+> - `@shared` 数组大小必须为编译时常量（可通过 JIT 宏传入）
 
 ## 数据输出
 

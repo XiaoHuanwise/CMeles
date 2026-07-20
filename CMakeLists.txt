@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_BUILD_TYPE Release) # Release, RelWithDebInfo, Debug
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto=auto -march=native")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto=auto -march=native -O3 -fopenmp")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/third_party/.occa_install")
