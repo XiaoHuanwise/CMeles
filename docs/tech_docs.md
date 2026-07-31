@@ -15,6 +15,7 @@
 
 - [基函数](tech_docs/basis_functions.md) - 正交多项式基函数、Vandermonde 矩阵、数值求积、坐标变换、求和分解等内容
   - [平行四边形假设](tech_docs/parallelogram_assumption.md) - 常数雅可比行列式与对角质量矩阵的简化假设
+- [OCCA 内存模型与核函数开发](tech_docs/occa.md) - 设备内存模型差异（统一 vs 分离内存空间）、`DeviceMemoryManager` 统一接口设计、OKL 核函数开发约定与 `@tile` 分块策略
 - [网格与几何](tech_docs/mesh_and_geometry.md) - 一维面单元、二维体单元、法向量、雅可比矩阵、邻接关系、边界处理
 - [控制方程与 DG 场](tech_docs/governed_equations_and_DG_field.md) - 可压缩 Navier-Stokes 方程、无量纲化、DG 空间离散、DG 场数据结构和函数设置
   - [黎曼求解器与数值通量](tech_docs/riemann_solver.md) - 数值通量 FDS 方案（LLF/Rusanov、Roe、带熵修正 Roe）与 FVS 方案（Steger-Warming、van Leer），一维 Euler 方程特征结构，统一代数框架与 CMeles 嵌入方式

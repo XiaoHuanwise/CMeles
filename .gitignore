@@ -8,6 +8,7 @@
 !.gitlab-ci
 # Ignore builds and ThirdParty directories
 build
+build_float
 buildDebug
 builds
 CMakeFiles

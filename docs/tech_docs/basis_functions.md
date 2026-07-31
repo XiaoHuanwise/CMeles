@@ -40,11 +40,13 @@ $$
 P_0(x) = 1, \quad P_1(x) = x
 $$
 
-对于正则多项式，递推关系变为：
+对于正则多项式，将 $P_n(x) = \sqrt{\frac{2}{2n+1}} \, \tilde{P}_n(x)$ 代入经典递推关系，整理得：
 
 $$
-(n + 1) \tilde{P}_{n+1}(x) = (2n + 1) x \tilde{P}_n(x) - n \tilde{P}_{n-1}(x)
+\tilde{P}_{n+1}(x) = \frac{\sqrt{(2n+1)(2n+3)} \cdot x \, \tilde{P}_n(x) - n \sqrt{\frac{2n+3}{2n-1}} \cdot \tilde{P}_{n-1}(x)}{n + 1}
 $$
+
+> **注意**：归一化勒让德多项式不能直接套用经典勒让德多项式的递推系数（即保持 $(2n+1)x\tilde{P}_n - n\tilde{P}_{n-1}$ 除以 $n+1$ 的形式），因为归一化因子 $\sqrt{(2n+1)/2}$ 随 $n$ 变化，代入后会产生额外的比例因子。
 
 正则化的初始条件为：
 
@@ -54,7 +56,7 @@ $$
 
 #### 导数递推
 
-勒让德多项式的导数满足以下关系：
+经典勒让德多项式的导数满足以下关系：
 
 $$
 (2n + 1) P_n(x) = P'_{n+1}(x) - P'_{n-1}(x)
@@ -65,6 +67,14 @@ $$
 $$
 P'_n(x) = \frac{2n - 1}{n} P_{n-1}(x) + P'_{n-2}(x)
 $$
+
+对于正则多项式，将 $P_n(x) = \sqrt{\frac{2}{2n+1}} \, \tilde{P}_n(x)$ 代入 $P'_{n+1} = (2n+1)P_n + P'_{n-1}$ 并整理，得到归一化版本的导数递推：
+
+$$
+\tilde{P}'_{n+1}(x) = \sqrt{(2n+1)(2n+3)} \, \tilde{P}_n(x) + \sqrt{\frac{2n+3}{2n-1}} \, \tilde{P}'_{n-1}(x)
+$$
+
+> **注意**：上式第二项系数为 $\sqrt{\frac{2n+3}{2n-1}}$，仅当 $n = 1$ 时因 $\tilde{P}'_0(x) = 0$ 退化为 $\tilde{P}'_2(x) = \sqrt{15} \, \tilde{P}_1(x)$。对于 $n \ge 2$，该系数 $\neq 1$，不可省略。
 
 #### 前几项多项式
 
@@ -89,7 +99,8 @@ function evalNormalizedLegendre(x, N):
     if N == 1: return P[1]
 
     for n = 1 to N-1:
-        P[n+1] = ((2*n + 1) * x * P[n] - n * P[n-1]) / (n + 1)
+        P[n+1] = (sqrt((2*n + 1)*(2*n + 3)) * x * P[n]
+                  - n * sqrt((2*n + 3)/(2*n - 1)) * P[n-1]) / (n + 1)
 
     return P[N]
 ```
@@ -111,8 +122,10 @@ function evalNormalizedLegendreAndDerivative(x, N):
     if N == 1: return P[1], dP[1]
 
     for n = 1 to N-1:
-        P[n+1] = ((2*n + 1) * x * P[n] - n * P[n-1]) / (n + 1)
-        dP[n+1] = (2*n + 1) * sqrt((2*n + 3) / (2*n + 1)) * P[n] + dP[n-1]
+        P[n+1] = (sqrt((2*n + 1)*(2*n + 3)) * x * P[n]
+                  - n * sqrt((2*n + 3)/(2*n - 1)) * P[n-1]) / (n + 1)
+        dP[n+1] = sqrt((2*n + 1)*(2*n + 3)) * P[n]
+                + sqrt((2*n + 3)/(2*n - 1)) * dP[n-1]
 
     return P[N], dP[N]
 ```
@@ -354,10 +367,10 @@ $$
 x_i^{(k+1)} = x_i^{(k)} - \frac{P_N(x_i^{(k)})}{P'_N(x_i^{(k)})}
 $$
 
-初始猜测可使用切比雪夫多项式的零点：
+初始猜测可使用 Tricomi 渐近公式给出的近似零点（相比切比雪夫节点更接近真根，收敛更快）：
 
 $$
-x_i^{(0)} = -\cos\left(\frac{2i + 1}{2N} \pi\right), \quad i = 0, 1, \ldots, N-1
+x_i^{(0)} = -\cos\left(\frac{4i + 3}{4N + 2} \pi\right), \quad i = 0, 1, \ldots, N-1
 $$
 
 ### 1.6 质量矩阵与 L2 投影
@@ -497,25 +510,27 @@ $$
 
 #### 存储布局
 
-积分点按行优先顺序存储，线性索引 $k$ 与二维索引 $(i, j)$ 的映射为：
+积分点按列优先顺序存储，线性索引 $k$ 与二维索引 $(i, j)$ 的映射为：
 
 $$
-k = i \cdot N + j
+k = j \cdot N_q + i
 $$
 
-其中 $i$ 为 $s$ 方向（行）索引，$j$ 为 $r$ 方向（列）索引。
+其中 $i$ 为 $r$ 方向（列）索引，$j$ 为 $s$ 方向（行）索引。第 $k$ 个积分点坐标为 $(r_i, s_j)$。
+
+> **列优先布局的原因**：Eigen 默认采用列优先（column-major）存储。采用列优先布局后，2D Vandermonde 矩阵的第 $\ell$ 列由两个 1D Vandermonde 列向量做外积再按列优先展平得到（$\text{vec}(\mathbf{v}_{i_\ell} \mathbf{v}_{j_\ell}^T)$ 在列优先约定下直接对应 `V1D.col(i_l) * V1D.col(j_l).transpose()` 的 Eigen 默认展平），无需额外的内存重排。同时，列优先布局下积分点 $(r_i, s_j)$ 与基函数 $\phi_{ij}(r,s) = \tilde{P}_i(r)\tilde{P}_j(s)$ 的自然定义完全一致——i 控制 r、j 控制 s，无需任何 i/j 交换说明。
 
 ### 2.3 二维 Vandermonde 矩阵
 
 #### 定义
 
-设二维基函数按杨辉三角排序为 $\{\phi_\ell(r, s)\}_{\ell=0}^{N_{\text{base}}-1}$，二维积分点按张量积排序为 $\{(r_i, s_j)\}_{i,j=0}^{N-1}$。二维 Vandermonde 矩阵 $\mathbf{V}_{2D}$ 的大小为 $N^2 \times N_{\text{base}}$，定义为：
+设二维基函数按杨辉三角排序为 $\{\phi_\ell(r, s)\}_{\ell=0}^{N_{\text{base}}-1}$。由 2.2 节列优先存储布局（$k = j \cdot N_q + i$），第 $k$ 个积分点坐标为 $(r_i, s_j)$。二维 Vandermonde 矩阵 $\mathbf{V}_{2D}$ 的大小为 $N_q^2 \times N_{\text{base}}$，定义为：
 
 $$
 (\mathbf{V}_{2D})_{k\ell} = \phi_\ell(r_i, s_j) = \tilde{P}_{i_\ell}(r_i) \, \tilde{P}_{j_\ell}(s_j)
 $$
 
-其中 $k = i \cdot N + j$ 为积分点的线性索引，$\ell$ 为基函数的杨辉三角索引，$(i_\ell, j_\ell)$ 为第 $\ell$ 个基函数对应的二维阶数。
+其中 $k = j \cdot N_q + i$ 为积分点的线性索引；$\ell$ 为基函数的杨辉三角索引，$(i_\ell, j_\ell)$ 为第 $\ell$ 个基函数对应的二维阶数（$i_\ell$ 对应 $r$ 方向，$j_\ell$ 对应 $s$ 方向）。
 
 #### 模态到节点转换
 
@@ -531,7 +546,7 @@ $$
 
 #### 定义
 
-二维基函数对参考坐标 $r$ 和 $s$ 的导数分别构成两个 Vandermonde 导数矩阵：
+二维基函数对参考坐标 $r$ 和 $s$ 的导数分别构成两个 Vandermonde 导数矩阵（沿用列优先布局，$k = j \cdot N_q + i$）：
 
 $$
 (\mathbf{D}_{V,r})_{k\ell} = \frac{\partial \phi_\ell}{\partial r}(r_i, s_j) = \tilde{P}'_{i_\ell}(r_i) \, \tilde{P}_{j_\ell}(s_j)

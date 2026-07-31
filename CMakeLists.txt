@@ -9,9 +9,16 @@ set(CMAKE_BUILD_TYPE Release) # Release, RelWithDebInfo, Debug
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto=auto -march=native -O3 -fopenmp")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# ---- Precision control ----
+option(USE_FLOAT_PRECISION "Use float (32-bit) instead of double (64-bit) as the default floating-point type" OFF)
+
 list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/third_party/.occa_install")
 
 add_executable(CMeles CMeles.cpp)
+
+if(USE_FLOAT_PRECISION)
+    target_compile_definitions(CMeles PRIVATE USE_FLOAT_PRECISION)
+endif()
 
 add_subdirectory(src)
 
@@ -25,3 +32,8 @@ target_include_directories(CMeles PRIVATE ${CMAKE_SOURCE_DIR}/third_party/tomlpl
 
 find_package(HighFive REQUIRED CONFIG)
 target_link_libraries(CMeles PRIVATE HighFive::HighFive)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(ctest)
+endif()

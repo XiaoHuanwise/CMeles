@@ -34,6 +34,7 @@ CMeles 是一个基于 C++ 的可压缩流动求解器，采用间断 Galerkin�
 
 - 使用 LLVM 注释规范，注释语言为英文
 - 作为学术开发代码，关键算法步骤和物理含义处应有适当的行内注释
+- 注释中的公式采用 LaTeX 语法，使用 `$ ... $` 包裹行内公式，`$$ ... $$` 包裹独立公式；对于VSCode编辑器，安装 Comment Formula 插件可实现公式渲染预览。
 
 ### 设计原则
 
@@ -41,26 +42,47 @@ CMeles 是一个基于 C++ 的可压缩流动求解器，采用间断 Galerkin�
 - **RAII**：严格遵循 RAII 原则管理资源（内存、文件句柄、设备上下文等），确保异常安全
 - **设计模式**：根据场景合理使用工厂模式、单例模式等提升可维护性
 
-## OCCA 核函数开发
+### 精度控制
 
-所有计算核函数定义在 `.okl` 文件中。所有后端（GPU CUDA/HIP、CPU OpenMP/Serial）统一使用 `@tile` 对 elem 循环标注，无需宏定义切换不同代码路径。
+项目使用类型别名 `Real` 统一管理浮点精度，定义在 `src/common/Types.hpp`：
 
-- **所有路径统一**：使用 `@tile(TILE_SIZE, @outer, @inner)` 对 elem 循环分块。`@tile` 自动拆分为外层 `@outer`（GPU 映射到 block、OpenMP 映射到 `#pragma omp parallel for`）和内层 `@inner`（GPU 映射到 thread、OpenMP/Serial 退化为普通串行循环），elem 内全部串行。当前不考虑 `@shared` 共享内存。
-- **SIMD 向量化**：不依赖 OKL 的 `@inner` 标注，而是由编译器在 `-O3 -march=native` 下自动对最内层连续内存访问循环进行向量化。
-- **平台间差异**：仅 `TILE_SIZE` 参数根据不同平台调优（GPU 推荐 256；CPU 按核数设置），OKL 源码本身完全一致。
+```cpp
+#ifdef USE_FLOAT_PRECISION
+using Real = float;
+constexpr Real RealEpsilon = Real(1e-7);
+#else
+using Real = double;
+constexpr Real RealEpsilon = Real(1e-15);
+#endif
+```
 
-> **OCCA/OKL 参考文档**：OCCA 的完整文档位于 `third_party/occa/docs/`，其中与核函数开发最相关的部分：
-> - `third_party/occa/docs/guide/okl/introduction.md` — OKL 基本概念（`@outer`/`@inner`/`@shared`/`@exclusive`）
-> - `third_party/occa/docs/guide/okl/loops-in-depth.md` — OKL 循环规则
-> - `third_party/occa/docs/guide/okl/attributes.md` — OKL 属性（`@dim`、`@tile` 等）
-> - `third_party/occa/docs/api/kernel/` — C++ API（`buildKernel`、`run`、`setRunDims` 等）
-> - `third_party/occa/examples/cpp/` — OKL 核函数示例（了解 `@outer`/`@inner`/`@tile`/`@shared` 的实际语法和用法时优先查阅）
->
-> **在处理 OCCA/OKL 相关问题时，必须先阅读上述文档确认语法和限制，避免出现幻觉。** 关键规则总结：
-> - `@outer` 和 `@inner` 是**裸属性**，不用括号或数字：`for (...; @outer)`，**不是** `@outer(0)`
-> - OKL **支持嵌套 `@outer`**（多维 block grid，如 `fd2d.okl`），**也支持顺序 `@outer`**（不嵌套的多个 `@outer` 之间顺序执行）
-> - 多个 `@inner` 循环**允许存在**但要求**迭代次数必须相同**
-> - `@shared` 数组大小必须为编译时常量（可通过 JIT 宏传入）
+**使用规则**：
+
+- 所有项目代码应使用 `Real` 代替 `double`/`float` 直接写类型名
+- Eigen 类型使用便捷别名：`VectorXr`（向量）、`MatrixXr`（行优先矩阵）、`MatrixXrCol`（列优先矩阵）、`MatrixX2r`（N×2 行优先矩阵）
+- 精度敏感的常量（如迭代收敛判据、零值比较）使用 `RealEpsilon` 而非硬编码字面量
+- 整数运算中的字面量使用 `Real(...)` 包装以避免精度转换问题（如 `Real(1) / std::sqrt(Real(2))`）
+
+**CMake 选项**：
+
+```bash
+cmake -B build -DUSE_FLOAT_PRECISION=ON   # 使用 float（32-bit）
+cmake -B build                            # 使用 double（64-bit，默认）
+```
+
+`USE_FLOAT_PRECISION` 宏通过 `target_compile_definitions` 传递给所有编译目标（主目标和测试目标），因此所有包含 `Types.hpp` 的文件自动切换精度。
+
+## OCCA/OKL 核函数开发
+
+所有计算核函数定义在 `.okl` 文件中。开发约定详见 `docs/tech_docs/occa.md`，关键规则：
+
+- **所有后端统一**：使用 `@tile(TILE_SIZE, @outer, @inner)` 对 elem 循环分块。`@tile` 自动拆分为外层 `@outer`（GPU → block、OpenMP → `#pragma omp parallel for`）和内层 `@inner`（GPU → thread、OpenMP/Serial → 串行），elem 内全部串行。当前不考虑 `@shared` 共享内存。
+- **`@outer` 和 `@inner` 是裸属性**，不用括号或数字：`for (...; @outer)`，**不是** `@outer(0)`
+- OKL 支持嵌套 `@outer`（多维 block grid），也支持顺序 `@outer`
+- 多个 `@inner` 循环允许存在，但迭代次数必须相同
+- `@shared` 数组大小必须为编译时常量（可通过 JIT 宏传入）
+- **SIMD 向量化**：不依赖 `@inner` 标注，由编译器在 `-O3 -march=native` 下自动完成
+- **设备内存管理**：通过 `DeviceMemoryManager` 封装 `wrapMemory`（统一内存空间后端）和 `malloc`+`copy`（分离内存空间后端）的差异
 
 ## 数据输出
 

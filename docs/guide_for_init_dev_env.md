@@ -1,6 +1,6 @@
 # CMeles 开发环境配置指南
 
-> **最后编辑日期：2026-07-17**
+> **最后编辑日期：2026-07-28**
 >
 > ⚠️ **本指南适用于 Linux 环境（Ubuntu 22.04.5 LTS）**，其他发行版或系统可能需要做相应调整。
 
@@ -24,20 +24,21 @@
 ```bash
 sudo apt update
 sudo apt install -y git curl wget
-# 对于AMD GPU，使用OpenCL（可选，根据实际需求安装，不推荐安装）
-sudo apt install -y mesa-opencl-icd
+
+# 若需使用 OpenCL，安装 OpenCL ICD Loader（可选，根据实际需求安装，AMD GPU若使用OpenCL需要安装）
+sudo apt install -y ocl-icd-libopencl1 opencl-headers ocl-icd-opencl-dev
 ```
 
-mesa-opencl-icd装了之后可以在occa info看到opencl平台和设备信息，但是它使用opencl1.1的接口，cmeles需要opencl2.0以上的接口，通过直接按照显卡的对应驱动解决。但是这样occa info可能看不到opencl平台和设备信息。这并不影响cmeles的使用，因为cmeles直接调用显卡驱动的opencl接口，不依赖occa info的信息。
+不要使用 apt 安装 mesa-opencl-icd 来解决 OpenCL 依赖问题，因为 mesa-opencl-icd 使用的是 OpenCL 1.1 的接口，而 cmeles 需要 OpenCL 2.0 以上的接口。
 
-因此，安装mesa-opencl-icd并通过occa info看到opencl平台和设备信息之后，需要卸载mesa-opencl-icd，安装显卡驱动的opencl接口。
+虽然mesa-opencl-icd装了之后可以在occa info看到opencl平台和设备信息，但是CMeles无法通过编译。
 
-```bash
-# 卸载mesa-opencl-icd
-sudo apt autoremove -y mesa-opencl-icd
-sudo apt update
-sudo apt upgrade -y
-```
+应当直接安装显卡的对应驱动。
+
+对于 AMD GPU，参考 [AMDGPU 官方安装指南](https://amdgpu-install.readthedocs.io/en/latest/install-prereq.html#downloading-the-installer-package) 安装驱动。 或者（没尝试过，针对独显或者新核显） [AMD ROCm 官方安装指南](https://rocm.docs.amd.com/en/latest/install/rocm.html) 安装 ROCm 驱动。
+
+若 amdgpu 途径安装完成后，出现 clinfo 无法显示 GPU 信息，但是 sudo clinfo 可以显示 GPU 信息的情况，查阅 [AMDGPU 官方安装指南 OpenCL 相关问题](https://amdgpu-install.readthedocs.io/en/latest/install-installing.html#opencl-optional-component) ，将用户添加到对应用户组，重启后解决。
+
 
 ---
 
@@ -150,9 +151,8 @@ cmake --install build --prefix ../.occa_install
 ```
 
 按照 libocca 的 installation guide ，需要使用 module load occa 之后才可以 使用 occa info 查看系统硬件信息。需要注意一下几点：
-- module load occa 之后可能会导致 ctest 测试中的 openmp 后端测试失败，解决方法是使用 module unload occa 之后再运行 ctest 测试。
-- 若错误安装显卡驱动会导致 occa info 运行时报错。
-- 如[系统依赖](#1-系统依赖)中提到，使用 apt 安装 mesa-opencl-icd 可以使得 occa info 看到 opencl 设备信息。但是 ctest 会报错，解决方法是卸载 mesa-opencl-icd 并安装显卡驱动的 opencl 接口。此时 occa info 仅会显示 CPU 信息并且不会报错，且 ctest 可以通过所有测试。
+- module load occa 之后可能会导致 ctest 测试中有额外的项目测试失败，解决方法是使用 module unload occa 之后再运行 ctest 测试。
+- 若错误安装显卡驱动会导致 occa info 运行时报错，或者不显示显卡硬件信息。
 - occa info 采用字符串匹配的形式查看硬件信息，因此需要英语环境才能正确显示硬件信息。可使用命令 LANG=en_US occa info 查看硬件信息。
 
 ---
