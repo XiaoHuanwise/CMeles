@@ -219,6 +219,8 @@ mem_mgr.copyToHost(o_u, u_result.data(), N_total);
 - 使用 `@tile(TILE_SIZE, @outer, @inner)` 对 `elem`（单元编号）循环分块。`@tile` 自动拆分为外层 `@outer`（GPU block / OpenMP `#pragma omp parallel for`）和内层 `@inner`（GPU thread / 串行退化）。elem 内全部串行。
 - 当前不考虑 `@shared` 共享内存，所有数据读写走全局内存。
 
+> **特例 — 归约核函数（`reduce.okl`）**：BLAS-1 归约操作（`dot`、`nrm2`、`asum`、`sumReduce`）是项目中**唯一使用 `@shared` 的例外**。块内树形归约必须依赖共享内存实现高效的并行规约，无法通过全局内存高效替代。详见 `src/blas/okl/reduce.okl`。
+
 > 分块策略的详细描述（目标硬件绑定行为、SIMD 向量化说明、`@outer`/`@inner` 语义、`TILE_SIZE` 选择依据等）见[控制方程与 DG 场](governed_equations_and_DG_field.md#occa-共享内存分块形状)。
 
 ### 平台间差异
@@ -255,6 +257,39 @@ OCCA 的完整文档位于 `third_party/occa/docs/`，CMeles 开发中最常查�
 > - OKL **支持嵌套 `@outer`**（多维 block grid，如 `fd2d.okl`），**也支持顺序 `@outer`**（不嵌套的多个 `@outer` 之间顺序执行）
 > - 多个 `@inner` 循环**允许存在**但要求**迭代次数必须相同**
 > - `@shared` 数组大小必须为编译时常量（可通过 JIT 宏传入）
+
+---
+
+## OKL 核函数模块
+
+项目中的 OKL 核函数按功能分类，放置在 `src/` 下的对应子目录中，每个模块搭配一个 C++ 封装类。
+
+### BLAS 模块 (`src/blas/okl/`)
+
+标准 BLAS 1-3 级操作的 OCCA/OKL 实现，封装类为 `Blas`（`src/blas/Blas.hpp`）。
+
+| 文件 | 内核 | 对应 BLAS 操作 |
+|---|---|---|
+| `blas1.okl` | `scal`, `axpy`, `copy` | BLAS-1 元素级 |
+| `reduce.okl` | `dot`, `nrm2`, `asum`, `sumReduce` | BLAS-1 归约（**含 `@shared` 例外**） |
+| `blas2.okl` | `gemv`, `ger` | BLAS-2 |
+| `gemm.okl` | `gemm` | BLAS-3 |
+
+- 精度：`Real` 和 `TILE_SIZE` 通过 JIT 宏（`props["defines/Real"]`、`props["defines/TILE_SIZE"]`）注入，无需在 `.okl` 文件中硬编码类型。
+- 归约策略：三级流水线——Level-0 per-block 归约 → 设备端 `sumReduce` ping-pong → host 最终归约。
+- 转置约定：所有矩阵假设为非转置、行优先。需要 $A^T$ / $V^T$ 时在 host 端预计算显式转置副本。
+
+### Math 模块 (`src/math/okl/`)
+
+标准 BLAS 之外的补充数学核函数，封装类为 `MathOps`（`src/math/MathOps.hpp`）。后续扩展（如逐元素除、幂运算等）统一添加到此模块。
+
+| 文件 | 内核 | 操作 |
+|---|---|---|
+| `elemwise.okl` | `vmul` | Hadamard 积 $z_i = x_i \cdot y_i$ |
+
+### OKL 文件运行时路径
+
+OKL 源文件在 CMake configure 阶段由 `file(COPY)` 拷贝至 `${CMAKE_BINARY_DIR}/occa/okl`。所有 C++ 封装类通过 `OCCA_OKL_DIR` 编译宏定位 `.okl` 文件，也可在构造时传入自定义路径（便于测试覆盖）。
 
 ---
 

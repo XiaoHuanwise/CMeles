@@ -277,8 +277,8 @@ private:
                       ///< (N+1)(N+2)/2$.
     int numPoints1D_; ///< $N_q$ from 1D basis.
 
-    /// Pascal-triangle index map, shape $N_{\text{base}} \times 2$: $(i_l,
-    /// j_l)$ for each $l$.
+    /// Pascal-triangle index map,
+    /// shape $N_{\text{base}} \times 2$: $(i_l,j_l)$ for each $l$.
     Eigen::Matrix<int, Eigen::Dynamic, 2, Eigen::RowMajor> ij_map_;
 
     /// Quadrature points, shape $N_q^2 \times 2$, row-major.

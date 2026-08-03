@@ -1,0 +1,36 @@
+// blas2.okl — BLAS-2 matrix-vector operations
+// gemv: y = alpha * A * x + beta * y   (A: m x n, row-major)
+// ger:  A = alpha * x * y^T + A        (A: m x n, row-major)
+//
+// Convention: all matrices are row-major (matches Eigen::MatrixXr).
+// Transposed variants are handled by precomputing explicit transposes on the
+// host side — all kernels always assume non-transposed, row-major, k-contiguous
+// access patterns.
+
+// y = alpha * A * x + beta * y
+// Each thread computes one output row.  The inner k-loop loads A row-wise
+// (contiguous) and broadcasts x[k] — both SIMD- and cache-friendly.
+@kernel void gemv(const int m, const int n,
+                  const Real alpha, const Real beta,
+                  const Real *A, const Real *x, Real *y) {
+  for (int i = 0; i < m; ++i; @tile(TILE_SIZE, @outer, @inner)) {
+    Real acc = 0.0;
+    for (int k = 0; k < n; ++k) {
+      acc += A[i * n + k] * x[k];
+    }
+    y[i] = alpha * acc + beta * y[i];
+  }
+}
+
+// A = alpha * x * y^T + A
+// Each thread handles one row serially — no division in inner loop.
+// xi is loaded once per row; y[j] is contiguous.
+@kernel void ger(const int m, const int n, const Real alpha,
+                 const Real *x, const Real *y, Real *A) {
+  for (int i = 0; i < m; ++i; @tile(TILE_SIZE, @outer, @inner)) {
+    const Real xi = x[i];
+    for (int j = 0; j < n; ++j) {
+      A[i * n + j] += alpha * xi * y[j];
+    }
+  }
+}

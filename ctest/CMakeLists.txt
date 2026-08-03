@@ -3,4 +3,6 @@
 include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(basis)
+    add_subdirectory(blas)
+    add_subdirectory(math)
 endif()

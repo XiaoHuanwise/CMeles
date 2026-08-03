@@ -1,0 +1,25 @@
+// blas1.okl — BLAS-1 element-wise operations
+// scal: x = alpha * x
+// axpy: y = alpha * x + y
+// copy: y = x
+//
+// All kernels use @tile(TILE_SIZE, @outer, @inner) with automatic bounds
+// checking.  SIMD vectorisation is handled by -O3 -march=native.
+
+@kernel void scal(const int n, const Real alpha, Real *x) {
+  for (int i = 0; i < n; ++i; @tile(TILE_SIZE, @outer, @inner)) {
+    x[i] *= alpha;
+  }
+}
+
+@kernel void axpy(const int n, const Real alpha, const Real *x, Real *y) {
+  for (int i = 0; i < n; ++i; @tile(TILE_SIZE, @outer, @inner)) {
+    y[i] = alpha * x[i] + y[i];
+  }
+}
+
+@kernel void copy(const int n, const Real *x, Real *y) {
+  for (int i = 0; i < n; ++i; @tile(TILE_SIZE, @outer, @inner)) {
+    y[i] = x[i];
+  }
+}

@@ -1,0 +1,11 @@
+// elemwise.okl — Element-wise vector/matrix operations (extended BLAS-1)
+// vmul: z = x .* y  (Hadamard product)
+//
+// Placement: src/math/okl/ — supplementary math kernels beyond standard BLAS.
+// Conventions follow docs/tech_docs/occa.md.
+
+@kernel void vmul(const int n, const Real *x, const Real *y, Real *z) {
+  for (int i = 0; i < n; ++i; @tile(TILE_SIZE, @outer, @inner)) {
+    z[i] = x[i] * y[i];
+  }
+}

@@ -20,6 +20,13 @@ if(USE_FLOAT_PRECISION)
     target_compile_definitions(CMeles PRIVATE USE_FLOAT_PRECISION)
 endif()
 
+# Copy OKL kernel sources to the build tree so they are discoverable at runtime.
+file(COPY ${CMAKE_SOURCE_DIR}/src/blas/okl
+     DESTINATION ${CMAKE_BINARY_DIR}/occa)
+file(COPY ${CMAKE_SOURCE_DIR}/src/math/okl
+     DESTINATION ${CMAKE_BINARY_DIR}/occa)
+add_compile_definitions(OCCA_OKL_DIR="${CMAKE_BINARY_DIR}/occa/okl")
+
 add_subdirectory(src)
 
 find_package(Eigen3 REQUIRED CONFIG)
