@@ -213,6 +213,8 @@ CMeles 不在边界外侧设置幽灵单元。对于边界面上的积分点，�
 
 上述调整后，边界面的法向量恒指向计算域外部，与内部单元位于法向量反方向的几何事实一致。此约定确保边界条件实现中无需区别内部面的左右符号逻辑——边界单元面积分始终按左单元公式（正号累加）处理。
 
+> **代码实现说明**：若网格由生成器或读取器保证单元**逆时针定向**（本项目的 `StructuredMeshGenerator` 即如此），则上述调整步骤可完全省略——`Mesh::buildFaces()` 的边匹配算法中"首个认领边的单元恒为左单元"，配合逆时针定向，边界面法向量自动指向域外，内部面法向量自动由 $K_L$ 指向 $K_R$。方向一致性以防御性校验实现（两侧遍历方向不一致即报错）。本节的交换步骤仅在外部网格文件可能违反定向约定时才作为兜底需要。
+
 > **备注**：不同边界条件（如无穿透壁面、远场、指定入口/出口）的区别仅在于外侧状态 $u^+$ 的构造方式，与面积分框架无关。
 
 ### 1.7 周期边界条件
@@ -380,13 +382,13 @@ $$
 
 #### 存储布局
 
-积分点按行优先顺序存储，线性索引 $k$ 与二维索引 $(i, j)$ 的映射为：
+积分点按线性索引连续存储（单元内 $N_q^2$ 个积分点相邻），线性索引 $k$ 与二维索引 $(i, j)$ 的映射为：
 
 $$
-k = i \cdot N + j
+k = j \cdot N + i
 $$
 
-其中 $i$ 为 $s$ 方向（行）索引，$j$ 为 $r$ 方向（列）索引。
+其中 $i$ 为 $r$ 方向（列）索引，$j$ 为 $s$ 方向（行）索引，$N$ 即每方向积分点数 $N_q$。第 $k$ 个积分点坐标为 $(r_i, s_j)$。此约定与[基函数文档](basis_functions.md) 2.2 节完全一致，体单元的几何量（如雅可比行列式）均按此序逐积分点存储。
 
 ### 2.4 雅可比矩阵与行列式
 
@@ -415,13 +417,13 @@ $$
 
 #### 雅可比行列式
 
-雅可比行列式为参考坐标的双线性函数：
+将双线性系数代入行列式公式并展开（交叉项 $rs$ 的系数为 $a_3 b_3 - a_3 b_3 \equiv 0$，恒为零），得雅可比行列式为参考坐标的**线性函数**：
 
 $$
-|\mathbf{J}(r, s)| = \frac{1}{16}\left(\alpha + \beta\,s + \gamma\,r + \delta\,rs\right)
+|\mathbf{J}(r, s)| = \frac{1}{16}\left(C_0 + C_r\,r + C_s\,s\right)
 $$
 
-其中四个系数由边向量叉积给出。定义四条边的边向量为：
+其中三个系数由边向量叉积给出。定义四条边的边向量为：
 
 $$
 \vec{e}_{21} = \overrightarrow{P_1 P_2}, \quad \vec{e}_{32} = \overrightarrow{P_2 P_3}, \quad \vec{e}_{43} = \overrightarrow{P_3 P_4}, \quad \vec{e}_{14} = \overrightarrow{P_4 P_1}
@@ -430,25 +432,28 @@ $$
 则：
 
 $$
-\alpha = \overrightarrow{P_1 P_3} \times \overrightarrow{P_2 P_4}, \quad
-\beta = \vec{e}_{43} \times (-\vec{e}_{21}), \quad
-\gamma = \vec{e}_{32} \times \vec{e}_{14}, \quad
-\delta = \vec{e}_{21} \times (-\vec{e}_{43})
+C_0 = 2\left(\overrightarrow{P_1 P_3} \times \overrightarrow{P_2 P_4}\right), \quad
+C_r = 2\left(\vec{e}_{43} \times \vec{e}_{21}\right), \quad
+C_s = 2\left(\vec{e}_{14} \times \vec{e}_{32}\right)
 $$
 
 叉积定义为 $v_1 \times v_2 = v_{1x} v_{2y} - v_{1y} v_{2x}$。
 
+> **核对（正方形）**：$P_1=(0,0), P_2=(h,0), P_3=(h,h), P_4=(0,h)$。$\overrightarrow{P_1 P_3}=(h,h), \overrightarrow{P_2 P_4}=(-h,h)$，$C_0 = 2(h\cdot h - h\cdot(-h)) = 4h^2$；$\vec{e}_{43}=(-h,0), \vec{e}_{21}=(h,0)$，$C_r = 2\big[(-h)\cdot 0 - 0\cdot h\big] = 0$；$\vec{e}_{14}=(0,-h), \vec{e}_{32}=(0,h)$，$C_s = 0$。故 $|\mathbf{J}| = 4h^2/16 = h^2/4$ ✓。
+
 > **备注**：雅可比行列式在每个积分点处取值不同，需逐积分点计算。完整的推导过程参见[基函数文档](basis_functions.md) 2.6 节。
+>
+> **代码实现**：实际编码时不使用上述叉积系数展开，而是直接由双线性系数计算四个偏导数 $\partial x/\partial r = a_1 + a_3 s$ 等，再取行列式 $|\mathbf{J}| = \frac{\partial x}{\partial r}\frac{\partial y}{\partial s} - \frac{\partial x}{\partial s}\frac{\partial y}{\partial r}$。两者数学等价，直接求导更简单且不易出错。
 
 #### 三角形的雅可比行列式
 
-当 $P_3 = P_4$（三角形）时，$\vec{e}_{43} = \vec{0}$，因此 $\beta = \delta = 0$：
+当 $P_3 = P_4$（三角形）时，$\vec{e}_{43} = \vec{0}$，$C_r = 2(\vec{0} \times \vec{e}_{21}) = 0$：
 
 $$
-|\mathbf{J}(r, s)| = \frac{1}{16}\left(\alpha + \gamma\,r\right)
+|\mathbf{J}(r, s)| = \frac{1}{16}\left(C_0 + C_s\,s\right)
 $$
 
-> **重要**：此时 $|\mathbf{J}|$ 仍是参考坐标的线性函数（依赖于 $r$），**并非常数**。在 $[-1, 1]^2$ 上进行数值积分时，$|\mathbf{J}|$ 在每个积分点处取值不同，需逐积分点计算，与四边形完全一致。
+> **重要**：此时 $|\mathbf{J}|$ 仍是参考坐标的线性函数（依赖于 $s$），**并非常数**。在 $[-1, 1]^2$ 上进行数值积分时，$|\mathbf{J}|$ 在每个积分点处取值不同，需逐积分点计算，与四边形完全一致。
 
 > 若改用三角形专用的非退化仿射映射（形函数为 $1-r-s$, $r$, $s$，积分域为三角形参考单元），则 $|\mathbf{J}|$ 确实为常数。但 CMeles 统一使用四边形的 $[-1, 1]^2$ 参考域和双线性四形函数，通过 $P_3 = P_4$ 的退化实现三角形，因此 $|\mathbf{J}|$ 随积分点位置变化。
 >
@@ -456,21 +461,7 @@ $$
 
 #### 逆矩阵
 
-物理坐标下的偏导数通过雅可比矩阵的逆变换得到：
-
-$$
-\begin{bmatrix}
-\displaystyle \frac{\partial u}{\partial x} \\[8pt]
-\displaystyle \frac{\partial u}{\partial y}
-\end{bmatrix}
-= \mathbf{J}^{-1}
-\begin{bmatrix}
-\displaystyle \frac{\partial u}{\partial r} \\[8pt]
-\displaystyle \frac{\partial u}{\partial s}
-\end{bmatrix}
-$$
-
-其中：
+物理坐标下的偏导数通过链式法则由逆映射的雅可比矩阵变换得到。记逆映射 $r = r(x, y)$、$s = s(x, y)$，其雅可比矩阵即 $\mathbf{J}$ 的逆矩阵，各元素为**参考坐标对物理坐标的偏导**：
 
 $$
 \mathbf{J}^{-1} = \frac{1}{|\mathbf{J}|}
@@ -478,7 +469,40 @@ $$
 \displaystyle \frac{\partial y}{\partial s} & \displaystyle -\frac{\partial x}{\partial s} \\[8pt]
 \displaystyle -\frac{\partial y}{\partial r} & \displaystyle \frac{\partial x}{\partial r}
 \end{bmatrix}
+=
+\begin{bmatrix}
+\displaystyle \frac{\partial r}{\partial x} & \displaystyle \frac{\partial r}{\partial y} \\[8pt]
+\displaystyle \frac{\partial s}{\partial x} & \displaystyle \frac{\partial s}{\partial y}
+\end{bmatrix}
 $$
+
+由链式法则（逐分量形式：$\frac{\partial u}{\partial x} = \frac{\partial u}{\partial r}\frac{\partial r}{\partial x} + \frac{\partial u}{\partial s}\frac{\partial s}{\partial x}$，$y$ 方向同理），**列向量约定下物理坐标下的偏导通过 $\mathbf{J}^{-T}$ 变换得到**：
+
+$$
+\begin{bmatrix}
+\displaystyle \frac{\partial u}{\partial x} \\[8pt]
+\displaystyle \frac{\partial u}{\partial y}
+\end{bmatrix}
+= \mathbf{J}^{-T}
+\begin{bmatrix}
+\displaystyle \frac{\partial u}{\partial r} \\[8pt]
+\displaystyle \frac{\partial u}{\partial s}
+\end{bmatrix}
+, \qquad
+\mathbf{J}^{-T} = \frac{1}{|\mathbf{J}|}
+\begin{bmatrix}
+\displaystyle \frac{\partial y}{\partial s} & \displaystyle -\frac{\partial y}{\partial r} \\[8pt]
+\displaystyle -\frac{\partial x}{\partial s} & \displaystyle \frac{\partial x}{\partial r}
+\end{bmatrix}
+$$
+
+> **注意（转置原因）**：$\mathbf{J}^{-1}$ 的第 $i$ 行是参考坐标 $\xi_i$（$r$ 或 $s$）对物理坐标的**梯度**（行向量）。因此列向量 $\begin{bmatrix} u_r \\ u_s \end{bmatrix}$ 左乘 $\mathbf{J}^{-1}$ 会把 $u_r$、$u_s$ 与错误行组合，**必须左乘其转置 $\mathbf{J}^{-T}$**。若改用行向量约定则无需转置，原有形式直接成立：
+>
+> $$
+> \begin{bmatrix} \frac{\partial u}{\partial x} & \frac{\partial u}{\partial y} \end{bmatrix} = \begin{bmatrix} \frac{\partial u}{\partial r} & \frac{\partial u}{\partial s} \end{bmatrix} \mathbf{J}^{-1}
+> $$
+>
+> 两种约定互为转置、完全等价。仅在 $\mathbf{J}$ 对称（如轴对齐矩形网格）时 $\mathbf{J}^{-1} = \mathbf{J}^{-T}$ 恰好成立。
 
 $\mathbf{J}^{-1}$ 在每个积分点处取值不同，需逐积分点计算，无论四边形还是退化四边形（三角形）均如此。
 
@@ -653,4 +677,4 @@ $$
 
 > **备注**：面编号（$0$、$1$、$2$、$3$）在四边形和三角形中保持一致，均按参考域的位置定义（从左面开始逆时针遍历）。三角形中坍缩面的编号不重新排列，而是通过邻接数据中的 $-1$ 标记来区分有效面和退化面。面积分核函数在遍历邻接槽位时，遇到 $-1$ 即跳过该面。
 
-> **与平行四边形假设的关系**：若网格中所有四边形均为平行四边形，雅可比行列式退化为常数，质量矩阵保持对角结构。详见 [平行四边形假设](parallelogram_assumption.md)。三角形天然满足常数雅可比条件（仿射映射），无需额外假设。
+> **与平行四边形假设的关系**：若网格中所有四边形均为平行四边形，雅可比行列式退化为常数，质量矩阵保持对角结构。详见 [平行四边形假设](parallelogram_assumption.md)。注：三角形在本项目的退化四边形框架下 $|\mathbf{J}|$ 并非常数（随 $s$ 线性变化，见 2.4 节）；仅在改用三角形专用非退化仿射映射（形函数 $1-r-s, r, s$）时 $|\mathbf{J}|$ 才为常数。

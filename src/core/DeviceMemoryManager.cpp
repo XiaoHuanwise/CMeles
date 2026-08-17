@@ -6,8 +6,7 @@
 #include <vector>
 
 DeviceMemoryManager::DeviceMemoryManager(occa::device &device)
-    : device_(device),
-      has_separate_(device.hasSeparateMemorySpace())
+    : device_(device), has_separate_(device.hasSeparateMemorySpace())
 {
 }
 
@@ -15,16 +14,18 @@ DeviceMemoryManager::DeviceMemoryManager(occa::device &device)
 // wrapOrMalloc (from host pointer)
 // ---------------------------------------------------------------------------
 
-occa::memory DeviceMemoryManager::wrapOrMalloc(
-    const Real *src, occa::dim_t entries)
+occa::memory DeviceMemoryManager::wrapOrMalloc(const Real *src,
+                                               occa::dim_t entries)
 {
-    if (has_separate_) {
+    if (has_separate_)
+    {
         // GPU backend: allocate device memory on the device.
         // If src is provided, use it to initialise the allocation.
-        return src
-            ? device_.malloc<Real>(entries, src)
-            : device_.malloc<Real>(entries);
-    } else {
+        return src ? device_.malloc<Real>(entries, src)
+                   : device_.malloc<Real>(entries);
+    }
+    else
+    {
         // CPU backend: wrap existing host pointer.
         // Caller must ensure src lifetime exceeds all kernel launches.
         return device_.wrapMemory<Real>(src, entries);
@@ -49,10 +50,11 @@ occa::memory DeviceMemoryManager::wrapOrMalloc(occa::dim_t entries)
 // copyToHost
 // ---------------------------------------------------------------------------
 
-void DeviceMemoryManager::copyToHost(
-    occa::memory &o_data, Real *dst, occa::dim_t entries)
+void DeviceMemoryManager::copyToHost(occa::memory &o_data, Real *dst,
+                                     occa::dim_t entries)
 {
-    if (has_separate_) {
+    if (has_separate_)
+    {
         o_data.copyTo(dst, entries);
     }
     // Unified space: same address space, no copy needed.
@@ -62,10 +64,53 @@ void DeviceMemoryManager::copyToHost(
 // copyFromHost
 // ---------------------------------------------------------------------------
 
-void DeviceMemoryManager::copyFromHost(
-    occa::memory &o_data, const Real *src, occa::dim_t entries)
+void DeviceMemoryManager::copyFromHost(occa::memory &o_data, const Real *src,
+                                       occa::dim_t entries)
 {
-    if (has_separate_) {
+    if (has_separate_)
+    {
+        o_data.copyFrom(src, entries);
+    }
+    // Unified space: same address space, no copy needed.
+}
+
+// ---------------------------------------------------------------------------
+// int-typed variants (topology/adjacency arrays)
+// ---------------------------------------------------------------------------
+
+occa::memory DeviceMemoryManager::wrapOrMallocInt(const int *src,
+                                                  occa::dim_t entries)
+{
+    if (has_separate_)
+    {
+        // GPU backend: allocate device memory on the device.
+        // If src is provided, use it to initialise the allocation.
+        return src ? device_.malloc<int>(entries, src)
+                   : device_.malloc<int>(entries);
+    }
+    else
+    {
+        // CPU backend: wrap existing host pointer.
+        // Caller must ensure src lifetime exceeds all kernel launches.
+        return device_.wrapMemory<int>(src, entries);
+    }
+}
+
+void DeviceMemoryManager::copyToHost(occa::memory &o_data, int *dst,
+                                     occa::dim_t entries)
+{
+    if (has_separate_)
+    {
+        o_data.copyTo(dst, entries);
+    }
+    // Unified space: same address space, no copy needed.
+}
+
+void DeviceMemoryManager::copyFromHost(occa::memory &o_data, const int *src,
+                                       occa::dim_t entries)
+{
+    if (has_separate_)
+    {
         o_data.copyFrom(src, entries);
     }
     // Unified space: same address space, no copy needed.

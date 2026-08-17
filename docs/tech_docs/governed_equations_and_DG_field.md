@@ -392,10 +392,10 @@ $$
 
 粘性通量 $\boldsymbol{F}_v$ 依赖于 $\nabla\boldsymbol{q}$，因此计算粘性通量前必须先在积分点上构造守恒变量的梯度场。CMeles 采用**两步走**策略：
 
-1. **梯度求值核函数**（`computeGradient`）：对每个单元，在全部 $N_Q^2$ 个积分点上计算 $\nabla\boldsymbol{q}$。使用 Vandermonde 导数矩阵 $\mathbf{D}_{V,r}$ 和 $\mathbf{D}_{V,s}$ 从模态系数求参考坐标下的导数，再通过 $\mathbf{J}^{-1}$ 变换到物理坐标：
+1. **梯度求值核函数**（`computeGradient`）：对每个单元，在全部 $N_Q^2$ 个积分点上计算 $\nabla\boldsymbol{q}$。使用 Vandermonde 导数矩阵 $\mathbf{D}_{V,r}$ 和 $\mathbf{D}_{V,s}$ 从模态系数求参考坐标下的导数，再通过 $\mathbf{J}^{-T}$ 变换到物理坐标（**列向量约定，注意是 $\mathbf{J}^{-1}$ 的转置**，见[网格与几何文档 2.4 节](mesh_and_geometry.md#逆矩阵)）：
    $$
    \begin{bmatrix} \partial_x \boldsymbol{q} \\ \partial_y \boldsymbol{q} \end{bmatrix}_{(r_i, s_j)}
-   = \mathbf{J}^{-1}(r_i, s_j)
+   = \mathbf{J}^{-T}(r_i, s_j)
    \begin{bmatrix} \sum_{\ell} \hat{\boldsymbol{u}}_\ell \, \partial_r \phi_\ell(r_i, s_j) \\
                     \sum_{\ell} \hat{\boldsymbol{u}}_\ell \, \partial_s \phi_\ell(r_i, s_j) \end{bmatrix}
    $$

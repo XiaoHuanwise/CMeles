@@ -736,13 +736,13 @@ $$
 \frac{\partial y}{\partial r} = b_1 + b_3 s, \quad \frac{\partial y}{\partial s} = b_2 + b_3 r
 $$
 
-代入行列式公式展开并整理各项系数（常数项、$r$、$s$、$rs$），得到雅可比行列式为参考坐标的**双线性函数**：
+代入行列式公式展开并整理各项系数（常数项、$r$、$s$ 项；交叉项 $rs$ 的系数为 $a_3 b_3 - a_3 b_3 \equiv 0$，恒为零），得到雅可比行列式为参考坐标的**线性函数**：
 
 $$
-|\mathbf{J}(r, s)| = \frac{1}{16}\left(\alpha + \beta\,s + \gamma\,r + \delta\,rs\right)
+|\mathbf{J}(r, s)| = \frac{1}{16}\left(C_0 + C_r\,r + C_s\,s\right)
 $$
 
-其中四个系数均可表示为边向量叉积。定义四边形四条边的边向量为：
+其中三个系数均可表示为边向量叉积。定义四边形四条边的边向量为：
 
 $$
 \vec{e}_{21} = \overrightarrow{P_1 P_2}, \quad \vec{e}_{32} = \overrightarrow{P_2 P_3}, \quad \vec{e}_{43} = \overrightarrow{P_3 P_4}, \quad \vec{e}_{14} = \overrightarrow{P_4 P_1}
@@ -751,20 +751,18 @@ $$
 则各系数的几何含义为：
 
 $$
-\alpha = \underbrace{(x_3 - x_1)(y_4 - y_2) - (y_3 - y_1)(x_4 - x_2)}_{\text{对角线向量的叉积 } = \, \overrightarrow{P_1 P_3} \times \overrightarrow{P_2 P_4}}
+C_0 = \underbrace{2\left[(x_3 - x_1)(y_4 - y_2) - (y_3 - y_1)(x_4 - x_2)\right]}_{\text{对角线叉积的 2 倍 } = \, 2\left(\overrightarrow{P_1 P_3} \times \overrightarrow{P_2 P_4}\right)}
 $$
 
 $$
-\beta = \underbrace{(x_3 - x_4)(y_1 - y_2) - (y_3 - y_4)(x_1 - x_2)}_{\overrightarrow{P_4 P_3} \times \overrightarrow{P_2 P_1} \;=\; \vec{e}_{43} \times (-\vec{e}_{21})}
+C_r = \underbrace{2\left[(x_3 - x_4)(y_2 - y_1) - (y_3 - y_4)(x_2 - x_1)\right]}_{\overrightarrow{P_4 P_3} \times \overrightarrow{P_1 P_2} \text{ 的 2 倍 } \;=\; 2\left(\vec{e}_{43} \times \vec{e}_{21}\right)}
 $$
 
 $$
-\gamma = \underbrace{(x_2 - x_3)(y_4 - y_1) - (y_2 - y_3)(x_4 - x_1)}_{\overrightarrow{P_3 P_2} \times \overrightarrow{P_1 P_4} \;=\; \vec{e}_{32} \times \vec{e}_{14}}
+C_s = \underbrace{2\left[(x_1 - x_4)(y_3 - y_2) - (y_1 - y_4)(x_3 - x_2)\right]}_{\overrightarrow{P_4 P_1} \times \overrightarrow{P_2 P_3} \text{ 的 2 倍 } \;=\; 2\left(\vec{e}_{14} \times \vec{e}_{32}\right)}
 $$
 
-$$
-\delta = \underbrace{(x_2 - x_1)(y_4 - y_3) - (y_2 - y_1)(x_4 - x_3)}_{\overrightarrow{P_1 P_2} \times \overrightarrow{P_3 P_4} \;=\; \vec{e}_{21} \times (-\vec{e}_{43})}
-$$
+> **核对（正方形）**：$P_1=(0,0), P_2=(h,0), P_3=(h,h), P_4=(0,h)$。$C_0 = 2[(h,h)\times(-h,h)] = 2(h^2 + h^2) = 4h^2$；$C_r = 2[\vec{e}_{43}\times\vec{e}_{21}] = 2[(-h,0)\times(h,0)] = 0$；$C_s = 2[(0,-h)\times(0,h)] = 0$。故 $|\mathbf{J}| = 4h^2/16 = h^2/4$ ✓。
 
 > **补充说明**：若网格中所有单元均为平行四边形，雅可比行列式退化为常数，质量矩阵保持对角结构，无需逐单元存储。详见 [平行四边形假设](parallelogram_assumption.md)。
 
@@ -786,21 +784,7 @@ $$
 
 #### 导数变换
 
-物理坐标下的偏导数通过雅可比矩阵的逆变换得到：
-
-$$
-\begin{bmatrix}
-\displaystyle \frac{\partial u}{\partial x} \\[8pt]
-\displaystyle \frac{\partial u}{\partial y}
-\end{bmatrix}
-= \mathbf{J}^{-1}
-\begin{bmatrix}
-\displaystyle \frac{\partial u}{\partial r} \\[8pt]
-\displaystyle \frac{\partial u}{\partial s}
-\end{bmatrix}
-$$
-
-其中雅可比矩阵的逆为：
+物理坐标下的偏导数通过链式法则由逆映射的雅可比矩阵变换得到。记逆映射 $r = r(x, y)$、$s = s(x, y)$，其雅可比矩阵即 $\mathbf{J}$ 的逆矩阵，各元素为参考坐标对物理坐标的偏导：
 
 $$
 \mathbf{J}^{-1} = \frac{1}{|\mathbf{J}|}
@@ -808,9 +792,36 @@ $$
 \displaystyle \frac{\partial y}{\partial s} & \displaystyle -\frac{\partial x}{\partial s} \\[8pt]
 \displaystyle -\frac{\partial y}{\partial r} & \displaystyle \frac{\partial x}{\partial r}
 \end{bmatrix}
+=
+\begin{bmatrix}
+\displaystyle \frac{\partial r}{\partial x} & \displaystyle \frac{\partial r}{\partial y} \\[8pt]
+\displaystyle \frac{\partial s}{\partial x} & \displaystyle \frac{\partial s}{\partial y}
+\end{bmatrix}
 $$
 
-在参考单元上利用 Vandermonde 导数矩阵和求和分解计算 $\frac{\partial u}{\partial r}$ 和 $\frac{\partial u}{\partial s}$ 后，再乘以 $\mathbf{J}^{-1}$ 得到物理坐标下的导数。由于雅可比矩阵在每个积分点处取值不同，$\mathbf{J}^{-1}$ 需逐积分点计算。
+**列向量约定下，物理坐标下的偏导通过 $\mathbf{J}^{-T}$ 变换得到**（$\mathbf{J}^{-1}$ 的转置；原因见下）：
+
+$$
+\begin{bmatrix}
+\displaystyle \frac{\partial u}{\partial x} \\[8pt]
+\displaystyle \frac{\partial u}{\partial y}
+\end{bmatrix}
+= \mathbf{J}^{-T}
+\begin{bmatrix}
+\displaystyle \frac{\partial u}{\partial r} \\[8pt]
+\displaystyle \frac{\partial u}{\partial s}
+\end{bmatrix}
+, \qquad
+\mathbf{J}^{-T} = \frac{1}{|\mathbf{J}|}
+\begin{bmatrix}
+\displaystyle \frac{\partial y}{\partial s} & \displaystyle -\frac{\partial y}{\partial r} \\[8pt]
+\displaystyle -\frac{\partial x}{\partial s} & \displaystyle \frac{\partial x}{\partial r}
+\end{bmatrix}
+$$
+
+> **注意（转置原因）**：$\mathbf{J}^{-1} = \begin{bmatrix} \frac{\partial r}{\partial x} & \frac{\partial r}{\partial y} \\ \frac{\partial s}{\partial x} & \frac{\partial s}{\partial y} \end{bmatrix}$ 的行是"参考坐标对物理坐标的梯度"，因此列向量 $\begin{bmatrix} u_r \\ u_s \end{bmatrix}$ 左乘需用其**转置** $\mathbf{J}^{-T}$（即交换 $\mathbf{J}^{-1}$ 的交叉项 $-\frac{\partial x}{\partial s}$ 与 $-\frac{\partial y}{\partial r}$）。等价的行向量形式 $\begin{bmatrix} u_x & u_y \end{bmatrix} = \begin{bmatrix} u_r & u_s \end{bmatrix} \mathbf{J}^{-1}$ 无需转置，两者互为转置、完全等价。仅在 $\mathbf{J}$ 对称时 $\mathbf{J}^{-1} = \mathbf{J}^{-T}$ 恰好成立。
+
+在参考单元上利用 Vandermonde 导数矩阵和求和分解计算 $\frac{\partial u}{\partial r}$ 和 $\frac{\partial u}{\partial s}$ 后，再左乘 $\mathbf{J}^{-T}$ 得到物理坐标下的导数。由于雅可比矩阵在每个积分点处取值不同，$\mathbf{J}^{-1}$（及 $\mathbf{J}^{-T}$）需逐积分点计算。
 
 #### 逐单元存储与质量矩阵
 
@@ -830,7 +841,7 @@ $$
 
 #### 三角形作为退化四边形
 
-三角形单元可统一纳入四边形框架：将四边形的两个相邻顶点合并为同一点（如令 $P_3 = P_4$），双线性映射退化为三角形映射。此时 $a_3 = \frac{x_1 - x_2}{4}$（一般非零），雅可比行列式仍为双线性函数，逐单元存储策略与一般四边形完全一致。
+三角形单元可统一纳入四边形框架：将四边形的两个相邻顶点合并为同一点（如令 $P_3 = P_4$），双线性映射退化为三角形映射。此时 $a_3 = \frac{x_1 - x_2}{4}$（一般非零），雅可比行列式为参考坐标的线性函数（参见上文 2.6 节公式），逐单元存储策略与一般四边形完全一致。
 
 > **数值注意事项**：退化四边形的雅可比行列式在被合并顶点所在的参考边上为零（如 $P_3 = P_4$ 时 $|\mathbf{J}| \propto (1 - s)$，在 $s = 1$ 处为零）。由于 Gauss-Legendre 积分点不包含端点，积分计算仍然可行，但靠近退化边的积分点处 $|\mathbf{J}|$ 较小，$\mathbf{J}^{-1}$ 元素量级较大，需关注数值精度。实际使用中应避免过于扁平的退化单元。
 
