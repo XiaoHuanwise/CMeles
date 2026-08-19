@@ -1,0 +1,126 @@
+// llf.okl — Local Lax-Friedrichs (Rusanov) flux for the 2D Euler equations.
+//
+// All functions here are plain `static` device functions (the OCCA "device
+// function" idiom, see examples/cpp/30_device_function). They are written
+// in the *local* normal-tangent frame; the rotation to/from that frame is
+// provided separately (see rotate_state / rotate_flux_back below) so that
+// future fluxes (Roe, FVS) reuse the same rotation helpers.
+//
+// This file is `#include`d by the DG surface-integral kernel
+// (surface_integral.okl) at JIT-compile time, so the shared helper
+// functions are available there. The @kernel `llfFlux` is a test entry
+// point: it computes the LLF flux for one state pair and writes the
+// result to `flux`.
+//
+// Conventions (matching Riemann.hpp):
+//   q = (rho, rho u, rho v, E),  f = (rho u, rho u^2 + p, rho u v, u (E + p))
+//
+// OCCA rule: no C++ reference parameters — pass by value / pointer only.
+//
+// NOTE on math functions: `fabs` is avoided in favour of the ternary
+// `(x >= 0) ? x : -x` because OCCA's OpenCL path (LLVM -> comgr) cannot
+// resolve libm symbols on the device. `sqrt` (sound speed) is physically
+// required by LLF and is therefore kept; kernels using it compile and run
+// on the Serial/OpenMP backends but fail to link on OpenCL (OCCA
+// limitation, not a code defect). See docs/tech_docs/occa.md.
+
+#include <math.h>
+
+// --- Primitive-variable helpers ---------------------------------------------
+
+static Real p_from_q(const Real *q, Real gamma) {
+  const Real rho = q[0];
+  const Real u = q[1] / rho;
+  const Real v = q[2] / rho;
+  const Real ke = 0.5 * rho * (u * u + v * v);
+  return (gamma - 1.0) * (q[3] - ke);
+}
+
+static Real sound_speed(const Real *q, Real gamma) {
+  const Real rho = q[0];
+  const Real p = p_from_q(q, gamma);
+  return sqrt(gamma * p / rho);
+}
+
+// --- Physical (convective) flux ---------------------------------------------
+
+static void physical_flux(const Real *q, Real gamma, Real *f) {
+  const Real rho = q[0];
+  const Real u = q[1] / rho;
+  const Real v = q[2] / rho;
+  const Real p = p_from_q(q, gamma);
+
+  f[0] = rho * u;
+  f[1] = rho * u * u + p;
+  f[2] = rho * u * v;
+  f[3] = u * (q[3] + p);
+}
+
+// --- Rotation helpers (independent of the flux family) -----------------------
+
+// Rotate a physical state into the local normal-tangent frame:
+//   U = u*nx + v*ny,  V = -u*ny + v*nx   (see rotateState in Riemann.hpp).
+static void rotate_state(const Real *q, Real nx, Real ny, Real *q_rot) {
+  const Real rho = q[0];
+  const Real u = q[1] / rho;
+  const Real v = q[2] / rho;
+
+  q_rot[0] = rho;
+  q_rot[1] = rho * (nx * u + ny * v);
+  q_rot[2] = rho * (-ny * u + nx * v);
+  q_rot[3] = q[3];
+}
+
+// Rotate a local-frame flux back to physical space:
+//   f_rhou = nx*f_rhoU - ny*f_rhoV,  f_rhov = ny*f_rhoU + nx*f_rhoV
+// (see rotateFluxBack in Riemann.hpp).
+static void rotate_flux_back(const Real *flux_rot, Real nx, Real ny,
+                             Real *flux) {
+  flux[0] = flux_rot[0];
+  flux[1] = nx * flux_rot[1] - ny * flux_rot[2];
+  flux[2] = ny * flux_rot[1] + nx * flux_rot[2];
+  flux[3] = flux_rot[3];
+}
+
+// --- LLF flux (works in the local frame) -------------------------------------
+
+// LLF numerical flux given two states in the local normal-tangent frame:
+//   F = 0.5*(fL + fR) - 0.5*alpha*(qR - qL)
+//   alpha = max(|UL|+aL, |UR|+aR)
+static void llf_flux(const Real *qL, const Real *qR, Real gamma, Real *flux) {
+  Real fL[4], fR[4];
+  physical_flux(qL, gamma, fL);
+  physical_flux(qR, gamma, fR);
+
+  const Real uL = qL[1] / qL[0];
+  const Real uR = qR[1] / qR[0];
+  const Real aL = ((uL >= 0.0) ? uL : -uL) + sound_speed(qL, gamma);
+  const Real aR = ((uR >= 0.0) ? uR : -uR) + sound_speed(qR, gamma);
+  const Real alpha = (aL > aR) ? aL : aR;
+
+  for (int k = 0; k < 4; ++k) {
+    flux[k] = 0.5 * (fL[k] + fR[k]) - 0.5 * alpha * (qR[k] - qL[k]);
+  }
+}
+
+// --- Test entry point --------------------------------------------------------
+
+// Compute the LLF flux for one state pair (states in the local frame).
+// Used by the Riemann unit test to validate the device implementation
+// against the host reference (Riemann.cpp).
+@kernel void llfFlux(const int nPairs,
+                     const Real *qL, const Real *qR,
+                     const Real *gammaArr,
+                     Real *flux) {
+  for (int i = 0; i < nPairs; ++i; @tile(TILE_SIZE, @outer, @inner)) {
+    Real qL_i[4], qR_i[4], f[4];
+    for (int k = 0; k < 4; ++k) {
+      qL_i[k] = qL[i * 4 + k];
+      qR_i[k] = qR[i * 4 + k];
+    }
+    llf_flux(qL_i, qR_i, gammaArr[0], f);
+    for (int k = 0; k < 4; ++k) {
+      flux[i * 4 + k] = f[k];
+    }
+  }
+}
