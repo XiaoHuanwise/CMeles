@@ -25,6 +25,10 @@ file(COPY ${CMAKE_SOURCE_DIR}/src/blas/okl
      DESTINATION ${CMAKE_BINARY_DIR}/occa)
 file(COPY ${CMAKE_SOURCE_DIR}/src/math/okl
      DESTINATION ${CMAKE_BINARY_DIR}/occa)
+file(COPY ${CMAKE_SOURCE_DIR}/src/riemann/okl
+     DESTINATION ${CMAKE_BINARY_DIR}/occa)
+file(COPY ${CMAKE_SOURCE_DIR}/src/dg/okl
+     DESTINATION ${CMAKE_BINARY_DIR}/occa)
 add_compile_definitions(OCCA_OKL_DIR="${CMAKE_BINARY_DIR}/occa/okl")
 
 add_subdirectory(src)

@@ -1,0 +1,41 @@
+# CMeles default configuration.
+#
+# Every section is optional: a missing key falls back to the built-in
+# default (see src/config/Config.hpp). This file documents the schema and
+# the default values.
+
+# ---- DG basis ----
+[basis]
+order = 2                 # Polynomial order N of the DG approximation space.
+nq = 4                    # Gauss-Legendre quadrature points per dimension N_q.
+
+# ---- Structured mesh ----
+[mesh]
+nx = 8                    # Elements in x.
+ny = 8                    # Elements in y.
+x0 = 0.0                  # Lower-left corner x.
+y0 = 0.0                  # Lower-left corner y.
+dx = 1.0                  # Element size in x.
+dy = 1.0                  # Element size in y.
+shear = 0.0               # Horizontal shear offset per row (parallelogram grid).
+split_triangles = false   # Split each quad into two triangles.
+
+# ---- Riemann solver / numerical flux ----
+[riemann]
+flux = "llf"              # "llf" (implemented); roe/roe-e/steger-warming/van-leer reserved.
+
+# ---- Gas model ----
+[gas]
+gamma = 1.4               # Ratio of specific heats.
+
+# ---- Flow (initial / reference state) ----
+[flow]
+rho = 1.0                 # Reference density.
+u = 0.0                   # Reference x-velocity.
+v = 0.0                   # Reference y-velocity.
+p = 1.0                   # Reference pressure.
+mach = 0.1                # Reference Mach number (used for non-dimensionalisation).
+
+# ---- OCCA device ----
+[occa]
+mode = "Serial"           # "Serial", "OpenMP", "OpenCL", "CUDA", "HIP", ...
