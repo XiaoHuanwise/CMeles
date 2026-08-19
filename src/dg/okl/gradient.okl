@@ -1,0 +1,20 @@
+// gradient.okl — Conserved-variable gradient at quadrature points.
+//
+// RESERVED SKELETON. The viscous path of the DG field module requires the
+// gradients of the conserved variables at the quadrature points before the
+// viscous flux can be evaluated (see docs/tech_docs/
+// governed_equations_and_DG_field.md, Section (二), "粘性项处理").
+//
+// The future kernel computes, per element and per quadrature point,
+//
+//   [ dq/dx ; dq/dy ] = J^-T * [ sum_m u[m] * dV2D_r[q][m] ;
+//                                sum_m u[m] * dV2D_s[q][m] ]
+//
+// using the inverse-map Jacobian (Jinv11..Jinv22) and writes the result
+// into gradU[elem][var][dim][q]. It is not implemented in this stage: the
+// inviscid residual skips it entirely (the convective volume integral does
+// not need gradients).
+//
+// The placeholder below keeps the kernel name registered so that the
+// DgField::computeGradient skeleton can be completed later without
+// touching the surface/assembly kernels.

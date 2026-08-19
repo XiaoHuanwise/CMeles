@@ -1,0 +1,32 @@
+// assemble_rhs.okl — Final RHS assembly.
+//
+//   res[e][var][mode] = sum_{m'} Minv[e][mode][m'] * ( R_vol[e][var][m'] - R_surf[e][var][m'] )
+//
+// Minv is the pre-computed inverse mass matrix of each element,
+// $M^{-1}$ with $M = V^T diag(Lambda_wJ) V$, stored element-major and
+// row-major per element. See docs/tech_docs/governed_equations_and_DG_field.md,
+// Section (四).
+
+@kernel void assembleRHS(const int N_elem,
+                         const int N_vars, const int N_modes,
+                         const Real *R_vol,
+                         const Real *R_surf,
+                         const Real *Minv,
+                         Real *res) {
+  for (int elem = 0; elem < N_elem; ++elem; @tile(TILE_SIZE, @outer, @inner)) {
+    const int eBase = elem * N_vars * N_modes;
+    const int mBase = elem * N_modes * N_modes;
+
+    for (int var = 0; var < N_vars; ++var) {
+      for (int l = 0; l < N_modes; ++l) {
+        Real acc = 0.0;
+        for (int mp = 0; mp < N_modes; ++mp) {
+          acc += Minv[mBase + l * N_modes + mp] *
+                 (R_vol[eBase + var * N_modes + mp] -
+                  R_surf[eBase + var * N_modes + mp]);
+        }
+        res[eBase + var * N_modes + l] = acc;
+      }
+    }
+  }
+}

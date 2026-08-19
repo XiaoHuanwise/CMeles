@@ -1,0 +1,209 @@
+// surface_integral.okl — Surface integral of the numerical flux.
+//
+// Two-step "compute then gather" strategy (see docs/tech_docs/
+// governed_equations_and_DG_field.md, Section (三)):
+//
+//   1. computeFaceFlux:  per face, accumulate the weighted numerical flux
+//      onto the face's modal slots. Output faceFlux[F][var][side][mode],
+//      side 0 = left element, side 1 = right element:
+//
+//        faceFlux[F][var][side][mode]
+//          = sum_i faceW[i] * |J_f| * F_hat[var](t_i) * Vface[side][f][i][mode]
+//
+//   2. gatherSurfaceRHS: per element, walk its 4 edges and accumulate the
+//      face flux into R_surf with the appropriate sign (left element +,
+//      right element -), i.e. the weak-form surface integral is
+//
+//        R_surf[e][var][mode] = sum_faces sign * faceFlux[F][var][side][mode]
+//
+//      where the sign is +1 when e is the left element (side 0) and -1
+//      when e is the right element (side 1). R_surf is then *subtracted*
+//      from R_vol in assemble_rhs.okl, recovering the DG weak form:
+//
+//        res = M^-1 ( R_vol - R_surf )
+//
+// The numerical flux is obtained from the Riemann solver family selected
+// at JIT compile time by the FLUX_TYPE define. Only LLF is implemented in
+// this stage; the remaining branches are reserved placeholders that the
+// preprocessor removes entirely, so the compiled binary contains no
+// runtime flux-type branch.
+
+#include "llf.okl"
+
+// --- computeFaceFlux ---------------------------------------------------------
+// One thread per face. For each face quadrature point the left/right
+// conserved states are interpolated from the modal coefficients via the
+// face Vandermonde matrices, the numerical flux is computed (rotate ->
+// flux -> rotate back), and the weighted flux is accumulated.
+
+@kernel void computeFaceFlux(const int N_face,
+                             const int N_vars, const int N_modes, const int N_q,
+                             const Real *u,
+                             const Real *Vface,
+                             const Real *faceW,
+                             const int *faceKL, const int *faceFL,
+                             const int *faceKR, const int *faceFR,
+                             const Real *faceN,
+                             const Real *faceJ,
+                             const Real *freeState,
+                             const Real gamma,
+                             Real *faceFlux) {
+  for (int F = 0; F < N_face; ++F; @tile(TILE_SIZE, @outer, @inner)) {
+    const int KL = faceKL[F];
+    const int fL = faceFL[F];
+    const int KR = faceKR[F];
+    const int fR = faceFR[F];
+
+    // Zero the output slot for this face (both sides).
+    for (int var = 0; var < N_vars; ++var) {
+      for (int side = 0; side < 2; ++side) {
+        for (int l = 0; l < N_modes; ++l) {
+          faceFlux[((F * N_vars + var) * 2 + side) * N_modes + l] = 0.0;
+        }
+      }
+    }
+
+    // Collapsed (triangle) face: nothing to integrate.
+    if (fL >= 0) {
+      // Unit normal from the un-normalised face normal and face Jacobian:
+      //   |J_f| = |e| / 2 and |n_hat| = |e|, hence n_unit = n_hat / (2 |J_f|).
+      const Real nUx = faceN[F * 2 + 0] / (Real(2) * faceJ[F]);
+      const Real nUy = faceN[F * 2 + 1] / (Real(2) * faceJ[F]);
+
+      for (int i = 0; i < N_q; ++i) {
+        // Interpolate left state at face point t_i.
+        Real qL[4];
+        for (int var = 0; var < 4; ++var) {
+          Real acc = 0.0;
+          const int vBase = (0 * 4 + fL) * (N_q * N_modes) + i * N_modes;
+          const int uBase = KL * N_vars * N_modes + var * N_modes;
+          for (int m = 0; m < N_modes; ++m) {
+            acc += Vface[vBase + m] * u[uBase + m];
+          }
+          qL[var] = acc;
+        }
+
+        // Interpolate right state; boundary faces use the free-stream state.
+        Real qR[4];
+        if (KR >= 0) {
+          for (int var = 0; var < 4; ++var) {
+            Real acc = 0.0;
+            // Right state interpolated with Vface[side=1][fL]: faceRefMapRight
+            // is keyed by the *left* local face number (see the NOTE below).
+            const int vBase = (1 * 4 + fL) * (N_q * N_modes) + i * N_modes;
+            const int uBase = KR * N_vars * N_modes + var * N_modes;
+            for (int m = 0; m < N_modes; ++m) {
+              acc += Vface[vBase + m] * u[uBase + m];
+            }
+            qR[var] = acc;
+          }
+        } else {
+          for (int var = 0; var < 4; ++var) {
+            qR[var] = freeState[var];
+          }
+        }
+
+        // Numerical flux in physical space (rotate -> 1-D flux -> rotate
+        // back). The flux family is selected at compile time via FLUX_TYPE.
+        Real fluxPhys[4];
+        Real qLr[4], qRr[4], fluxLoc[4];
+        rotate_state(qL, nUx, nUy, qLr);
+        rotate_state(qR, nUx, nUy, qRr);
+
+#if FLUX_TYPE == FLUX_LLF
+        llf_flux(qLr, qRr, gamma, fluxLoc);
+#elif FLUX_TYPE == FLUX_ROE
+        // Reserved: roe_flux(qLr, qRr, gamma, fluxLoc);
+        llf_flux(qLr, qRr, gamma, fluxLoc);
+#elif FLUX_TYPE == FLUX_ROEE
+        // Reserved: roe_flux with entropy fix.
+        llf_flux(qLr, qRr, gamma, fluxLoc);
+#elif FLUX_TYPE == FLUX_STEGERWARMING
+        // Reserved: steger_warming_flux.
+        llf_flux(qLr, qRr, gamma, fluxLoc);
+#elif FLUX_TYPE == FLUX_VANLEER
+        // Reserved: van_leer_flux.
+        llf_flux(qLr, qRr, gamma, fluxLoc);
+#else
+        llf_flux(qLr, qRr, gamma, fluxLoc);
+#endif
+
+        rotate_flux_back(fluxLoc, nUx, nUy, fluxPhys);
+
+        // Accumulate onto the left side modal slots.
+        const Real wJ = faceW[i] * faceJ[F];
+        const int vBaseL = (0 * 4 + fL) * (N_q * N_modes) + i * N_modes;
+        for (int var = 0; var < N_vars; ++var) {
+          for (int l = 0; l < N_modes; ++l) {
+            faceFlux[((F * N_vars + var) * 2 + 0) * N_modes + l] +=
+                wJ * fluxPhys[var] * Vface[vBaseL + l];
+          }
+        }
+
+        // Accumulate onto the right side (interior faces only).
+        //
+        // NOTE: the right side uses the *left* local face index fL for the
+        // Vface lookup. faceRefMapRight(f) is keyed by the *left* element's
+        // local face number (the table rows are the left faces; the "right"
+        // column is the map of that physical edge in the right element). So
+        // Vface[side=1][fL] holds phi at the right element's reference
+        // coordinates for the edge whose left index is fL.
+        if (KR >= 0) {
+          const int vBaseR = (1 * 4 + fL) * (N_q * N_modes) + i * N_modes;
+          for (int var = 0; var < N_vars; ++var) {
+            for (int l = 0; l < N_modes; ++l) {
+              faceFlux[((F * N_vars + var) * 2 + 1) * N_modes + l] +=
+                  wJ * fluxPhys[var] * Vface[vBaseR + l];
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// --- gatherSurfaceRHS --------------------------------------------------------
+// One thread per element. Zero R_surf, then walk the element's 4 local
+// faces and add the signed face-flux modal vector.
+
+@kernel void gatherSurfaceRHS(const int N_elem,
+                              const int N_vars, const int N_modes,
+                              const Real *faceFlux,
+                              const int *elemFaces,
+                              const int *faceKL, const int *faceKR,
+                              Real *R_surf) {
+  for (int elem = 0; elem < N_elem; ++elem; @tile(TILE_SIZE, @outer, @inner)) {
+    const int rBase = elem * N_vars * N_modes;
+
+    // Zero R_surf for this element.
+    for (int var = 0; var < N_vars; ++var) {
+      for (int l = 0; l < N_modes; ++l) {
+        R_surf[rBase + var * N_modes + l] = 0.0;
+      }
+    }
+
+    for (int f = 0; f < 4; ++f) {
+      const int F = elemFaces[elem * 4 + f];
+      if (F >= 0) {
+        const int KL = faceKL[F];
+        if (elem == KL) {
+          // This element is the left element: + side 0.
+          for (int var = 0; var < N_vars; ++var) {
+            for (int l = 0; l < N_modes; ++l) {
+              R_surf[rBase + var * N_modes + l] +=
+                  faceFlux[((F * N_vars + var) * 2 + 0) * N_modes + l];
+            }
+          }
+        } else {
+          // This element is the right element: - side 1.
+          for (int var = 0; var < N_vars; ++var) {
+            for (int l = 0; l < N_modes; ++l) {
+              R_surf[rBase + var * N_modes + l] -=
+                  faceFlux[((F * N_vars + var) * 2 + 1) * N_modes + l];
+            }
+          }
+        }
+      }
+    }
+  }
+}
