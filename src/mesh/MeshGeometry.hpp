@@ -293,6 +293,15 @@ private:
     occa::memory o_faceTypes_, o_faceKL_, o_faceFL_, o_faceKR_, o_faceFR_;
     occa::memory o_elemFaces_;
 
+    // Persistent host copies of the per-face adjacency columns. On unified
+    // memory backends wrapOrMallocInt wraps these buffers (zero-copy), so
+    // they must outlive the occa::memory handles — i.e. be members rather
+    // than temporaries local to allocateDeviceMemory.
+    Eigen::VectorXi face_kl_;
+    Eigen::VectorXi face_fl_;
+    Eigen::VectorXi face_kr_;
+    Eigen::VectorXi face_fr_;
+
     /// @brief Per-element geometry: bilinear coefficients, per-point
     ///        Jacobian quantities and the inverse mass matrix.
     void buildElementGeometry();
