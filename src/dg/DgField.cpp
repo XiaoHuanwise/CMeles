@@ -96,8 +96,11 @@ const BasisFunctions2D &DgField::basis() const noexcept
 void DgField::buildFaceQuadratureData()
 {
     // Face Vandermonde: Vface[side][f][i][mode] = phi_mode(r(t_i), s(t_i))
-    // with (r, s) from faceRefMapLeft/Right(f) and t_i the i-th face Gauss
-    // point (the same N_q Gauss-Legendre points as the volume quadrature).
+    // with (r, s) from faceRefMapLeft(f) for side 0 (keyed by the left
+    // element's own face number fL) and faceRefMapRight(f) for side 1
+    // (keyed by the right element's own face number fR), t_i the i-th
+    // face Gauss point (the same N_q Gauss-Legendre points as the volume
+    // quadrature).
     //
     // phi_mode(r, s) = Ptilde_{i_mode}(r) * Ptilde_{j_mode}(s), where
     // Ptilde_k(x) is the k-th normalised Legendre polynomial. For each

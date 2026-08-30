@@ -14,15 +14,27 @@ namespace
 {
 /// @brief Face-to-element reference coordinate maps.
 ///
-/// Table 2.5 of mesh_and_geometry.md. Left element (counter-clockwise
-/// traversal, $t$ increasing along the edge direction $A \to B$):
+/// Table 2.5 of mesh_and_geometry.md. Each table is keyed by the
+/// *querying element's own* local face number: kFaceRefLeft is the
+/// element's own face map with its counter-clockwise traversal ($t$
+/// increasing along the edge direction $A \to B$); kFaceRefRight is the
+/// right element's own face map traversed clockwise, i.e. its own map
+/// with $t \to -t$ (the right element traverses the same physical edge
+/// against its own counter-clockwise direction).
 ///
-/// | f | left $(r, s)$ | right $(r, s)$ |
-/// |:-:|:-------------:|:--------------:|
-/// | 0 | $(-1, -t)$    | $(+1, -t)$     |
-/// | 1 | $(t, -1)$     | $(t, +1)$      |
-/// | 2 | $(+1, t)$     | $(-1, t)$      |
-/// | 3 | $(-t, +1)$    | $(-t, -1)$     |
+/// | f | own face as left elem. (CCW) | own face as right elem. (CW) |
+/// |:-:|:------------------------------:|:----------------------------:|
+/// | 0 | $(-1, -t)$                    | $(-1, +t)$                   |
+/// | 1 | $(t, -1)$                     | $(-t, -1)$                   |
+/// | 2 | $(+1, t)$                     | $(+1, -t)$                   |
+/// | 3 | $(-t, +1)$                    | $(+t, +1)$                   |
+///
+/// In an all-quadrilateral mesh $f_R = (f_L + 2) \bmod 4$ (opposite
+/// faces), which is why an earlier version could key the right map by
+/// $f_L$. Triangle (degenerate quadrilateral) meshes break this pairing
+/// — e.g. along a split diagonal the shared edge has $(f_L, f_R) = (0,
+/// 1)$ — so the right map must be keyed by the right element's own
+/// local face number, exactly what face_elements_(F, 3) stores.
 constexpr FaceRefMap kFaceRefLeft[4] = {
     {Real(0), Real(-1), Real(-1), Real(0)}, // f=0: r=-1,   s=-t
     {Real(1), Real(0), Real(0), Real(-1)},  // f=1: r=t,    s=-1
@@ -31,10 +43,10 @@ constexpr FaceRefMap kFaceRefLeft[4] = {
 };
 
 constexpr FaceRefMap kFaceRefRight[4] = {
-    {Real(0), Real(1), Real(-1), Real(0)},  // f=0: r=+1,   s=-t
-    {Real(1), Real(0), Real(0), Real(1)},   // f=1: r=t,    s=+1
-    {Real(0), Real(-1), Real(1), Real(0)},  // f=2: r=-1,   s=t
-    {Real(-1), Real(0), Real(0), Real(-1)}, // f=3: r=-t,   s=-1
+    {Real(0), Real(-1), Real(1), Real(0)},  // f=0: r=-1,   s=+t
+    {Real(-1), Real(0), Real(0), Real(-1)}, // f=1: r=-t,   s=-1
+    {Real(0), Real(1), Real(-1), Real(0)},  // f=2: r=+1,   s=-t
+    {Real(1), Real(0), Real(0), Real(1)},   // f=3: r=+t,   s=+1
 };
 } // namespace
 
@@ -221,10 +233,10 @@ void MeshGeometry::allocateDeviceMemory(DeviceMemoryManager &mgr)
     // column into a contiguous int buffer before wrapping. The buffers are
     // members (face_kl_ etc.) so that the wrapMemory handles stay valid on
     // unified memory backends (zero-copy aliases the host pointer).
-    face_kl_ = faceElems.col(0);
-    face_fl_ = faceElems.col(1);
-    face_kr_ = faceElems.col(2);
-    face_fr_ = faceElems.col(3);
+    face_kl_     = faceElems.col(0);
+    face_fl_     = faceElems.col(1);
+    face_kr_     = faceElems.col(2);
+    face_fr_     = faceElems.col(3);
     o_faceKL_    = mgr.wrapOrMallocInt(face_kl_.data(), N_face_);
     o_faceFL_    = mgr.wrapOrMallocInt(face_fl_.data(), N_face_);
     o_faceKR_    = mgr.wrapOrMallocInt(face_kr_.data(), N_face_);

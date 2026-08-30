@@ -10,6 +10,10 @@
 //        faceFlux[F][var][side][mode]
 //          = sum_i faceW[i] * |J_f| * F_hat[var](t_i) * Vface[side][f][i][mode]
 //
+//      where f is the face number in the element on that side itself
+//      (side 0 -> fL, side 1 -> fR); Vface[0] is built from
+//      faceRefMapLeft and Vface[1] from faceRefMapRight.
+//
 //   2. gatherSurfaceRHS: per element, walk its 4 edges and accumulate the
 //      face flux into R_surf with the appropriate sign (left element +,
 //      right element -), i.e. the weak-form surface integral is
@@ -88,9 +92,10 @@
         if (KR >= 0) {
           for (int var = 0; var < 4; ++var) {
             Real acc = 0.0;
-            // Right state interpolated with Vface[side=1][fL]: faceRefMapRight
-            // is keyed by the *left* local face number (see the NOTE below).
-            const int vBase = (1 * 4 + fL) * (N_q * N_modes) + i * N_modes;
+            // Right state interpolated with Vface[side=1][fR]:
+            // faceRefMapRight is keyed by the *right* element's own
+            // local face number (see the NOTE below).
+            const int vBase = (1 * 4 + fR) * (N_q * N_modes) + i * N_modes;
             const int uBase = KR * N_vars * N_modes + var * N_modes;
             for (int m = 0; m < N_modes; ++m) {
               acc += Vface[vBase + m] * u[uBase + m];
@@ -142,14 +147,15 @@
 
         // Accumulate onto the right side (interior faces only).
         //
-        // NOTE: the right side uses the *left* local face index fL for the
-        // Vface lookup. faceRefMapRight(f) is keyed by the *left* element's
-        // local face number (the table rows are the left faces; the "right"
-        // column is the map of that physical edge in the right element). So
-        // Vface[side=1][fL] holds phi at the right element's reference
-        // coordinates for the edge whose left index is fL.
+        // NOTE: the right side uses the *right* element's own local face
+        // index fR for the Vface lookup. faceRefMapRight(fR) is the map
+        // of that face in the right element with the traversal reversed
+        // (clockwise w.r.t. its own counter-clockwise convention). Keying
+        // by fR instead of fL stays correct on triangle meshes, where
+        // the quad-only pairing f_R = (f_L + 2) % 4 does not hold (e.g.
+        // split-diagonal faces have (fL, fR) = (0, 1)).
         if (KR >= 0) {
-          const int vBaseR = (1 * 4 + fL) * (N_q * N_modes) + i * N_modes;
+          const int vBaseR = (1 * 4 + fR) * (N_q * N_modes) + i * N_modes;
           for (int var = 0; var < N_vars; ++var) {
             for (int l = 0; l < N_modes; ++l) {
               faceFlux[((F * N_vars + var) * 2 + 1) * N_modes + l] +=

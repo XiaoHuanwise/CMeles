@@ -314,20 +314,25 @@ private:
 ///        $t \in [-1, 1]$ to the element reference coordinates:
 ///        $r = c_r \, t + d_r$, $s = c_s \, t + d_s$.
 ///
-/// Table 2.5 of mesh_and_geometry.md. The map is defined by the left
-/// element's counter-clockwise traversal; the right element traverses the
-/// same physical edge in the opposite direction, hence $d_r$/$d_s$ are
-/// negated (see faceRefMapRight).
+/// Table 2.5 of mesh_and_geometry.md. $t$ increases along the face edge
+/// vector $A \to B$ (fixed by the left element's counter-clockwise
+/// traversal); see faceRefMapLeft/faceRefMapRight for how each element
+/// queries its own face map.
 struct FaceRefMap
 {
     Real cr, dr; ///< $r = c_r t + d_r$.
     Real cs, ds; ///< $s = c_s t + d_s$.
 };
 
-/// @brief Face-to-element reference coordinate map for the left element
-///        of local face \p f.
+/// @brief Face-to-element reference coordinate map of the element's own
+///        local face \p f, queried by the face's left element
+///        (counter-clockwise traversal: $t$ along $A \to B$).
 const FaceRefMap &faceRefMapLeft(int f);
 
-/// @brief Face-to-element reference coordinate map for the right element
-///        of local face \p f.
+/// @brief Face-to-element reference coordinate map of the right element's
+///        own local face \p f, traversed clockwise ($t$ reversed w.r.t.
+///        its own counter-clockwise convention). \p f must be the face
+///        number in the right element itself (face_elements_(F, 3)), not
+///        the left one: the quad-only pairing $f_R = (f_L + 2) \bmod 4$
+///        breaks on triangle (degenerate quad) meshes.
 const FaceRefMap &faceRefMapRight(int f);

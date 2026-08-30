@@ -104,18 +104,20 @@ static std::array<Real, 4> freeStateFrom(const Config &cfg)
 }
 
 /// @brief Build a test configuration (uniform flow on an nx x ny grid).
-static Config makeConfig(int order = 2, int nq = 4, int nx = 4, int ny = 4)
+static Config makeConfig(int order = 2, int nq = 4, int nx = 4, int ny = 4,
+                         bool splitTriangles = false)
 {
     // Write a scratch TOML with the free-stream state.
     const std::string path = "test_dg_scratch.toml";
     std::FILE *f           = std::fopen(path.c_str(), "w");
     std::fprintf(f,
                  "[basis]\norder = %d\nnq = %d\n\n[mesh]\nnx = %d\nny = %d\n"
-                 "x0 = 0.0\ny0 = 0.0\ndx = 1.0\ndy = 1.0\n\n[riemann]\n"
+                 "x0 = 0.0\ny0 = 0.0\ndx = 1.0\ndy = 1.0\n"
+                 "split_triangles = %s\n\n[riemann]\n"
                  "flux = \"llf\"\n\n[gas]\ngamma = 1.4\n\n[flow]\nrho = 1.0\n"
                  "u = 0.5\nv = -0.2\np = 1.0\nmach = 0.1\n\n[occa]\n"
                  "mode = \"Serial\"\n",
-                 order, nq, nx, ny);
+                 order, nq, nx, ny, splitTriangles ? "true" : "false");
     std::fclose(f);
     Config cfg(path);
     std::remove(path.c_str());
@@ -368,6 +370,49 @@ static bool testConservation()
 }
 
 // ---------------------------------------------------------------------------
+// 5. Uniform-flow preservation on a split-triangle mesh
+// ---------------------------------------------------------------------------
+
+// Regression test for the right-element face reference map: the mesh is
+// split into triangles along the P1 -> P3 diagonals, whose interior faces
+// have (fL, fR) = (0, 1) — breaking the quad-only pairing f_R = (f_L+2)%4.
+// The right-side state and test functions must be looked up through the
+// right element's own local face number (faceFR). With a wrong map the
+// upper triangles' surface integrals do not cancel their volume integrals
+// and the uniform-flow residual is non-zero.
+static bool testTriangleUniformFlow()
+{
+    std::cout << "Test 5: uniform-flow preservation on split triangles\n";
+    const Config cfg = makeConfig(2, 4, 4, 4, /*splitTriangles=*/true);
+    const auto q0    = freeStateFrom(cfg);
+
+    occa::device device({{"mode", "Serial"}});
+    DeviceMemoryManager mem(device);
+    DgField field(cfg, device, mem);
+    field.setup();
+
+    field.applyFreeStreamInitialCondition(field.o_u());
+    device.finish();
+    field.computeRHS(field.o_u(), field.o_res());
+    device.finish();
+
+    const int nEvm = field.numElements() * field.numVars() * field.numModes();
+    std::vector<Real> res(nEvm);
+    readResult(mem, field.o_res(), res.data(), nEvm, res.data());
+
+    const Real scale =
+        std::max(std::abs(q0[0] * cfg.flowU()), std::abs(q0[0] * cfg.flowV())) +
+        Real(1);
+    Real maxAbs = Real(0);
+    for (Real r : res)
+    {
+        maxAbs = std::max(maxAbs, std::abs(r));
+    }
+    std::cout << "  max |res| = " << maxAbs << " (scale " << scale << ")\n";
+    return maxAbs <= tol * scale;
+}
+
+// ---------------------------------------------------------------------------
 // Device backend sweep
 // ---------------------------------------------------------------------------
 
@@ -421,6 +466,7 @@ int main()
     ok &= testLinearAdvection();
     ok &= testInitialConditionProjection();
     ok &= testConservation();
+    ok &= testTriangleUniformFlow();
 
     ok &= runOnBackend("Serial", tryMakeDevice("Serial"));
     ok &= runOnBackend("OpenMP", tryMakeDevice("OpenMP"));

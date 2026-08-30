@@ -180,8 +180,10 @@ private:
     /// @brief Build the face Vandermonde matrices and upload them.
     ///
     /// Vface[side][f][i][mode] = $\phi_{mode}(r(t_i), s(t_i))$ with
-    /// (r, s) given by faceRefMapLeft/Right(f) and $t_i$ the i-th face
-    /// Gauss point. size 2 * 4 * N_q * N_modes.
+    /// (r, s) given by faceRefMapLeft(f) for side 0 (keyed by the left
+    /// element's own face number) and faceRefMapRight(f) for side 1
+    /// (keyed by the right element's own face number), $t_i$ the i-th
+    /// face Gauss point. size 2 * 4 * N_q * N_modes.
     void buildFaceQuadratureData();
 
     /// @brief Allocate all device buffers (fields, face flux, gradients,
