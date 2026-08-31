@@ -103,18 +103,26 @@
     }
 
     // --- Step 3: dense contraction per basis mode ---
-    // Direct sum over all quadrature points against dV2D_r/dV2D_s.
-    // These matrices are separable tensor products, so sum factorization
+    // Loop order q -> var -> l: the l loop is a unit-stride axpy over the
+    // dV2D rows (full cache-line use, auto-vectorizable), and each row
+    // stays hot in L1 across the var loop, so the matrices make a single
+    // pass through the lower cache levels per element. R_vol is zeroed
+    // first and accumulated in place (its rows stay in L1).
+    // dV2D_r/dV2D_s are separable tensor products, so sum factorization
     // could split this into two 1-D passes (future optimization).
     const int rOff = uOff; // R_vol has the same [elem][var][mode] layout
-    for (int var = 0; var < N_vars; ++var) {
-      for (int l = 0; l < N_modes; ++l) {
-        Real acc = 0.0;
-        for (int q = 0; q < Nq2; ++q) {
-          const int dRow = q * N_modes;
-          acc += Hr[var][q] * dV2D_r[dRow + l] + Hs[var][q] * dV2D_s[dRow + l];
+    for (int idx = 0; idx < N_vars * N_modes; ++idx) {
+      R_vol[rOff + idx] = 0.0;
+    }
+    for (int q = 0; q < Nq2; ++q) {
+      const int dRow = q * N_modes;
+      for (int var = 0; var < N_vars; ++var) {
+        const Real hr = Hr[var][q];
+        const Real hs = Hs[var][q];
+        const int rBase = rOff + var * N_modes;
+        for (int l = 0; l < N_modes; ++l) {
+          R_vol[rBase + l] += hr * dV2D_r[dRow + l] + hs * dV2D_s[dRow + l];
         }
-        R_vol[rOff + var * N_modes + l] = acc;
       }
     }
   }
