@@ -278,7 +278,7 @@ OKL 使用 `@outer` / `@inner` 标注循环的并行层次，映射到 GPU 的 b
   - 外层 `@outer`：`iTile` 循环，步长为 `TILE_SIZE`，GPU 映射到 block，OpenMP 映射到 `#pragma omp parallel for`
   - 内层 `@inner`：`elem = iTile` 到 `iTile + TILE_SIZE`，GPU 映射到 thread，OpenMP/Serial 退化为普通串行循环
   - 越界保护 `if (elem < N_elem)` 由 `@tile` 默认自动插入
-- **一个 elem 内的全部计算为串行**（含 var×mode 遍历、积分点双重循环、求和分解），无 `@shared` 共享内存——所有数据读写走全局内存。
+- **一个 elem 内的全部计算为串行**（含 var×mode 遍历、积分点双重循环、通量与梯度基函数的收缩），无 `@shared` 共享内存——所有数据读写走全局内存。
 - **SIMD 向量化**：不依赖 OKL 的 `@inner` 标注。实际验证表明，OCCA OpenMP 后端对 `@inner` 不生成任何 `#pragma omp simd` 指令。SIMD 向量化完全由编译器在 `-O3 -march=native` 下自动完成，OKL 源码中无需额外标注。
 - `TILE_SIZE` 固定为 256，所有后端统一使用同一值。
 - 此设计的优点：实现简单、OKL 源码跨平台通用、elem 间完全独立无同步开销；缺点：未利用 `@shared` 复用通量数据。后续可将 Vandermonde 矩阵等跨 elem 不变的小矩阵加载到 `@shared` 中以减少冗余全局访存（Vandermonde 矩阵规模跨度大——$N=3$ 时 $10 \times 16$，$N=12$ 时 $91 \times 169$，量级 $O(10)$ 到 $O(10^4)$，需谨慎评估 `@shared` 容量），当前优先实现全局内存版本。
@@ -302,7 +302,7 @@ OKL 使用 `@outer` / `@inner` 标注循环的并行层次，映射到 GPU 的 b
       for (int mode = 0; mode < N_MODES; ++mode) {
         // 模态→节点求值（Vandermonde 矩阵-向量乘）
         // 物理通量计算（逐积分点）
-        // 求和分解（双重收缩）
+        // 通量与梯度基函数的收缩（当前为稠密收缩，见下文 Step 3）
         // 结果写入 res[elem * N_VARS * N_MODES + var * N_MODES + mode]
       }
     }
@@ -378,13 +378,52 @@ $$
 - 粘性通量：需先在积分点上计算守恒变量的梯度（见下文"粘性项处理"），再代入偏应力张量和热通量公式；
 - 梯度计算同样通过 Vandermonde 导数矩阵和链式法则完成：$\frac{\partial \boldsymbol{q}}{\partial x} = \mathbf{D}_{V,r} \hat{\boldsymbol{u}} \cdot \frac{\partial r}{\partial x} + \mathbf{D}_{V,s} \hat{\boldsymbol{u}} \cdot \frac{\partial s}{\partial x}$。
 
-**Step 3 — 通量散度的弱形式累加**：使用求和分解（Sum-Factorization）技术，将通量与梯度基函数的张量积收缩拆分为两次一维操作：
+**加权物理通量 $\boldsymbol{H}_r$、$\boldsymbol{H}_s$（Step 2 → Step 3 的衔接）**：分部积分后体积分中的导数转移到试函数上，$R_{\text{vol}}[\ell] = \iint_{\Omega_e} \left( \boldsymbol{f}\,\partial\phi_\ell/\partial x + \boldsymbol{g}\,\partial\phi_\ell/\partial y \right) \mathrm{d}x\,\mathrm{d}y$。基函数定义在参考单元上，物理梯度经链式法则展开（逆雅可比分量 $\text{Jinv}_{11} = \partial r/\partial x$ 等的定义见[网格文档 2.4 节](mesh_and_geometry.md#24-雅可比矩阵与行列式)）：
+
+$$
+\frac{\partial\phi}{\partial x} = \text{Jinv}_{11}\,\frac{\partial\phi}{\partial r} + \text{Jinv}_{21}\,\frac{\partial\phi}{\partial s}, \qquad
+\frac{\partial\phi}{\partial y} = \text{Jinv}_{12}\,\frac{\partial\phi}{\partial r} + \text{Jinv}_{22}\,\frac{\partial\phi}{\partial s}
+$$
+
+代入弱形式并按参考方向归并：
+
+$$
+\boldsymbol{f}\,\frac{\partial\phi}{\partial x} + \boldsymbol{g}\,\frac{\partial\phi}{\partial y}
+= \underbrace{\left(\boldsymbol{f}\,\text{Jinv}_{11} + \boldsymbol{g}\,\text{Jinv}_{12}\right)}_{\tilde{\boldsymbol{f}}}
+\,\frac{\partial\phi}{\partial r}
++ \underbrace{\left(\boldsymbol{f}\,\text{Jinv}_{21} + \boldsymbol{g}\,\text{Jinv}_{22}\right)}_{\tilde{\boldsymbol{g}}}
+\,\frac{\partial\phi}{\partial s}
+$$
+
+两个括号即 $\mathbf{J}^{-1}\boldsymbol{F}$ 的 $r/s$ 分量——参考坐标系下的通量（$\tilde{\boldsymbol{f}} = \boldsymbol{F}\cdot\nabla r$ 为穿过 $r=\text{const}$ 面的通量密度），只依赖积分点而与试函数无关。将求积权重与雅可比行列式一并折叠（$\lambda_{WJ}[q] = w_q\,|\mathbf{J}|_q$，即 $\boldsymbol{\Lambda}_{wJ}$ 的对角元，由几何模块逐积分点提供），得到**加权物理通量**：
+
+$$
+\boldsymbol{H}_r[q] = \lambda_{WJ}[q] \left( \boldsymbol{f}\,\text{Jinv}_{11} + \boldsymbol{g}\,\text{Jinv}_{12} \right)_q, \qquad
+\boldsymbol{H}_s[q] = \lambda_{WJ}[q] \left( \boldsymbol{f}\,\text{Jinv}_{21} + \boldsymbol{g}\,\text{Jinv}_{22} \right)_q
+$$
+
+于是体积分（$\mathrm{d}x\,\mathrm{d}y = |\mathbf{J}|\,\mathrm{d}r\,\mathrm{d}s$，权重与行列式已折入 $\lambda_{WJ}$）化为纯基函数收缩，直接给出 Step 3 的离散形式：
+
+$$
+R_{\text{vol}}[\ell] = \sum_{q=0}^{N_q^2-1} \left[ \boldsymbol{H}_r[q]\, \mathrm{dV2D}_r[q][\ell] + \boldsymbol{H}_s[q]\, \mathrm{dV2D}_s[q][\ell] \right]
+$$
+
+这样组织的目的是把所有与 $\ell$ 无关的量（通量、几何、权重）折叠进逐点预计算的 $\boldsymbol{H}_r$、$\boldsymbol{H}_s$，使 mode 循环只剩纯基函数运算。
+
+**Step 3 — 通量与梯度基函数的收缩（当前为稠密收缩）**：当前实现按上式对全部 $N_q^2$ 个积分点直接求和，等价于 $\boldsymbol{H}_r$、$\boldsymbol{H}_s$ 与二维导数 Vandermonde 矩阵的稠密矩阵–向量乘，复杂度为 $O(N_q^2 \cdot N_{\text{modes}})$（每变量每方向）。
+
+由于 $\mathrm{dV2D}_r(q,\ell) = \tilde{P}'_{i_\ell}(r_a)\,\tilde{P}_{j_\ell}(s_b)$（积分点 $q$ 对应 $(r_a, s_b)$，模式 $\ell$ 对应 $(i_\ell, j_\ell)$）具有可分离的张量积结构，上式可进一步用**求和分解**（Sum-Factorization）拆分为两次一维收缩：
 
 $$
 R_{ij}^{(r)} = \sum_{a=0}^{N_q-1} \tilde{P}'_i(r_a) \underbrace{\left[ \sum_{b=0}^{N_q-1} G(r_a, s_b) \, \tilde{P}_j(s_b) \right]}_{\text{第一步：} s \text{ 方向收缩}},\quad G(r_a,s_b) = w_a w_b \, F_r(r_a,s_b) \, |J(r_a,s_b)|
 $$
 
-详见[基函数文档 2.5 节](basis_functions.md#25-求和分解sum-factorization)。对 $s$ 方向梯度的处理同理。
+总复杂度降为 $O\big((N{+}1)\,N_q^2 + N_{\text{modes}}\,N_q\big)$，实现前提是中间量按一维下标 $j$ 索引并在 $j_\ell = j$ 的各 $\ell$ 间复用（详见[基函数文档 2.5 节](basis_functions.md#25-求和分解sum-factorization)）。对 $s$ 方向梯度的处理同理（$\tilde{P}_j \to \tilde{P}'_j$、$\tilde{P}'_i \to \tilde{P}_i$）。
+
+> **当前选择稠密收缩、求和分解列为后续优化方向**，理由如下：
+> 1. **矩阵复用**：稠密收缩直接复用已上传的 $\mathbf{V}_{2D}$、$\mathrm{dV2D}_r$、$\mathrm{dV2D}_s$（Step 1 的模态–节点变换与后续梯度计算同样需要）；求和分解则需向核函数额外传入一维矩阵 $\mathbf{V}_{1D}$、$\mathrm{dV1D}$ 与模态阶数索引 $(i_\ell, j_\ell)$ 表。
+> 2. **核函数无需感知基函数结构**：稠密收缩不要求核函数了解张量积结构与杨辉三角索引，代码简单、参数少、JIT 缓存友好。
+> 3. **低阶时代价差距有限**：如 $N=3$、$N_q=4$ 时稠密收缩约 160 次乘加（每变量每方向），求和分解约 104 次；$N \lesssim 4$ 时差距不构成瓶颈，收益要到高阶（$N \gtrsim 5$）才显著。
 
 **OCCA 核函数实现**：体积分核函数 `volumeIntegral` 以单元为单位并行（GPU 用 `@tile` 分块，OpenMP 用 `@outer` 并行）。每个单元内的 var×mode 和积分点全部串行计算。汇总得到体积分对残差的贡献 $\boldsymbol{R}_{\text{vol}} \in \mathbb{R}^{N_{\text{elem}} \cdot N_{\text{vars}} \cdot N_{\text{modes}}}$。
 

@@ -16,6 +16,11 @@
 // w_q * |J|, so no explicit quadrature weight or Jacobian factor is
 // needed here.
 //
+// Step 3 below is a dense contraction against the full 2-D derivative
+// Vandermonde. It is mathematically equivalent to sum factorization,
+// which remains a future optimization for high orders (rationale in the
+// doc Section (二), Step 3).
+//
 // See docs/tech_docs/governed_equations_and_DG_field.md, Section (二).
 //
 // OCCA rule: no C++ reference parameters — pass by value / pointer only.
@@ -97,7 +102,10 @@
       Hs[3][q] = lam * (fc3 * j21 + gc3 * j22);
     }
 
-    // --- Step 3: sum-factorised contraction per basis mode ---
+    // --- Step 3: dense contraction per basis mode ---
+    // Direct sum over all quadrature points against dV2D_r/dV2D_s.
+    // These matrices are separable tensor products, so sum factorization
+    // could split this into two 1-D passes (future optimization).
     const int rOff = uOff; // R_vol has the same [elem][var][mode] layout
     for (int var = 0; var < N_vars; ++var) {
       for (int l = 0; l < N_modes; ++l) {
