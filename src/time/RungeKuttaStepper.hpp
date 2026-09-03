@@ -21,7 +21,7 @@
 #include "ButcherTable.hpp"
 #include "StepperBase.hpp"
 
-class RungeKuttaStepper : public StepperBase<RungeKuttaStepper>
+class RungeKuttaStepper : public StepperBase
 {
 public:
     /// @brief Tolerances and step bounds.
@@ -53,13 +53,13 @@ public:
     /// @brief One adaptive physical step in place on \p o_u (internal
     ///        accept/reject; \p dt is the step-size cap). Returns the
     ///        accepted step.
-    Real advanceImpl(occa::memory o_u, Real t, Real dtMax);
+    Real advance(occa::memory o_u, Real t, Real dtMax) override;
 
-    int orderImpl() const
+    int order() const override
     {
         return table_.order;
     }
-    const char *nameImpl() const
+    const char *name() const override
     {
         return table_.name;
     }

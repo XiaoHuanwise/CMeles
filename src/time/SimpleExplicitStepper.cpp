@@ -10,13 +10,13 @@
 EulerStepper::EulerStepper(occa::device &device, DeviceMemoryManager &mem,
                            RhsFunction rhs, occa::dim_t nDof,
                            const std::string &oklDir)
-    : StepperBase<EulerStepper>(device, mem, std::move(rhs), nDof, oklDir)
+    : StepperBase(device, mem, std::move(rhs), nDof, oklDir)
 {
     ensureKernels();
     o_res_ = mem_.wrapOrMalloc(nDof_);
 }
 
-Real EulerStepper::advanceImpl(occa::memory o_u, Real /*t*/, Real dt)
+Real EulerStepper::advance(occa::memory o_u, Real /*t*/, Real dt)
 {
     // u^{n+1} = u^n + dt * R(u^n); the per-DOF kernels make the in-place
     // update (output aliasing the input) safe.
@@ -33,7 +33,7 @@ Real EulerStepper::advanceImpl(occa::memory o_u, Real /*t*/, Real dt)
 SspRk3Stepper::SspRk3Stepper(occa::device &device, DeviceMemoryManager &mem,
                              RhsFunction rhs, occa::dim_t nDof,
                              const std::string &oklDir)
-    : StepperBase<SspRk3Stepper>(device, mem, std::move(rhs), nDof, oklDir)
+    : StepperBase(device, mem, std::move(rhs), nDof, oklDir)
 {
     ensureKernels();
     o_res_ = mem_.wrapOrMalloc(nDof_);
@@ -41,7 +41,7 @@ SspRk3Stepper::SspRk3Stepper(occa::device &device, DeviceMemoryManager &mem,
     o_u2_  = mem_.wrapOrMalloc(nDof_);
 }
 
-Real SspRk3Stepper::advanceImpl(occa::memory o_u, Real /*t*/, Real dt)
+Real SspRk3Stepper::advance(occa::memory o_u, Real /*t*/, Real dt)
 {
     // Stage 1: u1 = u^n + dt * R(u^n).
     rhs_(o_u, o_res_);

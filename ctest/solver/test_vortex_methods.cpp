@@ -51,10 +51,10 @@ vortex::Errors runMethod(const vortex::Options &opt)
     switch (method)
     {
         case TimeMethod::Euler:
-            return vortex::runAndMeasure<EulerStepper>(
-                cfg, vortex::simpleFactory<EulerStepper>());
+            return vortex::runAndMeasure(cfg,
+                                         vortex::simpleFactory<EulerStepper>());
         case TimeMethod::SspRk3:
-            return vortex::runAndMeasure<SspRk3Stepper>(
+            return vortex::runAndMeasure(
                 cfg, vortex::simpleFactory<SspRk3Stepper>());
         case TimeMethod::Rk32:
         case TimeMethod::Rk54:
@@ -67,7 +67,7 @@ vortex::Errors runMethod(const vortex::Options &opt)
             RungeKuttaStepper::Params params;
             params.rtol = opt.rtol;
             params.atol = opt.atol;
-            return vortex::runAndMeasure<RungeKuttaStepper>(
+            return vortex::runAndMeasure(
                 cfg,
                 [table, params](occa::device &device, DeviceMemoryManager &mem,
                                 const RhsFunction &rhs, occa::dim_t nDof) {
@@ -82,7 +82,7 @@ vortex::Errors runMethod(const vortex::Options &opt)
             params.rtol           = opt.rtol;
             params.atol           = opt.atol;
             params.maxPseudoSteps = opt.maxPseudoSteps;
-            return vortex::runAndMeasure<Dual>(
+            return vortex::runAndMeasure(
                 cfg, [params](occa::device &device, DeviceMemoryManager &mem,
                               const RhsFunction &rhs, occa::dim_t nDof) {
                     return std::make_unique<Dual>(
@@ -108,7 +108,7 @@ vortex::Errors runMethod(const vortex::Options &opt)
             params.rtol           = opt.rtol;
             params.atol           = opt.atol;
             params.maxPseudoSteps = opt.maxPseudoSteps;
-            return vortex::runAndMeasure<Dual>(
+            return vortex::runAndMeasure(
                 cfg, [params,
                       variant](occa::device &device, DeviceMemoryManager &mem,
                                const RhsFunction &rhs, occa::dim_t nDof) {

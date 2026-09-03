@@ -102,7 +102,7 @@ bool runVortex(const std::string &scratch, const std::string &mode, int nx,
                Real *l1, Real *l2, Real *linf, Real *massDrift)
 {
     const Config cfg = makeVortexConfig(nx, scratch, mode);
-    CompressibleFlowSolver<SspRk3Stepper> solver(
+    CompressibleFlowSolver solver(
         cfg, [](occa::device &device, DeviceMemoryManager &mem,
                 const RhsFunction &rhs, occa::dim_t nDof) {
             return std::make_unique<SspRk3Stepper>(device, mem, rhs, nDof);

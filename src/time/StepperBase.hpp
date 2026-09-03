@@ -1,11 +1,12 @@
 /// @file StepperBase.hpp
-/// @brief CRTP base class and shared types for the time-marching module.
+/// @brief Abstract base class and shared types for the time-marching module.
 ///
-/// The stepper family uses *compile-time* polymorphism (CRTP) per the
-/// project's static-polymorphism guideline: the concrete stepper type is
-/// resolved at the solver's dispatch point
-/// (runCompressibleFlowSolver), so the per-step advance() call carries no
-/// virtual dispatch.
+/// The stepper family uses ordinary virtual inheritance: the polymorphic
+/// surface is coarse — advance() is called once per physical time step and
+/// all stage looping is internal to the steppers — so the virtual dispatch
+/// cost is negligible next to the per-stage device kernels, while a single
+/// non-template solver controller avoids per-stepper template
+/// instantiation (compile time and binary size).
 ///
 /// Shared context held by the base: the OCCA device / memory manager, the
 /// right-hand-side callable $\mathcal{R}(u)$ (boundary conditions live
@@ -33,16 +34,35 @@
 #include "core/DeviceMemoryManager.hpp"
 #include "time/TimeTypes.hpp"
 
-/// @brief CRTP base for all time steppers.
+/// @brief Abstract base for all time steppers.
 ///
 /// Derived classes implement:
-///   - `Real advanceImpl(occa::memory o_u, Real t, Real dt)` — advance the
+///   - `Real advance(occa::memory o_u, Real t, Real dt)` — advance the
 ///     state in place by one step and return the physical dt consumed
 ///     (fixed-dt schemes: dt itself; adaptive schemes: the accepted step),
-///   - `int orderImpl() const` and `const char *nameImpl() const`.
-template <class Derived> class StepperBase
+///   - `int order() const` and `const char *name() const`.
+class StepperBase
 {
 public:
+    virtual ~StepperBase() = default;
+
+    /// @brief Advance the state by one time step in place.
+    /// @return The physical time step consumed.
+    virtual Real advance(occa::memory o_u, Real t, Real dt) = 0;
+
+    /// @brief Formal order of the time integrator.
+    virtual int order() const = 0;
+
+    /// @brief Canonical method name.
+    virtual const char *name() const = 0;
+
+    /// @brief Install a positivity-preserving limiter (no-op by default).
+    void setPositivityLimiter(PositivityLimiter limiter)
+    {
+        limiter_ = std::move(limiter);
+    }
+
+protected:
     /// @param device  OCCA device (lifetime must exceed this object).
     /// @param mem     Device memory manager (lifetime must exceed this
     ///                object).
@@ -56,32 +76,6 @@ public:
     {
     }
 
-    /// @brief Advance the state by one time step in place.
-    /// @return The physical time step consumed.
-    Real advance(occa::memory o_u, Real t, Real dt)
-    {
-        return static_cast<Derived *>(this)->advanceImpl(o_u, t, dt);
-    }
-
-    /// @brief Formal order of the time integrator.
-    int order() const
-    {
-        return static_cast<const Derived *>(this)->orderImpl();
-    }
-
-    /// @brief Canonical method name.
-    const char *name() const
-    {
-        return static_cast<const Derived *>(this)->nameImpl();
-    }
-
-    /// @brief Install a positivity-preserving limiter (no-op by default).
-    void setPositivityLimiter(PositivityLimiter limiter)
-    {
-        limiter_ = std::move(limiter);
-    }
-
-protected:
     // ---- Shared kernel helpers
     // ------------------------------------------------
 

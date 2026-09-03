@@ -79,12 +79,12 @@ $$
 
 ## 模块实现（src/time/）
 
-时间推进模块已实现，采用 **CRTP 编译期多态**（无虚函数）：
+时间推进模块已实现，采用 **虚函数继承**（抽象基类 `StepperBase`，每个物理步一次 `advance()` 虚调用，开销相对阶段内设备内核可忽略）：
 
 | 文件 | 内容 |
 | ---- | ---- |
 | `TimeTypes.hpp` | `RhsFunction` / `PositivityLimiter` 类型别名 |
-| `StepperBase.hpp` | CRTP 基类：公共上下文（device/mem/rhs/Blas/更新内核/limiter 钩子）与静态接口 `advance(u, t, dt) -> 实际步长` |
+| `StepperBase.hpp` | 抽象基类：公共上下文（device/mem/rhs/Blas/更新内核/limiter 钩子）与虚接口 `advance(u, t, dt) -> 实际步长` |
 | `SimpleExplicitStepper.{hpp,cpp}` | `EulerStepper`（1 阶）、`SspRk3Stepper`（Shu–Osher 3 阶） |
 | `ButcherTable.hpp` | 6 张 constexpr Butcher 表（RK32/RK54/SSPRK221/321/332/432，系数取自原型与本文档） |
 | `RungeKuttaStepper.{hpp,cpp}` | 通用 embedded RK：Butcher 表为运行期数据（一次上传设备，内核运行期读取），FSAL、RMS 缩放误差、PI 控制器、Hairer 初始步长、`advanceFixed`（定步长伪推进） |
@@ -95,9 +95,10 @@ $$
 要点：
 
 - RK 变体与 DITR 变体的差异是**数据**（Butcher 表 / 重构系数）而非行为，故以单类 + constexpr
-  表实现；真正的类型差异（Euler / SSPRK3 / RK / Dual）由模板分派。
-- 唯一的运行期→编译期分派点是 `runCompressibleFlowSolver(const Config&)`
-  （`src/solver/CompressibleFlowSolver.cpp`），共 5 个求解器实例化。
+  表实现；真正的类型差异（Euler / SSPRK3 / RK / Dual）由 `StepperBase` 虚接口统一。
+- 唯一的运行期分派点是 `runCompressibleFlowSolver(const Config&)`
+  （`src/solver/CompressibleFlowSolver.cpp`），按配置构造具体 stepper 的工厂；
+  求解器控制器本身为非模板类（单一实例化）。
 - 时间步长：`DgField::estimateDt` 按本文档 CFL 公式每步重算（`estimate_dt.okl`），
   `[time_marching] dt > 0` 时使用固定步长。
 - 正保持限制器钩子（`setPositivityLimiter`）在每个阶段状态后调用，默认 no-op（移植自原型）。

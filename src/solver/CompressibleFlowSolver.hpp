@@ -3,10 +3,11 @@
 ///        lifetimes of all modules (device, memory manager, DG field,
 ///        time stepper).
 ///
-/// The stepper type is a template parameter (static polymorphism — no
-/// virtual dispatch in the march loop). The single runtime-to-compile-time
-/// dispatch point is runCompressibleFlowSolver, which switches on
-/// [time_marching] method and instantiates the matching solver.
+/// The stepper is owned through the abstract StepperBase interface (one
+/// virtual advance() call per physical time step — negligible next to the
+/// per-stage device kernels, and it keeps the controller non-template).
+/// The single dispatch point is runCompressibleFlowSolver, which switches
+/// on [time_marching] method and constructs the matching stepper factory.
 ///
 /// Flow: setup the DG field -> apply the initial condition
 /// (uniform free stream or exprtk expressions) -> march to t_final with
@@ -47,13 +48,12 @@ void applyOmpThreads(int threads);
 int runCompressibleFlowSolver(const Config &cfg);
 
 /// @brief Controller for one complete compressible-flow computation.
-/// @tparam Stepper Concrete time stepper (CRTP family).
-template <class Stepper> class CompressibleFlowSolver
+class CompressibleFlowSolver
 {
 public:
     /// @brief Factory invoked after the DG field is set up; binds the
     ///        residual to the field and constructs the stepper.
-    using StepperFactory = std::function<std::unique_ptr<Stepper>(
+    using StepperFactory = std::function<std::unique_ptr<StepperBase>(
         occa::device &, DeviceMemoryManager &, const RhsFunction &,
         occa::dim_t)>;
 
@@ -96,7 +96,7 @@ public:
     {
         return *field_;
     }
-    Stepper &stepper()
+    StepperBase &stepper()
     {
         return *stepper_;
     }
@@ -132,7 +132,7 @@ private:
     std::unique_ptr<DeviceMemoryManager> mem_;
     std::unique_ptr<Blas> blas_;
     std::unique_ptr<DgField> field_;
-    std::unique_ptr<Stepper> stepper_;
+    std::unique_ptr<StepperBase> stepper_;
 
     Real time_         = Real(0);
     int steps_         = 0;
@@ -140,11 +140,10 @@ private:
 };
 
 // ----------------------------------------------------------------------------
-// Implementation (template: header-only)
+// Implementation (header-only)
 // ----------------------------------------------------------------------------
 
-template <class Stepper>
-void CompressibleFlowSolver<Stepper>::applyInitialCondition()
+inline void CompressibleFlowSolver::applyInitialCondition()
 {
     switch (cfg_.icType())
     {
@@ -157,7 +156,7 @@ void CompressibleFlowSolver<Stepper>::applyInitialCondition()
     }
 }
 
-template <class Stepper> Real CompressibleFlowSolver<Stepper>::computeDt(Real t)
+inline Real CompressibleFlowSolver::computeDt(Real t)
 {
     const Real remaining = cfg_.timeFinal() - t;
     Real dt = (cfg_.timeDt() > Real(0))
@@ -166,7 +165,7 @@ template <class Stepper> Real CompressibleFlowSolver<Stepper>::computeDt(Real t)
     return std::min(dt, remaining);
 }
 
-template <class Stepper> int CompressibleFlowSolver<Stepper>::run()
+inline int CompressibleFlowSolver::run()
 {
     // OCCA's OpenMP backend emits `#pragma omp parallel for` with no
     // num_threads clause, so the runtime ICV governs every kernel; set it

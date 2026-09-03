@@ -31,8 +31,7 @@
 #include "RungeKuttaStepper.hpp"
 #include "StepperBase.hpp"
 
-template <class PhyStepper>
-class DualStepper : public StepperBase<DualStepper<PhyStepper>>
+template <class PhyStepper> class DualStepper : public StepperBase
 {
 public:
     /// @brief Dual-time parameters.
@@ -55,14 +54,14 @@ public:
 
     /// @brief One physical step: initialise the guess, march pseudo time to
     ///        convergence, publish $u^{n+1}$. Returns \p dt.
-    Real advanceImpl(occa::memory o_u, Real t, Real dt);
+    Real advance(occa::memory o_u, Real t, Real dt) override;
 
     /// @brief Order of the physical scheme (Backward Euler: 1, DITR: 2).
-    int orderImpl() const
+    int order() const override
     {
         return kPhyStages == 1 ? 1 : 2;
     }
-    const char *nameImpl() const
+    const char *name() const override
     {
         return kPhyStages == 1 ? "be" : "ditr";
     }
@@ -128,9 +127,8 @@ DualStepper<PhyStepper>::DualStepper(occa::device &device,
                                      const ButcherTable &pseudoTable,
                                      Params params, PhyStepper phy,
                                      const std::string &oklDir)
-    : StepperBase<DualStepper<PhyStepper>>(device, mem, std::move(rhs), nDof,
-                                           oklDir),
-      params_(params), phy_(std::move(phy)),
+    : StepperBase(device, mem, std::move(rhs), nDof, oklDir), params_(params),
+      phy_(std::move(phy)),
       // Coupled: the pseudo state is the stacked implicit state; decoupled:
       // each stage is advanced independently (N entries per stepper).
       pseudo_(device, mem, nullptr, params.decoupled ? nDof : nDof * kPhyStages,
@@ -155,7 +153,7 @@ DualStepper<PhyStepper>::DualStepper(occa::device &device,
 }
 
 template <class PhyStepper>
-Real DualStepper<PhyStepper>::advanceImpl(occa::memory o_u, Real /*t*/, Real dt)
+Real DualStepper<PhyStepper>::advance(occa::memory o_u, Real /*t*/, Real dt)
 {
     // U3R1 needs u^{n-1} (kept from the previous step) and theta.
     if constexpr (kPhyStages == 2)
@@ -271,7 +269,7 @@ Real DualStepper<PhyStepper>::advanceImpl(occa::memory o_u, Real /*t*/, Real dt)
 
     if (notConverged(fNorm, f0Norm) && cnt >= params_.maxPseudoSteps)
     {
-        std::cout << "DualStepper[" << nameImpl()
+        std::cout << "DualStepper[" << name()
                   << "]: pseudo stepper hit max steps (|F|_inf = " << fNorm
                   << ")\n";
     }

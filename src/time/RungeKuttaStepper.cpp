@@ -11,8 +11,8 @@ RungeKuttaStepper::RungeKuttaStepper(occa::device &device,
                                      occa::dim_t nDof,
                                      const ButcherTable &table, Params params,
                                      const std::string &oklDir)
-    : StepperBase<RungeKuttaStepper>(device, mem, std::move(rhs), nDof, oklDir),
-      table_(table), params_(params)
+    : StepperBase(device, mem, std::move(rhs), nDof, oklDir), table_(table),
+      params_(params)
 {
     ensureKernels();
     errorExponent_ = Real(1) / Real(table_.errorEstimatorOrder + 1);
@@ -153,7 +153,7 @@ Real RungeKuttaStepper::selectInitialStep(occa::memory &o_u)
     return std::min(std::min(Real(100) * h0, h1), maxStep_);
 }
 
-Real RungeKuttaStepper::advanceImpl(occa::memory o_u, Real /*t*/, Real dtMax)
+Real RungeKuttaStepper::advance(occa::memory o_u, Real /*t*/, Real dtMax)
 {
     if (!stateValid_)
     {

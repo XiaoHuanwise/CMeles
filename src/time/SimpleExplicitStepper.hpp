@@ -23,20 +23,20 @@
 #include "StepperBase.hpp"
 
 /// @brief Forward Euler stepper (order 1).
-class EulerStepper : public StepperBase<EulerStepper>
+class EulerStepper : public StepperBase
 {
 public:
     EulerStepper(occa::device &device, DeviceMemoryManager &mem,
                  RhsFunction rhs, occa::dim_t nDof,
                  const std::string &oklDir = OCCA_OKL_DIR);
 
-    Real advanceImpl(occa::memory o_u, Real t, Real dt);
+    Real advance(occa::memory o_u, Real t, Real dt) override;
 
-    static constexpr int orderImpl()
+    int order() const override
     {
         return 1;
     }
-    static constexpr const char *nameImpl()
+    const char *name() const override
     {
         return "euler";
     }
@@ -46,20 +46,20 @@ private:
 };
 
 /// @brief Third-order SSP Runge-Kutta stepper (Shu-Osher form).
-class SspRk3Stepper : public StepperBase<SspRk3Stepper>
+class SspRk3Stepper : public StepperBase
 {
 public:
     SspRk3Stepper(occa::device &device, DeviceMemoryManager &mem,
                   RhsFunction rhs, occa::dim_t nDof,
                   const std::string &oklDir = OCCA_OKL_DIR);
 
-    Real advanceImpl(occa::memory o_u, Real t, Real dt);
+    Real advance(occa::memory o_u, Real t, Real dt) override;
 
-    static constexpr int orderImpl()
+    int order() const override
     {
         return 3;
     }
-    static constexpr const char *nameImpl()
+    const char *name() const override
     {
         return "ssprk3";
     }

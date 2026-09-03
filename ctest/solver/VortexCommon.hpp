@@ -103,13 +103,10 @@ struct Errors
 };
 
 /// @brief Run one configured solver and evaluate the errors.
-template <class Stepper>
-Errors runAndMeasure(const Config &cfg,
-                     const std::function<std::unique_ptr<Stepper>(
-                         occa::device &, DeviceMemoryManager &,
-                         const RhsFunction &, occa::dim_t)> &factory)
+inline Errors runAndMeasure(
+    const Config &cfg, const CompressibleFlowSolver::StepperFactory &factory)
 {
-    CompressibleFlowSolver<Stepper> solver(cfg, factory);
+    CompressibleFlowSolver solver(cfg, factory);
     Errors err;
     if (solver.run() != 0)
     {
@@ -192,10 +189,7 @@ Errors runAndMeasure(const Config &cfg,
 }
 
 /// @brief Default factory for simple steppers (Euler / SSPRK3).
-template <class Stepper>
-std::function<std::unique_ptr<Stepper>(occa::device &, DeviceMemoryManager &,
-                                       const RhsFunction &, occa::dim_t)>
-simpleFactory()
+template <class Stepper> CompressibleFlowSolver::StepperFactory simpleFactory()
 {
     return [](occa::device &device, DeviceMemoryManager &mem,
               const RhsFunction &rhs, occa::dim_t nDof) {

@@ -1,11 +1,10 @@
 /// @file CompressibleFlowSolver.cpp
-/// @brief The single runtime-to-compile-time dispatch point: switches on
-///        the configured time-marching method and instantiates the matching
-///        CompressibleFlowSolver<Stepper>.
-///
-/// Five solver instantiations: EulerStepper, SspRk3Stepper,
-/// RungeKuttaStepper (tableau selected by data), DualStepper<BackwardEuler>,
-/// DualStepper<DitrStepper> (variant selected by data).
+/// @brief The single stepper dispatch point: switches on the configured
+///        time-marching method and runs the (non-template) solver with a
+///        factory for the matching stepper — EulerStepper, SspRk3Stepper,
+///        RungeKuttaStepper (tableau selected by data),
+///        DualStepper<BackwardEuler>, DualStepper<DitrStepper> (variant
+///        selected by data).
 
 #include "CompressibleFlowSolver.hpp"
 
@@ -58,7 +57,7 @@ using PhyFactory = std::function<PhyStepper(
 /// @brief Run the solver with a default-constructed simple stepper.
 template <class Stepper> int runWith(const Config &cfg)
 {
-    CompressibleFlowSolver<Stepper> solver(
+    CompressibleFlowSolver solver(
         cfg, [](occa::device &device, DeviceMemoryManager &mem,
                 const RhsFunction &rhs, occa::dim_t nDof) {
             return std::make_unique<Stepper>(device, mem, rhs, nDof);
@@ -80,7 +79,7 @@ int runWithRk(const Config &cfg)
     params.atol = cfg.timeAtol();
 
     const ButcherTable &tab = *table;
-    CompressibleFlowSolver<RungeKuttaStepper> solver(
+    CompressibleFlowSolver solver(
         cfg, [&tab, params](occa::device &device, DeviceMemoryManager &mem,
                             const RhsFunction &rhs, occa::dim_t nDof) {
             return std::make_unique<RungeKuttaStepper>(device, mem, rhs, nDof,
@@ -120,7 +119,7 @@ int runWithDual(const Config &cfg, PhyFactory<PhyStepper> makePhy)
     params.rkParams.atol = params.rkParams.rtol;
 
     const ButcherTable &tab = *pseudoTable;
-    CompressibleFlowSolver<DualStepper<PhyStepper>> solver(
+    CompressibleFlowSolver solver(
         cfg,
         [&tab, params, makePhy](occa::device &device, DeviceMemoryManager &mem,
                                 const RhsFunction &rhs, occa::dim_t nDof) {
