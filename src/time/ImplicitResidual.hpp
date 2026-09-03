@@ -3,7 +3,10 @@
 ///
 /// These classes do not advance the state — they build the temporal
 /// residual $\mathcal{F} = \mathcal{G}(u^{n+1})$ whose root is the implicit
-/// step; a DualStepper drives them to convergence through pseudo time.
+/// step; a DualStepper drives them to convergence through pseudo time
+/// (the role of ImplicitStepper in the .stepper.py prototype: one unified
+/// residual signature, with the single-stage scheme ignoring the
+/// multi-stage arguments).
 ///
 /// Backward Euler:
 /// $$ \mathcal{F} = \frac{u^n - u^{n+1}}{\Delta t} + \mathcal{R}(u^{n+1}) $$
@@ -37,6 +40,7 @@
 
 #include <occa.hpp>
 
+#include <stdexcept>
 #include <string>
 
 #include "blas/Blas.hpp"
@@ -44,14 +48,78 @@
 #include "core/DeviceMemoryManager.hpp"
 #include "time/TimeTypes.hpp"
 
-/// @brief Shared context of the temporal-residual builders (composition,
-///        no polymorphism needed — the DualStepper knows the static type).
-class TemporalResidualBase
+/// @brief Abstract implicit temporal residual driven to its root by
+///        dual time stepping.
+///
+/// Derived classes implement the coupled residual with one unified
+/// signature: Backward Euler (\p nStages == 1) ignores \p o_Rn and
+/// \p o_uPrev; DITR (\p nStages == 2) consumes them. The decoupled
+/// stage residuals only exist for two-stage schemes and default to an
+/// error on single-stage ones.
+class TemporalResidual
 {
+public:
+    virtual ~TemporalResidual() = default;
+
+    /// @brief Number of stacked implicit stages (size of the pseudo state).
+    virtual int nStages() const = 0;
+
+    /// @brief Whether $u^{n-1}$ is required (DITR U3R1 only).
+    virtual bool needsPrev() const = 0;
+
+    /// @brief Set $\theta = \Delta t^{n-1} / \Delta t^n$; no-op except DITR
+    ///        U3R1 (rebuilds the reconstruction coefficients).
+    virtual void setTheta(Real /*theta*/)
+    {
+    }
+
+    /// @brief Coupled residual of the stacked implicit state.
+    /// @param o_uNew  Implicit guess: $u^{n+1}$ (single stage) or the
+    ///                stacked $[u^{n+c_2}, u^{n+1}]$ (two stages).
+    /// @param o_u     Current state $u^n$.
+    /// @param o_Rn    $R(u^n)$ (two stages only; ignored by Backward Euler).
+    /// @param o_uPrev $u^{n-1}$ (DITR U3R1 only; ignored otherwise).
+    /// @param dt      Physical time step $\Delta t$.
+    /// @param o_F     Output residual, stacked for two stages (with the
+    ///                coupling preconditioner applied).
+    virtual void temporalResidual(occa::memory &o_uNew, occa::memory &o_u,
+                                  occa::memory &o_Rn, occa::memory &o_uPrev,
+                                  Real dt, occa::memory &o_F) = 0;
+
+    /// @brief Decoupled stage-$n{+}c_2$ residual (DITR only).
+    virtual void temporalResidualStageC2(occa::memory & /*o_uNc2*/,
+                                         occa::memory & /*o_uN1*/,
+                                         occa::memory & /*o_Rn1*/,
+                                         occa::memory & /*o_u*/,
+                                         occa::memory & /*o_Rn*/,
+                                         occa::memory & /*o_uPrev*/,
+                                         Real /*dt*/, occa::memory & /*o_F0*/)
+    {
+        throw std::logic_error(
+            "temporalResidualStageC2: requires a two-stage residual (DITR)");
+    }
+
+    /// @brief Decoupled stage-$n{+}1$ residual (DITR only).
+    virtual void temporalResidualStageN1(occa::memory & /*o_uN1*/,
+                                         occa::memory & /*o_Rnc2*/,
+                                         occa::memory & /*o_u*/,
+                                         occa::memory & /*o_Rn*/, Real /*dt*/,
+                                         occa::memory & /*o_F1*/)
+    {
+        throw std::logic_error(
+            "temporalResidualStageN1: requires a two-stage residual (DITR)");
+    }
+
 protected:
-    TemporalResidualBase(occa::device &device, DeviceMemoryManager &mem,
-                         RhsFunction rhs, occa::dim_t nDof,
-                         const std::string &oklDir);
+    /// @param device  OCCA device (lifetime must exceed this object).
+    /// @param mem     Device memory manager (lifetime must exceed this
+    ///                object).
+    /// @param rhs     Right-hand side $\mathcal{R}(u)$.
+    /// @param nDof    Length of the ODE vector.
+    /// @param oklDir  Directory containing the .okl kernel sources.
+    TemporalResidual(occa::device &device, DeviceMemoryManager &mem,
+                     RhsFunction rhs, occa::dim_t nDof,
+                     const std::string &oklDir);
 
     /// @brief out = c0*x0 + c1*x1 + c2*x2 + c3*x3 over nDof entries.
     void combine4(Real c0, occa::memory &o_x0, Real c1, occa::memory &o_x1,
@@ -70,24 +138,26 @@ private:
 };
 
 /// @brief Backward Euler temporal residual.
-class BackwardEulerStepper : public TemporalResidualBase
+class BackwardEulerResidual : public TemporalResidual
 {
 public:
-    BackwardEulerStepper(occa::device &device, DeviceMemoryManager &mem,
-                         RhsFunction rhs, occa::dim_t nDof,
-                         const std::string &oklDir = OCCA_OKL_DIR);
+    BackwardEulerResidual(occa::device &device, DeviceMemoryManager &mem,
+                          RhsFunction rhs, occa::dim_t nDof,
+                          const std::string &oklDir = OCCA_OKL_DIR);
 
-    /// @brief $\mathcal{F} = (u^n - u^{n+1})/\Delta t + R(u^{n+1})$.
-    void temporalResidual(occa::memory &o_uNew, occa::memory &o_u, Real dt,
-                          occa::memory &o_F);
+    /// @brief $\mathcal{F} = (u^n - u^{n+1})/\Delta t + R(u^{n+1})$;
+    ///        \p o_Rn and \p o_uPrev are ignored (single stage).
+    void temporalResidual(occa::memory &o_uNew, occa::memory &o_u,
+                          occa::memory &o_Rn, occa::memory &o_uPrev, Real dt,
+                          occa::memory &o_F) override;
 
     /// @brief Number of stacked implicit stages (size of the pseudo state).
-    static constexpr int nStages()
+    int nStages() const override
     {
         return 1;
     }
-    /// @brief Whether $u^{n-1}$ is required (U3R1 only).
-    static constexpr bool needsPrev()
+    /// @brief Whether $u^{n-1}$ is required (DITR U3R1 only).
+    bool needsPrev() const override
     {
         return false;
     }
@@ -97,7 +167,7 @@ private:
 };
 
 /// @brief DITR temporal residual (U2R2 / U2R1 / U3R1).
-class DitrStepper : public TemporalResidualBase
+class DitrResidual : public TemporalResidual
 {
 public:
     /// @brief DITR reconstruction variant.
@@ -108,13 +178,14 @@ public:
         U3R1 = 2  ///< 3rd-order reconstruction, 1st-order quadrature.
     };
 
-    DitrStepper(occa::device &device, DeviceMemoryManager &mem, RhsFunction rhs,
-                occa::dim_t nDof, Variant variant, Real c2 = Real(0.5),
-                Real beta = Real(1), const std::string &oklDir = OCCA_OKL_DIR);
+    DitrResidual(occa::device &device, DeviceMemoryManager &mem,
+                 RhsFunction rhs, occa::dim_t nDof, Variant variant,
+                 Real c2 = Real(0.5), Real beta = Real(1),
+                 const std::string &oklDir = OCCA_OKL_DIR);
 
     /// @brief Set $\theta = \Delta t^{n-1} / \Delta t^n$ (U3R1 only;
     ///        rebuilds the reconstruction coefficients).
-    void setTheta(Real theta);
+    void setTheta(Real theta) override;
 
     // ---- Coupled residuals (stacked 2*N_dof states) ----
 
@@ -123,7 +194,7 @@ public:
     ///        applied: $F = [F_0 + \beta F_1, F_1]$.
     void temporalResidual(occa::memory &o_uNew2N, occa::memory &o_u,
                           occa::memory &o_Rn, occa::memory &o_uPrev, Real dt,
-                          occa::memory &o_F2N);
+                          occa::memory &o_F2N) override;
 
     // ---- Decoupled per-stage residuals ----
 
@@ -133,19 +204,19 @@ public:
     void temporalResidualStageC2(occa::memory &o_uNc2, occa::memory &o_uN1,
                                  occa::memory &o_Rn1, occa::memory &o_u,
                                  occa::memory &o_Rn, occa::memory &o_uPrev,
-                                 Real dt, occa::memory &o_F0);
+                                 Real dt, occa::memory &o_F0) override;
 
     /// @brief Stage $n+1$ residual; \p o_Rnc2 is the *current* residual of
     ///        the $n+c_2$ stage.
     void temporalResidualStageN1(occa::memory &o_uN1, occa::memory &o_Rnc2,
                                  occa::memory &o_u, occa::memory &o_Rn, Real dt,
-                                 occa::memory &o_F1);
+                                 occa::memory &o_F1) override;
 
-    static constexpr int nStages()
+    int nStages() const override
     {
         return 2;
     }
-    constexpr bool needsPrev() const
+    bool needsPrev() const override
     {
         return variant_ == Variant::U3R1;
     }

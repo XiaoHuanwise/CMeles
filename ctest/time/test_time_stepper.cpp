@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <type_traits>
 #include <vector>
 
@@ -296,14 +297,16 @@ static bool testAdaptiveMode()
 // 4. Dual time stepping: BE (order 1), DITR (order 2)
 // ---------------------------------------------------------------------------
 
-/// @brief Integrate with a DualStepper<Phy> at fixed physical dt.
-template <class PhyStepper, class PhyFactory>
+/// @brief Integrate with a DualStepper at fixed physical dt.
+/// @tparam ResidualFactory Zero-arg callable returning an owned
+///         TemporalResidual.
+template <class ResidualFactory>
 Real dualStepError(occa::device &device, DeviceMemoryManager &mem,
-                   DecayOde &ode, Real dt, PhyFactory makePhy,
-                   typename DualStepper<PhyStepper>::Params params)
+                   DecayOde &ode, Real dt, ResidualFactory makeResidual,
+                   DualStepper::Params params)
 {
-    DualStepper<PhyStepper> stepper(device, mem, ode.rhs(), ode.n, kSspRk332,
-                                    params, makePhy());
+    DualStepper stepper(device, mem, ode.rhs(), ode.n, kSspRk332, params,
+                        makeResidual());
     occa::memory o_u  = mem.wrapOrMalloc(static_cast<occa::dim_t>(ode.n));
     occa::memory o_u0 = ode.o_u0;
     Blas blas(device, mem);
@@ -336,7 +339,7 @@ static bool testDualTime()
     DecayOde ode(device, mem, Real(-1), 11);
 
     // Tight dual-time convergence so the pseudo error is negligible.
-    DualStepper<BackwardEulerStepper>::Params beParams;
+    DualStepper::Params beParams;
     // Below the single-precision rounding floor the dual criterion can
     // never be met; scale the tolerances with the working precision.
     beParams.rtol           = kSinglePrecision ? Real(1e-4) : Real(1e-9);
@@ -347,30 +350,31 @@ static bool testDualTime()
     beParams.rkParams.rtol = Real(1e-3);
     beParams.rkParams.atol = Real(1e-3);
 
-    DualStepper<DitrStepper>::Params ditrParams;
+    DualStepper::Params ditrParams;
     ditrParams.rtol           = kSinglePrecision ? Real(1e-4) : Real(1e-9);
     ditrParams.atol           = kSinglePrecision ? Real(1e-7) : Real(1e-12);
     ditrParams.maxPseudoSteps = 300;
     ditrParams.rkParams.rtol  = Real(1e-3);
     ditrParams.rkParams.atol  = Real(1e-3);
 
-    DualStepper<DitrStepper>::Params decoupledParams = ditrParams;
-    decoupledParams.decoupled                        = true;
+    DualStepper::Params decoupledParams = ditrParams;
+    decoupledParams.decoupled           = true;
 
     auto makeBE = [&] {
-        return BackwardEulerStepper(device, mem, ode.rhs(), ode.n);
+        return std::make_unique<BackwardEulerResidual>(device, mem, ode.rhs(),
+                                                       ode.n);
     };
     auto makeU2R2 = [&] {
-        return DitrStepper(device, mem, ode.rhs(), ode.n,
-                           DitrStepper::Variant::U2R2);
+        return std::make_unique<DitrResidual>(device, mem, ode.rhs(), ode.n,
+                                              DitrResidual::Variant::U2R2);
     };
     auto makeU2R1 = [&] {
-        return DitrStepper(device, mem, ode.rhs(), ode.n,
-                           DitrStepper::Variant::U2R1);
+        return std::make_unique<DitrResidual>(device, mem, ode.rhs(), ode.n,
+                                              DitrResidual::Variant::U2R1);
     };
     auto makeU3R1 = [&] {
-        return DitrStepper(device, mem, ode.rhs(), ode.n,
-                           DitrStepper::Variant::U3R1);
+        return std::make_unique<DitrResidual>(device, mem, ode.rhs(), ode.n,
+                                              DitrResidual::Variant::U3R1);
     };
 
     bool ok = true;
@@ -378,9 +382,9 @@ static bool testDualTime()
         Real errors[3];
         for (int k = 0; k < 3; ++k)
         {
-            errors[k] = dualStepError<BackwardEulerStepper>(
-                device, mem, ode, Real(0.1) / std::pow(Real(2), k), makeBE,
-                beParams);
+            errors[k] = dualStepError(device, mem, ode,
+                                      Real(0.1) / std::pow(Real(2), k), makeBE,
+                                      beParams);
         }
         const Real p = measuredOrder(errors);
         std::cout << "  be        errors " << errors[0] << " -> " << errors[2]
@@ -391,9 +395,9 @@ static bool testDualTime()
         Real errors[3];
         for (int k = 0; k < 3; ++k)
         {
-            errors[k] = dualStepError<DitrStepper>(
-                device, mem, ode, Real(0.1) / std::pow(Real(2), k), makeU2R2,
-                ditrParams);
+            errors[k] = dualStepError(device, mem, ode,
+                                      Real(0.1) / std::pow(Real(2), k),
+                                      makeU2R2, ditrParams);
         }
         const Real p = measuredOrder(errors);
         std::cout << "  ditr_u2r2 errors " << errors[0] << " -> " << errors[2]
@@ -414,18 +418,18 @@ static bool testDualTime()
     {
         // U2R1 / U3R1 / decoupled U2R2: exercise and require ~2nd order
         // (single coarse comparison: error at dt/2 must shrink clearly).
-        const Real e1U2R1 = dualStepError<DitrStepper>(
-            device, mem, ode, Real(0.1), makeU2R1, ditrParams);
-        const Real e2U2R1 = dualStepError<DitrStepper>(
-            device, mem, ode, Real(0.05), makeU2R1, ditrParams);
-        const Real e1U3R1 = dualStepError<DitrStepper>(
-            device, mem, ode, Real(0.1), makeU3R1, ditrParams);
-        const Real e2U3R1 = dualStepError<DitrStepper>(
-            device, mem, ode, Real(0.05), makeU3R1, ditrParams);
-        const Real e1Dec = dualStepError<DitrStepper>(
-            device, mem, ode, Real(0.1), makeU2R2, decoupledParams);
-        const Real e2Dec = dualStepError<DitrStepper>(
-            device, mem, ode, Real(0.05), makeU2R2, decoupledParams);
+        const Real e1U2R1 =
+            dualStepError(device, mem, ode, Real(0.1), makeU2R1, ditrParams);
+        const Real e2U2R1 =
+            dualStepError(device, mem, ode, Real(0.05), makeU2R1, ditrParams);
+        const Real e1U3R1 =
+            dualStepError(device, mem, ode, Real(0.1), makeU3R1, ditrParams);
+        const Real e2U3R1 =
+            dualStepError(device, mem, ode, Real(0.05), makeU3R1, ditrParams);
+        const Real e1Dec = dualStepError(device, mem, ode, Real(0.1), makeU2R2,
+                                         decoupledParams);
+        const Real e2Dec = dualStepError(device, mem, ode, Real(0.05), makeU2R2,
+                                         decoupledParams);
         std::cout << "  u2r1  " << e1U2R1 << " -> " << e2U2R1 << "\n"
                   << "  u3r1  " << e1U3R1 << " -> " << e2U3R1 << "\n"
                   << "  decou " << e1Dec << " -> " << e2Dec << "\n";

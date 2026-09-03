@@ -8,13 +8,12 @@
 #include <stdexcept>
 
 // ============================================================================
-// TemporalResidualBase
+// TemporalResidual
 // ============================================================================
 
-TemporalResidualBase::TemporalResidualBase(occa::device &device,
-                                           DeviceMemoryManager &mem,
-                                           RhsFunction rhs, occa::dim_t nDof,
-                                           const std::string &oklDir)
+TemporalResidual::TemporalResidual(occa::device &device,
+                                   DeviceMemoryManager &mem, RhsFunction rhs,
+                                   occa::dim_t nDof, const std::string &oklDir)
     : device_(device), mem_(mem), rhs_(std::move(rhs)), nDof_(nDof),
       oklDir_(oklDir), blas_(device, mem, oklDir)
 {
@@ -30,31 +29,33 @@ TemporalResidualBase::TemporalResidualBase(occa::device &device,
         device_.buildKernel(oklDir_ + "/time_update.okl", "vecCombine4", props);
 }
 
-void TemporalResidualBase::combine4(Real c0, occa::memory &o_x0, Real c1,
-                                    occa::memory &o_x1, Real c2,
-                                    occa::memory &o_x2, Real c3,
-                                    occa::memory &o_x3, occa::memory &o_out)
+void TemporalResidual::combine4(Real c0, occa::memory &o_x0, Real c1,
+                                occa::memory &o_x1, Real c2, occa::memory &o_x2,
+                                Real c3, occa::memory &o_x3,
+                                occa::memory &o_out)
 {
     vecCombine4_(static_cast<int>(nDof_), c0, o_x0, c1, o_x1, c2, o_x2, c3,
                  o_x3, o_out);
 }
 
 // ============================================================================
-// BackwardEulerStepper
+// BackwardEulerResidual
 // ============================================================================
 
-BackwardEulerStepper::BackwardEulerStepper(occa::device &device,
-                                           DeviceMemoryManager &mem,
-                                           RhsFunction rhs, occa::dim_t nDof,
-                                           const std::string &oklDir)
-    : TemporalResidualBase(device, mem, std::move(rhs), nDof, oklDir)
+BackwardEulerResidual::BackwardEulerResidual(occa::device &device,
+                                             DeviceMemoryManager &mem,
+                                             RhsFunction rhs, occa::dim_t nDof,
+                                             const std::string &oklDir)
+    : TemporalResidual(device, mem, std::move(rhs), nDof, oklDir)
 {
     o_R_ = mem_.wrapOrMalloc(nDof_);
 }
 
-void BackwardEulerStepper::temporalResidual(occa::memory &o_uNew,
-                                            occa::memory &o_u, Real dt,
-                                            occa::memory &o_F)
+void BackwardEulerResidual::temporalResidual(occa::memory &o_uNew,
+                                             occa::memory &o_u,
+                                             occa::memory & /*o_Rn*/,
+                                             occa::memory & /*o_uPrev*/,
+                                             Real dt, occa::memory &o_F)
 {
     // F = (u_n - u_new)/dt + R(u_new).
     rhs_(o_uNew, o_R_);
@@ -63,13 +64,13 @@ void BackwardEulerStepper::temporalResidual(occa::memory &o_uNew,
 }
 
 // ============================================================================
-// DitrStepper
+// DitrResidual
 // ============================================================================
 
-DitrStepper::DitrStepper(occa::device &device, DeviceMemoryManager &mem,
-                         RhsFunction rhs, occa::dim_t nDof, Variant variant,
-                         Real c2, Real beta, const std::string &oklDir)
-    : TemporalResidualBase(device, mem, std::move(rhs), nDof, oklDir),
+DitrResidual::DitrResidual(occa::device &device, DeviceMemoryManager &mem,
+                           RhsFunction rhs, occa::dim_t nDof, Variant variant,
+                           Real c2, Real beta, const std::string &oklDir)
+    : TemporalResidual(device, mem, std::move(rhs), nDof, oklDir),
       variant_(variant), c2_(c2), beta_(beta)
 {
     // Quadrature weights b = [0, b1, b2, b3].
@@ -83,7 +84,7 @@ DitrStepper::DitrStepper(occa::device &device, DeviceMemoryManager &mem,
     o_Rn1_  = mem_.wrapOrMalloc(nDof_);
 }
 
-void DitrStepper::rebuildCoefficients()
+void DitrResidual::rebuildCoefficients()
 {
     const Real c2 = c2_, c22 = c2 * c2, c23 = c22 * c2;
     switch (variant_)
@@ -123,15 +124,15 @@ void DitrStepper::rebuildCoefficients()
     }
 }
 
-void DitrStepper::setTheta(Real theta)
+void DitrResidual::setTheta(Real theta)
 {
     theta_ = theta;
     rebuildCoefficients();
 }
 
-void DitrStepper::temporalResidual(occa::memory &o_uNew2N, occa::memory &o_u,
-                                   occa::memory &o_Rn, occa::memory &o_uPrev,
-                                   Real dt, occa::memory &o_F2N)
+void DitrResidual::temporalResidual(occa::memory &o_uNew2N, occa::memory &o_u,
+                                    occa::memory &o_Rn, occa::memory &o_uPrev,
+                                    Real dt, occa::memory &o_F2N)
 {
     const auto nDof     = nDof_;
     occa::memory o_uNc2 = o_uNew2N.slice(0, nDof);
@@ -160,12 +161,10 @@ void DitrStepper::temporalResidual(occa::memory &o_uNew2N, occa::memory &o_u,
     blas_.axpy(nDof_, beta_, o_F1, o_F0);
 }
 
-void DitrStepper::temporalResidualStageC2(occa::memory &o_uNc2,
-                                          occa::memory &o_uN1,
-                                          occa::memory &o_Rn1,
-                                          occa::memory &o_u, occa::memory &o_Rn,
-                                          occa::memory &o_uPrev, Real dt,
-                                          occa::memory &o_F0)
+void DitrResidual::temporalResidualStageC2(
+    occa::memory &o_uNc2, occa::memory &o_uN1, occa::memory &o_Rn1,
+    occa::memory &o_u, occa::memory &o_Rn, occa::memory &o_uPrev, Real dt,
+    occa::memory &o_F0)
 {
     rhs_(o_uNc2, o_Rnc2_);
 
@@ -182,10 +181,11 @@ void DitrStepper::temporalResidualStageC2(occa::memory &o_uNc2,
     blas_.axpy(nDof_, (d_[2] + beta_ * b_[3]), o_Rn1, o_F0);
 }
 
-void DitrStepper::temporalResidualStageN1(occa::memory &o_uN1,
-                                          occa::memory &o_Rnc2,
-                                          occa::memory &o_u, occa::memory &o_Rn,
-                                          Real dt, occa::memory &o_F1)
+void DitrResidual::temporalResidualStageN1(occa::memory &o_uN1,
+                                           occa::memory &o_Rnc2,
+                                           occa::memory &o_u,
+                                           occa::memory &o_Rn, Real dt,
+                                           occa::memory &o_F1)
 {
     rhs_(o_uN1, o_Rn1_);
 

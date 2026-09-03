@@ -22,6 +22,7 @@ set(BLAS_SOURCES
 set(TIME_SOURCES
     ${CMAKE_SOURCE_DIR}/src/time/SimpleExplicitStepper.cpp
     ${CMAKE_SOURCE_DIR}/src/time/RungeKuttaStepper.cpp
+    ${CMAKE_SOURCE_DIR}/src/time/DualStepper.cpp
     ${CMAKE_SOURCE_DIR}/src/time/ImplicitResidual.cpp
 )
 

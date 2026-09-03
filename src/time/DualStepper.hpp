@@ -3,8 +3,8 @@
 ///        by an adaptive embedded-RK pseudo stepper.
 ///
 /// One physical step $u^n \to u^{n+1}$ solves $\mathcal{F}(u^{n+1}) = 0$ of
-/// the physical stepper (BackwardEulerStepper or DitrStepper) by marching
-/// the pseudo-time ODE $du/d\tau = \mathcal{F}(u)$ until
+/// the owned temporal residual (BackwardEulerResidual or DitrResidual) by
+/// marching the pseudo-time ODE $du/d\tau = \mathcal{F}(u)$ until
 /// $$ \|\mathcal{F}\|_\infty / \max_{k \le 5} \|\mathcal{F}_0\|_\infty
 ///    \le \mathrm{rtol} \quad\text{or}\quad
 ///    \|\mathcal{F}\|_\infty \le \mathrm{atol}, $$
@@ -23,15 +23,18 @@
 
 #pragma once
 
-#include <algorithm>
-#include <iostream>
-#include <stdexcept>
-#include <utility>
+#include <occa.hpp>
 
+#include <memory>
+#include <string>
+
+#include "ImplicitResidual.hpp"
 #include "RungeKuttaStepper.hpp"
 #include "StepperBase.hpp"
 
-template <class PhyStepper> class DualStepper : public StepperBase
+/// @brief Dual time-stepping driver: owns the temporal residual and the
+///        pseudo steppers, advances one physical step per advance() call.
+class DualStepper : public StepperBase
 {
 public:
     /// @brief Dual-time parameters.
@@ -46,10 +49,11 @@ public:
         RungeKuttaStepper::Params rkParams{}; ///< Pseudo stepper tolerances.
     };
 
-    /// @param phy  Constructed physical stepper (owns the temporal residual).
+    /// @param residual  Physical temporal residual (owned; its stage count
+    ///                  sizes the stacked pseudo state).
     DualStepper(occa::device &device, DeviceMemoryManager &mem, RhsFunction rhs,
                 occa::dim_t nDof, const ButcherTable &pseudoTable,
-                Params params, PhyStepper phy,
+                Params params, std::unique_ptr<TemporalResidual> residual,
                 const std::string &oklDir = OCCA_OKL_DIR);
 
     /// @brief One physical step: initialise the guess, march pseudo time to
@@ -59,45 +63,28 @@ public:
     /// @brief Order of the physical scheme (Backward Euler: 1, DITR: 2).
     int order() const override
     {
-        return kPhyStages == 1 ? 1 : 2;
+        return nStages_ == 1 ? 1 : 2;
     }
     const char *name() const override
     {
-        return kPhyStages == 1 ? "be" : "ditr";
+        return nStages_ == 1 ? "be" : "ditr";
     }
 
 private:
-    static constexpr int kPhyStages = PhyStepper::nStages();
-    static constexpr int kRefStep   = 5;
+    static constexpr int kRefStep = 5;
 
     /// @brief One pseudo step (fixed or adaptive) on \p ps.
-    void pseudoStep(RungeKuttaStepper &ps)
-    {
-        if (params_.pseudoFixedDt > Real(0))
-        {
-            ps.stepFixed(params_.pseudoFixedDt);
-        }
-        else
-        {
-            ps.stepPseudo(params_.allowReject);
-        }
-    }
+    void pseudoStep(RungeKuttaStepper &ps);
 
     /// @brief Prototype convergence test (converged when false).
-    bool notConverged(Real fNorm, Real f0Norm) const
-    {
-        return (fNorm / f0Norm > params_.rtol) && (fNorm > params_.atol);
-    }
+    bool notConverged(Real fNorm, Real f0Norm) const;
 
     /// @brief $\|f\|_\infty$ of a pseudo stepper's current residual.
-    Real residualNorm(const RungeKuttaStepper &ps, occa::dim_t n)
-    {
-        occa::memory f = ps.f();
-        return this->infNorm(f, n);
-    }
+    Real residualNorm(const RungeKuttaStepper &ps, occa::dim_t n);
 
     Params params_;
-    PhyStepper phy_;
+    std::unique_ptr<TemporalResidual> residual_;
+    const int nStages_; ///< Stacked stages of the implicit state.
 
     /// @brief Pseudo steppers. Coupled DITR works on the stacked 2N state;
     ///        in decoupled mode both work on N entries. The c2 stepper is
@@ -115,181 +102,3 @@ private:
 
     Real dtPrev_ = Real(0); ///< Previous physical step (for theta).
 };
-
-// ----------------------------------------------------------------------------
-// Implementation (template: header-only)
-// ----------------------------------------------------------------------------
-
-template <class PhyStepper>
-DualStepper<PhyStepper>::DualStepper(occa::device &device,
-                                     DeviceMemoryManager &mem, RhsFunction rhs,
-                                     occa::dim_t nDof,
-                                     const ButcherTable &pseudoTable,
-                                     Params params, PhyStepper phy,
-                                     const std::string &oklDir)
-    : StepperBase(device, mem, std::move(rhs), nDof, oklDir), params_(params),
-      phy_(std::move(phy)),
-      // Coupled: the pseudo state is the stacked implicit state; decoupled:
-      // each stage is advanced independently (N entries per stepper).
-      pseudo_(device, mem, nullptr, params.decoupled ? nDof : nDof * kPhyStages,
-              pseudoTable, params.rkParams, oklDir),
-      pseudoC2_(device, mem, nullptr, nDof, pseudoTable, params.rkParams,
-                oklDir)
-{
-    if (params_.decoupled && kPhyStages != 2)
-    {
-        throw std::invalid_argument(
-            "DualStepper: decoupled mode requires a DITR physical stepper");
-    }
-    this->ensureKernels();
-
-    o_uNew_  = mem.wrapOrMalloc(nDof * kPhyStages);
-    o_uNc2_  = mem.wrapOrMalloc(nDof);
-    o_uN1_   = mem.wrapOrMalloc(nDof);
-    o_Rn_    = mem.wrapOrMalloc(nDof);
-    o_Rnew0_ = mem.wrapOrMalloc(nDof);
-    o_Rnew1_ = mem.wrapOrMalloc(nDof);
-    o_uPrev_ = mem.wrapOrMalloc(nDof);
-}
-
-template <class PhyStepper>
-Real DualStepper<PhyStepper>::advance(occa::memory o_u, Real /*t*/, Real dt)
-{
-    // U3R1 needs u^{n-1} (kept from the previous step) and theta.
-    if constexpr (kPhyStages == 2)
-    {
-        if (phy_.needsPrev())
-        {
-            phy_.setTheta(dtPrev_ > Real(0) ? dtPrev_ / dt : Real(1));
-        }
-    }
-
-    // R(u^n) is required by the DITR residuals.
-    if constexpr (kPhyStages == 2)
-    {
-        this->rhs_(o_u, o_Rn_);
-    }
-
-    Real f0Norm = Real(0);
-    Real fNorm  = Real(0);
-    int cnt     = 0;
-
-    if (params_.decoupled)
-    {
-        // ---- Decoupled DITR: two per-stage pseudo steppers ----------------
-        if constexpr (kPhyStages == 2)
-        {
-            this->blas_.copy(this->nDof_, o_u, o_uNc2_);
-            this->blas_.copy(this->nDof_, o_u, o_uN1_);
-            this->blas_.copy(this->nDof_, o_Rn_, o_Rnew0_);
-            this->blas_.copy(this->nDof_, o_Rn_, o_Rnew1_);
-
-            occa::memory oUN = o_u, oUP = o_uPrev_, oRN = o_Rn_;
-            occa::memory oUN1 = o_uN1_, oRN1 = o_Rnew1_, oRN0 = o_Rnew0_;
-            PhyStepper &phy = phy_;
-            pseudo_.setRhs([&phy, oUN, oRN0, oRN, dt](occa::memory x,
-                                                      occa::memory F) mutable {
-                phy.temporalResidualStageN1(x, oRN0, oUN, oRN, dt, F);
-            });
-            pseudoC2_.setRhs([&phy, oUN1, oRN1, oUN, oRN, oUP,
-                              dt](occa::memory x, occa::memory F) mutable {
-                phy.temporalResidualStageC2(x, oUN1, oRN1, oUN, oRN, oUP, dt,
-                                            F);
-            });
-
-            pseudoC2_.setState(o_uNc2_, dt);
-            pseudo_.setState(o_uN1_, dt);
-
-            f0Norm = residualNorm(pseudo_, this->nDof_);
-            fNorm  = f0Norm;
-            while (notConverged(fNorm, f0Norm) && cnt < params_.maxPseudoSteps)
-            {
-                pseudoStep(pseudoC2_);
-                occa::memory sC2 = pseudoC2_.state();
-                this->blas_.copy(this->nDof_, sC2, o_uNc2_);
-                this->rhs_(o_uNc2_, o_Rnew0_);
-                pseudoStep(pseudo_);
-                occa::memory sN1 = pseudo_.state();
-                this->blas_.copy(this->nDof_, sN1, o_uN1_);
-                this->rhs_(o_uN1_, o_Rnew1_);
-                ++cnt;
-                fNorm = residualNorm(pseudo_, this->nDof_);
-                if (cnt <= kRefStep)
-                {
-                    f0Norm = std::max(f0Norm, fNorm);
-                }
-            }
-        }
-    }
-    else
-    {
-        // ---- Coupled: one pseudo stepper on the stacked state -------------
-        const auto stackedN = this->nDof_ * kPhyStages;
-        if constexpr (kPhyStages == 1)
-        {
-            this->blas_.copy(this->nDof_, o_u, o_uNew_);
-        }
-        else
-        {
-            occa::memory stage0 = o_uNew_.slice(0, this->nDof_);
-            occa::memory stage1 = o_uNew_.slice(this->nDof_, this->nDof_);
-            this->blas_.copy(this->nDof_, o_u, stage0);
-            this->blas_.copy(this->nDof_, o_u, stage1);
-        }
-
-        occa::memory oUN = o_u, oUP = o_uPrev_, oRN = o_Rn_;
-        PhyStepper &phy = phy_;
-        pseudo_.setRhs(
-            [&phy, oUN, oUP, oRN, dt](occa::memory x, occa::memory F) mutable {
-                if constexpr (kPhyStages == 1)
-                {
-                    phy.temporalResidual(x, oUN, dt, F);
-                }
-                else
-                {
-                    phy.temporalResidual(x, oUN, oRN, oUP, dt, F);
-                }
-            });
-
-        pseudo_.setState(o_uNew_, dt);
-
-        f0Norm = residualNorm(pseudo_, stackedN);
-        fNorm  = f0Norm;
-        while (notConverged(fNorm, f0Norm) && cnt < params_.maxPseudoSteps)
-        {
-            pseudoStep(pseudo_);
-            ++cnt;
-            fNorm = residualNorm(pseudo_, stackedN);
-            if (cnt <= kRefStep)
-            {
-                f0Norm = std::max(f0Norm, fNorm);
-            }
-        }
-    }
-
-    if (notConverged(fNorm, f0Norm) && cnt >= params_.maxPseudoSteps)
-    {
-        std::cout << "DualStepper[" << name()
-                  << "]: pseudo stepper hit max steps (|F|_inf = " << fNorm
-                  << ")\n";
-    }
-
-    // Publish: u^{n-1} <- u^n, u^{n+1} <- the marched pseudo state. The
-    // pseudo steppers own copies of the state (setState copies the guess
-    // in), so the result must be read back from them: the coupled state is
-    // the stacked [u^{n+c_2}, u^{n+1}] (publish the last stage), the
-    // decoupled stage-n+1 stepper holds u^{n+1} directly.
-    this->blas_.copy(this->nDof_, o_u, o_uPrev_);
-    occa::memory pseudoState = pseudo_.state();
-    if (params_.decoupled || kPhyStages == 1)
-    {
-        this->blas_.copy(this->nDof_, pseudoState, o_u);
-    }
-    else
-    {
-        occa::memory stage1 = pseudoState.slice(this->nDof_, this->nDof_);
-        this->blas_.copy(this->nDof_, stage1, o_u);
-    }
-    dtPrev_ = dt;
-    return dt;
-}

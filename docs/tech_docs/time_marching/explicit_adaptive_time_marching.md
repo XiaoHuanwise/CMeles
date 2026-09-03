@@ -337,9 +337,9 @@ RungeKuttaStepper (基类)
 `DualStepper` 将自适应显式伪时间步进器与隐式物理时间步进器组合（详见隐式时间推进文档）：
 
 ```
-DualStepper(phyStepper, pseudoStepper, ...)
-├── _phyStepper:   DITRStepper / BackwardEulerStepper
-└── _pseudoStepper: RungeKuttaStepper (自适应嵌入式RK)
+DualStepper(residual, pseudoTable, ...)
+├── residual_:       DitrResidual / BackwardEulerResidual
+└── pseudo_:         RungeKuttaStepper (自适应嵌入式RK)
 ```
 
 对于解耦 DITR 格式，两个伪时间子系统（$n+c_2$ 和 $n+1$）各自持有独立的 `RungeKuttaStepper` 实例和独立的步长状态。

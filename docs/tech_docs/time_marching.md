@@ -88,8 +88,8 @@ $$
 | `SimpleExplicitStepper.{hpp,cpp}` | `EulerStepper`（1 阶）、`SspRk3Stepper`（Shu–Osher 3 阶） |
 | `ButcherTable.hpp` | 6 张 constexpr Butcher 表（RK32/RK54/SSPRK221/321/332/432，系数取自原型与本文档） |
 | `RungeKuttaStepper.{hpp,cpp}` | 通用 embedded RK：Butcher 表为运行期数据（一次上传设备，内核运行期读取），FSAL、RMS 缩放误差、PI 控制器、Hairer 初始步长、`advanceFixed`（定步长伪推进） |
-| `ImplicitResidual.{hpp,cpp}` | `BackwardEulerStepper` 与 `DitrStepper`（U2R2/U2R1/U3R1 单类 + 变体系数）：仅构造时间残差 $\mathcal{F}$，含耦合预条件子与解耦每级残差 |
-| `DualStepper.hpp` | `DualStepper<PhyStepper>` 模板：伪时间自适应 RK 推进至 $\|\mathcal{F}\|_\infty$ 收敛（REF_STEP = 5 参考范数），耦合/解耦两种模式，内部维护 $u^{n-1}$ 与 $\theta$ |
+| `ImplicitResidual.{hpp,cpp}` | 抽象类 `TemporalResidual` 与其实现 `BackwardEulerResidual`、`DitrResidual`（U2R2/U2R1/U3R1 单类 + 变体系数）：仅构造时间残差 $\mathcal{F}$（统一签名，单级方案忽略多级参数），含耦合预条件子与解耦每级残差 |
+| `DualStepper.{hpp,cpp}` | `DualStepper`（持有 `unique_ptr<TemporalResidual>`）：伪时间自适应 RK 推进至 $\|\mathcal{F}\|_\infty$ 收敛（REF_STEP = 5 参考范数），耦合/解耦两种模式，内部维护 $u^{n-1}$ 与 $\theta$ |
 | `okl/time_update.okl` | 向量更新内核（`explicitEulerUpdate`、`sspConvexCombine`、Butcher 阶段/误差内核、`vecCombine4`、`absInto`） |
 
 要点：

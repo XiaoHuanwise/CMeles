@@ -77,34 +77,33 @@ vortex::Errors runMethod(const vortex::Options &opt)
         }
         case TimeMethod::BackwardEuler:
         {
-            using Dual = DualStepper<BackwardEulerStepper>;
-            Dual::Params params;
+            DualStepper::Params params;
             params.rtol           = opt.rtol;
             params.atol           = opt.atol;
             params.maxPseudoSteps = opt.maxPseudoSteps;
             return vortex::runAndMeasure(
                 cfg, [params](occa::device &device, DeviceMemoryManager &mem,
                               const RhsFunction &rhs, occa::dim_t nDof) {
-                    return std::make_unique<Dual>(
+                    return std::make_unique<DualStepper>(
                         device, mem, rhs, nDof, kSspRk332, params,
-                        BackwardEulerStepper(device, mem, rhs, nDof));
+                        std::make_unique<BackwardEulerResidual>(device, mem,
+                                                                rhs, nDof));
                 });
         }
         case TimeMethod::DitrU2R2:
         case TimeMethod::DitrU2R1:
         case TimeMethod::DitrU3R1:
         {
-            DitrStepper::Variant variant = DitrStepper::Variant::U2R2;
+            DitrResidual::Variant variant = DitrResidual::Variant::U2R2;
             if (method == TimeMethod::DitrU2R1)
             {
-                variant = DitrStepper::Variant::U2R1;
+                variant = DitrResidual::Variant::U2R1;
             }
             else if (method == TimeMethod::DitrU3R1)
             {
-                variant = DitrStepper::Variant::U3R1;
+                variant = DitrResidual::Variant::U3R1;
             }
-            using Dual = DualStepper<DitrStepper>;
-            Dual::Params params;
+            DualStepper::Params params;
             params.rtol           = opt.rtol;
             params.atol           = opt.atol;
             params.maxPseudoSteps = opt.maxPseudoSteps;
@@ -112,9 +111,10 @@ vortex::Errors runMethod(const vortex::Options &opt)
                 cfg, [params,
                       variant](occa::device &device, DeviceMemoryManager &mem,
                                const RhsFunction &rhs, occa::dim_t nDof) {
-                    return std::make_unique<Dual>(
+                    return std::make_unique<DualStepper>(
                         device, mem, rhs, nDof, kSspRk332, params,
-                        DitrStepper(device, mem, rhs, nDof, variant));
+                        std::make_unique<DitrResidual>(device, mem, rhs, nDof,
+                                                       variant));
                 });
         }
         default:

@@ -304,7 +304,7 @@ $$
 | 全耦合（fully coupled） | 牛顿收敛快，理论最优          | 需大幅修改代码，`[2N × 2N]` 系统               |
 | 阶段解耦（decoupled）   | 两个 `[N × N]` 子系统，易实现 | 收敛稍慢，但 $\Delta\tau \to 0$ 时与全耦合等价 |
 
-CMeles 默认采用阶段解耦方案，通过 `DITRStepper::_trhsNC2()` 和 `DITRStepper::_trhsN1()` 分别求解两个解耦后的伪时间子系统。
+CMeles 默认采用阶段解耦方案，通过 `DitrResidual::temporalResidualStageC2()` 和 `DitrResidual::temporalResidualStageN1()` 分别求解两个解耦后的伪时间子系统。
 
 ### 7.4 收敛判断
 
@@ -384,20 +384,17 @@ $$
 ### 9.1 类层次
 
 ```
-ImplicitStepper (ABC)
-├── BackwardEulerStepper  — 后向欧拉法
-│   └── _trhsImpl()      — 物理时间残差
-│
-└── DITRStepper (ABC)     — DITR 基类
-    ├── DITRU2R2Stepper   — U2R2
-    ├── DITRU2R1Stepper   — U2R1
-    └── DITRU3R1Stepper   — U3R1
+TemporalResidual (抽象基类)
+├── BackwardEulerResidual — 后向欧拉（单级，统一签名下忽略 Rn/uPrev）
+└── DitrResidual          — DITR（U2R2/U2R1/U3R1 单类 + 变体系数）
+    ├── temporalResidual()          — 耦合两级残差（含预条件子）
+    └── temporalResidualStageC2/N1() — 解耦每级残差
 
-DualStepper               — 双时间步调度器
-├── _phyStepper:     ImplicitStepper
-├── _pseudoStepper:  RungeKuttaStepper
-├── step()           — 单物理时间步
-└── _isDecoupled     — 全耦合/阶段解耦标志
+DualStepper : StepperBase — 双时间步驱动器
+├── residual_:       unique_ptr<TemporalResidual>
+├── pseudo_/pseudoC2_: RungeKuttaStepper（解耦模式每级一个）
+├── advance()        — 单物理时间步
+└── params_.decoupled — 全耦合/阶段解耦标志
 ```
 
 ### 9.2 双时间步的典型调用流程

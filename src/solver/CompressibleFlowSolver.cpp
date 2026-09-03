@@ -2,9 +2,9 @@
 /// @brief The single stepper dispatch point: switches on the configured
 ///        time-marching method and runs the (non-template) solver with a
 ///        factory for the matching stepper — EulerStepper, SspRk3Stepper,
-///        RungeKuttaStepper (tableau selected by data),
-///        DualStepper<BackwardEuler>, DualStepper<DitrStepper> (variant
-///        selected by data).
+///        RungeKuttaStepper (tableau selected by data), or DualStepper
+///        owning a BackwardEulerResidual / DitrResidual (variant selected
+///        by data).
 
 #include "CompressibleFlowSolver.hpp"
 
@@ -49,9 +49,9 @@ void applyOmpThreads(int threads)
 
 namespace
 {
-/// @brief Physical-stepper factory: (device, mem, rhs, nDof) -> PhyStepper.
-template <class PhyStepper>
-using PhyFactory = std::function<PhyStepper(
+/// @brief Physical temporal-residual factory:
+///        (device, mem, rhs, nDof) -> owned TemporalResidual.
+using ResidualFactory = std::function<std::unique_ptr<TemporalResidual>(
     occa::device &, DeviceMemoryManager &, const RhsFunction &, occa::dim_t)>;
 
 /// @brief Run the solver with a default-constructed simple stepper.
@@ -89,8 +89,7 @@ int runWithRk(const Config &cfg)
 }
 
 /// @brief Run the solver with dual time stepping.
-template <class PhyStepper>
-int runWithDual(const Config &cfg, PhyFactory<PhyStepper> makePhy)
+int runWithDual(const Config &cfg, ResidualFactory makeResidual)
 {
     const ButcherTable *pseudoTable =
         butcherTableForMethod(cfg.timePseudoMethod());
@@ -101,7 +100,7 @@ int runWithDual(const Config &cfg, PhyFactory<PhyStepper> makePhy)
             "RK pair");
     }
 
-    typename DualStepper<PhyStepper>::Params params;
+    DualStepper::Params params;
     params.atol           = cfg.timeAtol();
     params.rtol           = cfg.timeRtol();
     params.maxPseudoSteps = cfg.timeMaxPseudoSteps();
@@ -120,27 +119,27 @@ int runWithDual(const Config &cfg, PhyFactory<PhyStepper> makePhy)
 
     const ButcherTable &tab = *pseudoTable;
     CompressibleFlowSolver solver(
-        cfg,
-        [&tab, params, makePhy](occa::device &device, DeviceMemoryManager &mem,
-                                const RhsFunction &rhs, occa::dim_t nDof) {
-            return std::make_unique<DualStepper<PhyStepper>>(
+        cfg, [&tab, params,
+              makeResidual](occa::device &device, DeviceMemoryManager &mem,
+                            const RhsFunction &rhs, occa::dim_t nDof) {
+            return std::make_unique<DualStepper>(
                 device, mem, rhs, nDof, tab, params,
-                makePhy(device, mem, rhs, nDof));
+                makeResidual(device, mem, rhs, nDof));
         });
     return solver.run();
 }
 
 /// @brief DITR variant for the configured method.
-DitrStepper::Variant ditrVariant(const Config &cfg)
+DitrResidual::Variant ditrVariant(const Config &cfg)
 {
     switch (cfg.timeMethod())
     {
         case TimeMethod::DitrU2R1:
-            return DitrStepper::Variant::U2R1;
+            return DitrResidual::Variant::U2R1;
         case TimeMethod::DitrU3R1:
-            return DitrStepper::Variant::U3R1;
+            return DitrResidual::Variant::U3R1;
         default:
-            return DitrStepper::Variant::U2R2;
+            return DitrResidual::Variant::U2R2;
     }
 }
 } // namespace
@@ -161,20 +160,21 @@ int runCompressibleFlowSolver(const Config &cfg)
         case TimeMethod::SspRk432:
             return runWithRk(cfg);
         case TimeMethod::BackwardEuler:
-            return runWithDual<BackwardEulerStepper>(
+            return runWithDual(
                 cfg, [](occa::device &device, DeviceMemoryManager &mem,
                         const RhsFunction &rhs, occa::dim_t nDof) {
-                    return BackwardEulerStepper(device, mem, rhs, nDof);
+                    return std::make_unique<BackwardEulerResidual>(device, mem,
+                                                                   rhs, nDof);
                 });
         case TimeMethod::DitrU2R2:
         case TimeMethod::DitrU2R1:
         case TimeMethod::DitrU3R1:
-            return runWithDual<DitrStepper>(cfg, [cfg](occa::device &device,
-                                                       DeviceMemoryManager &mem,
-                                                       const RhsFunction &rhs,
-                                                       occa::dim_t nDof) {
-                return DitrStepper(device, mem, rhs, nDof, ditrVariant(cfg));
-            });
+            return runWithDual(
+                cfg, [cfg](occa::device &device, DeviceMemoryManager &mem,
+                           const RhsFunction &rhs, occa::dim_t nDof) {
+                    return std::make_unique<DitrResidual>(
+                        device, mem, rhs, nDof, ditrVariant(cfg));
+                });
         default:
             throw std::invalid_argument(
                 "runCompressibleFlowSolver: unknown time method");
