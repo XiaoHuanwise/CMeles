@@ -36,6 +36,49 @@ v = 0.0                   # Reference y-velocity.
 p = 1.0                   # Reference pressure.
 mach = 0.1                # Reference Mach number (used for non-dimensionalisation).
 
+# ---- Boundary condition ----
+[bc]
+type = "farfield"          # "farfield" (free-stream exterior state) | "periodic"
+                           # (translation-paired periodic boundaries; requires
+                           #  the mesh boundaries to match under (Lx,0)/(0,Ly)).
+
+# ---- Time marching ----
+[time_marching]
+method = "ssprk3"          # "euler" | "ssprk3" | "rk32" | "rk54" | "ssprk221"
+                           # | "ssprk321" | "ssprk332" | "ssprk432" (embedded
+                           # adaptive pairs) | "be" | "ditr_u2r2" | "ditr_u2r1"
+                           # | "ditr_u3r1" (implicit, dual time stepping).
+cfl = 0.2                  # CFL number: dt = CFL * min_K h_K / ((2N+1) * Lam_max).
+dt = 0.0                   # Fixed time step; > 0 overrides the CFL estimate.
+t_final = 1.0              # Final physical time.
+rtol = 1e-6                # Relative tolerance (adaptive RK / dual-time convergence).
+atol = 1e-6                # Absolute tolerance (adaptive RK / dual-time convergence).
+max_pseudo_steps = 100     # Pseudo-time step cap per physical step (dual time).
+pseudo_method = "ssprk332" # Pseudo stepper for dual time stepping (embedded RK).
+pseudo_dt = 0.0            # Fixed pseudo step; <= 0 means adaptive.
+pseudo_single_dt = false   # Scalar-dt RMS controller for the pseudo stepper.
+pseudo_reject = false      # Allow pseudo-step retry on rejection (default: forced accept).
+dual_decoupled = false     # Decoupled per-stage pseudo steppers for DITR.
+
+# ---- Initial condition ----
+[initial_condition]
+type = "uniform"           # "uniform" (constant state from [flow]) | "expr".
+# For type = "expr": primitive variables as exprtk expressions of x, y, t
+# (t = 0 at the initial state), gamma and any [initial_condition.symbols]
+# constants. The four expressions are independent (no cross references).
+rho = "1"                  # Density expression.
+u = "0"                    # X-velocity expression.
+v = "0"                    # Y-velocity expression.
+p = "1"                    # Pressure expression.
+
+[initial_condition.symbols]
+# User numeric constants available in the expressions above, e.g.:
+# beta = 5.0
+
 # ---- OCCA device ----
 [occa]
 mode = "Serial"           # "Serial", "OpenMP", "OpenCL", "CUDA", "HIP", ...
+threads = 0               # OpenMP thread count; 0 keeps the OMP_NUM_THREADS
+                          # environment default. Ignored by other backends.
+platform = 0              # Platform index (OpenCL / dpcpp multi-platform systems).
+device = 0                # Device index within the platform (also CUDA/HIP id).

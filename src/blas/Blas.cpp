@@ -3,6 +3,7 @@
 ///        binding, execution, and multi-level reduction orchestration.
 
 #include "blas/Blas.hpp"
+#include "common/KernelProps.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -13,7 +14,8 @@
 // Construction
 // ============================================================================
 
-Blas::Blas(occa::device &device, DeviceMemoryManager &mem, const std::string &oklDir)
+Blas::Blas(occa::device &device, DeviceMemoryManager &mem,
+           const std::string &oklDir)
     : device_(device), mem_(mem), oklDir_(oklDir)
 {
 }
@@ -28,13 +30,11 @@ occa::kernel Blas::buildKernel(const std::string &file, const std::string &name)
 #ifdef USE_FLOAT_PRECISION
     props["defines/Real"] = "float";
 #else
-    props["defines/Real"]     = "double";
+    props["defines/Real"] = "double";
 #endif
     props["defines/TILE_SIZE"] = tileSize_;
 
-    // Inject <cmath> for math functions (fabs, etc.) in Serial/OpenMP backends.
-    // OKL's generated C++ source may not include it automatically.
-    props["header/include"] = "#include <cmath>";
+    cmeles::finaliseKernelProps(props, device_);
 
     return device_.buildKernel(oklDir_ + "/" + file, name, props);
 }
@@ -61,7 +61,8 @@ void Blas::setTileSize(int tileSize)
 
 void Blas::ensureScratch(occa::dim_t capacity)
 {
-    if (scratchCap_ >= capacity) return;
+    if (scratchCap_ >= capacity)
+        return;
 
     // Allocate directly via device (not wrapOrMalloc) — scratch is
     // device-resident and fully overwritten by kernels, so no zero-fill needed.
@@ -76,19 +77,22 @@ void Blas::ensureScratch(occa::dim_t capacity)
 
 void Blas::scal(occa::dim_t n, Real alpha, occa::memory &x)
 {
-    if (!scal_.isInitialized()) scal_ = buildKernel("blas1.okl", "scal");
+    if (!scal_.isInitialized())
+        scal_ = buildKernel("blas1.okl", "scal");
     scal_(static_cast<int>(n), alpha, x);
 }
 
 void Blas::axpy(occa::dim_t n, Real alpha, occa::memory &x, occa::memory &y)
 {
-    if (!axpy_.isInitialized()) axpy_ = buildKernel("blas1.okl", "axpy");
+    if (!axpy_.isInitialized())
+        axpy_ = buildKernel("blas1.okl", "axpy");
     axpy_(static_cast<int>(n), alpha, x, y);
 }
 
 void Blas::copy(occa::dim_t n, occa::memory &x, occa::memory &y)
 {
-    if (!copy_.isInitialized()) copy_ = buildKernel("blas1.okl", "copy");
+    if (!copy_.isInitialized())
+        copy_ = buildKernel("blas1.okl", "copy");
     copy_(static_cast<int>(n), x, y);
 }
 
@@ -132,10 +136,13 @@ Real Blas::finalizeReduction(occa::dim_t count, FinalOp finalOp)
 
 Real Blas::dot(occa::dim_t n, occa::memory &x, occa::memory &y)
 {
-    if (n == 0) return Real(0);
+    if (n == 0)
+        return Real(0);
 
-    if (!dot_.isInitialized()) dot_ = buildKernel("reduce.okl", "dot");
-    if (!sumReduce_.isInitialized()) sumReduce_ = buildKernel("reduce.okl", "sumReduce");
+    if (!dot_.isInitialized())
+        dot_ = buildKernel("reduce.okl", "dot");
+    if (!sumReduce_.isInitialized())
+        sumReduce_ = buildKernel("reduce.okl", "sumReduce");
 
     const occa::dim_t count0 = (n + tileSize_ - 1) / tileSize_;
     ensureScratch(count0);
@@ -146,10 +153,13 @@ Real Blas::dot(occa::dim_t n, occa::memory &x, occa::memory &y)
 
 Real Blas::nrm2(occa::dim_t n, occa::memory &x)
 {
-    if (n == 0) return Real(0);
+    if (n == 0)
+        return Real(0);
 
-    if (!nrm2_.isInitialized()) nrm2_ = buildKernel("reduce.okl", "nrm2");
-    if (!sumReduce_.isInitialized()) sumReduce_ = buildKernel("reduce.okl", "sumReduce");
+    if (!nrm2_.isInitialized())
+        nrm2_ = buildKernel("reduce.okl", "nrm2");
+    if (!sumReduce_.isInitialized())
+        sumReduce_ = buildKernel("reduce.okl", "sumReduce");
 
     const occa::dim_t count0 = (n + tileSize_ - 1) / tileSize_;
     ensureScratch(count0);
@@ -160,10 +170,13 @@ Real Blas::nrm2(occa::dim_t n, occa::memory &x)
 
 Real Blas::asum(occa::dim_t n, occa::memory &x)
 {
-    if (n == 0) return Real(0);
+    if (n == 0)
+        return Real(0);
 
-    if (!asum_.isInitialized()) asum_ = buildKernel("reduce.okl", "asum");
-    if (!sumReduce_.isInitialized()) sumReduce_ = buildKernel("reduce.okl", "sumReduce");
+    if (!asum_.isInitialized())
+        asum_ = buildKernel("reduce.okl", "asum");
+    if (!sumReduce_.isInitialized())
+        sumReduce_ = buildKernel("reduce.okl", "sumReduce");
 
     const occa::dim_t count0 = (n + tileSize_ - 1) / tileSize_;
     ensureScratch(count0);
@@ -176,17 +189,19 @@ Real Blas::asum(occa::dim_t n, occa::memory &x)
 // BLAS-2
 // ============================================================================
 
-void Blas::gemv(occa::dim_t m, occa::dim_t n, Real alpha,
-                occa::memory &A, occa::memory &x, Real beta, occa::memory &y)
+void Blas::gemv(occa::dim_t m, occa::dim_t n, Real alpha, occa::memory &A,
+                occa::memory &x, Real beta, occa::memory &y)
 {
-    if (!gemv_.isInitialized()) gemv_ = buildKernel("blas2.okl", "gemv");
+    if (!gemv_.isInitialized())
+        gemv_ = buildKernel("blas2.okl", "gemv");
     gemv_(static_cast<int>(m), static_cast<int>(n), alpha, beta, A, x, y);
 }
 
-void Blas::ger(occa::dim_t m, occa::dim_t n, Real alpha,
-               occa::memory &x, occa::memory &y, occa::memory &A)
+void Blas::ger(occa::dim_t m, occa::dim_t n, Real alpha, occa::memory &x,
+               occa::memory &y, occa::memory &A)
 {
-    if (!ger_.isInitialized()) ger_ = buildKernel("blas2.okl", "ger");
+    if (!ger_.isInitialized())
+        ger_ = buildKernel("blas2.okl", "ger");
     ger_(static_cast<int>(m), static_cast<int>(n), alpha, x, y, A);
 }
 
@@ -199,13 +214,16 @@ void Blas::gemm(occa::dim_t m, occa::dim_t n, occa::dim_t k, Real alpha,
 {
     // Guard against int32 overflow in the 1-D flattened index m*n.
     // The 1-D gemm uses int idx; reject cases where m*n exceeds INT_MAX.
-    if (m > 0 && n > 0 && static_cast<std::size_t>(m) * static_cast<std::size_t>(n) >
-                             static_cast<std::size_t>(INT_MAX))
+    if (m > 0 && n > 0 &&
+        static_cast<std::size_t>(m) * static_cast<std::size_t>(n) >
+            static_cast<std::size_t>(INT_MAX))
     {
-        throw std::runtime_error("gemm: m*n exceeds INT_MAX — use gemmBlocked for large matrices");
+        throw std::runtime_error(
+            "gemm: m*n exceeds INT_MAX — use gemmBlocked for large matrices");
     }
 
-    if (!gemm_.isInitialized()) gemm_ = buildKernel("gemm.okl", "gemm");
-    gemm_(static_cast<int>(m), static_cast<int>(n), static_cast<int>(k),
-          alpha, beta, A, B, C);
+    if (!gemm_.isInitialized())
+        gemm_ = buildKernel("gemm.okl", "gemm");
+    gemm_(static_cast<int>(m), static_cast<int>(n), static_cast<int>(k), alpha,
+          beta, A, B, C);
 }

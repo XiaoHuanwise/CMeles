@@ -3,8 +3,10 @@
 
 #include "Mesh.hpp"
 
+#include <cmath>
 #include <map>
 #include <stdexcept>
+#include <vector>
 
 namespace
 {
@@ -108,5 +110,108 @@ void Mesh::buildFaces()
         elem_faces_(rec.elem, rec.face) = F;
         face_types_.conservativeResize(N_face_);
         face_types_(F) = int(FaceType::Boundary);
+    }
+}
+
+void Mesh::applyPeriodicPairing(Real Lx, Real Ly)
+{
+    // Candidate translations: +/-Lx in x, +/-Ly in y (0 disables a direction).
+    std::vector<std::pair<Real, Real>> translations;
+    if (Lx != Real(0))
+    {
+        translations.emplace_back(Lx, Real(0));
+        translations.emplace_back(-Lx, Real(0));
+    }
+    if (Ly != Real(0))
+    {
+        translations.emplace_back(Real(0), Ly);
+        translations.emplace_back(Real(0), -Ly);
+    }
+    if (translations.empty())
+    {
+        throw std::runtime_error(
+            "Mesh::applyPeriodicPairing: both periods are zero");
+    }
+
+    // Collect the unpaired boundary faces with their directed endpoints.
+    struct BoundaryEdge
+    {
+        int face;
+        int vA; ///< First endpoint (direction of increasing face coordinate).
+        int vB; ///< Second endpoint.
+    };
+    std::vector<BoundaryEdge> boundary;
+    for (int F = 0; F < N_face_; ++F)
+    {
+        if (face_elements_(F, 2) == -1)
+        {
+            const auto [vA, vB] =
+                faceVertices(face_elements_(F, 0), face_elements_(F, 1));
+            boundary.push_back(BoundaryEdge{F, vA, vB});
+        }
+    }
+
+    // Coordinate tolerance scaled by the domain periods.
+    const Real scale      = std::max({Real(1), std::abs(Lx), std::abs(Ly)});
+    const Real tol        = Real(1e-9) * scale;
+    const auto coincident = [&](const Real *p, const Real *q) {
+        return std::abs(p[0] - q[0]) <= tol && std::abs(p[1] - q[1]) <= tol;
+    };
+
+    // Pair F1 (A1 -> B1) with F2 (A2 -> B2) when, for some translation T,
+    // A1 + T = B2 and B1 + T = A2 (reversed traversal => t2 = -t1).
+    std::vector<bool> paired(boundary.size(), false);
+    int nPaired = 0;
+    for (std::size_t i = 0; i < boundary.size(); ++i)
+    {
+        if (paired[i])
+        {
+            continue;
+        }
+        for (std::size_t j = i + 1; j < boundary.size(); ++j)
+        {
+            if (paired[j])
+            {
+                continue;
+            }
+            const Real *a1 = vertices_.row(boundary[i].vA).data();
+            const Real *b1 = vertices_.row(boundary[i].vB).data();
+            const Real *a2 = vertices_.row(boundary[j].vA).data();
+            const Real *b2 = vertices_.row(boundary[j].vB).data();
+            for (const auto &[tx, ty] : translations)
+            {
+                const Real targetA1[2] = {a1[0] + tx, a1[1] + ty};
+                const Real targetB1[2] = {b1[0] + tx, b1[1] + ty};
+                if (coincident(targetA1, b2) && coincident(targetB1, a2))
+                {
+                    // Fill the K_R/f_R slots with the partner face's own left
+                    // element and local face (pseudo-interior pairing).
+                    const int F1          = boundary[i].face;
+                    const int F2          = boundary[j].face;
+                    face_elements_(F1, 2) = face_elements_(F2, 0);
+                    face_elements_(F1, 3) = face_elements_(F2, 1);
+                    face_elements_(F2, 2) = face_elements_(F1, 0);
+                    face_elements_(F2, 3) = face_elements_(F1, 1);
+                    face_types_(F1)       = int(FaceType::Periodic);
+                    face_types_(F2)       = int(FaceType::Periodic);
+                    paired[i] = paired[j] = true;
+                    nPaired += 2;
+                    break;
+                }
+            }
+            if (paired[i])
+            {
+                break;
+            }
+        }
+    }
+
+    if (nPaired != static_cast<int>(boundary.size()))
+    {
+        throw std::runtime_error(
+            "Mesh::applyPeriodicPairing: " +
+            std::to_string(boundary.size() - nPaired) +
+            " boundary face(s) could not be paired under the given periods "
+            "(non-matching boundary geometry, e.g. shear with y-periodicity)");
     }
 }

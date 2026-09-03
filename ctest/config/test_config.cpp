@@ -89,6 +89,9 @@ static bool testDefaults()
     ok &= checkReal(cfg.gamma(), Real(1.4), "gamma");
     ok &= checkReal(cfg.flowMach(), Real(0.1), "flowMach");
     ok &= checkStr(cfg.occaMode(), "Serial", "occaMode");
+    ok &= checkInt(cfg.occaThreads(), 0, "occaThreads default");
+    ok &= checkInt(cfg.occaPlatform(), 0, "occaPlatform default");
+    ok &= checkInt(cfg.occaDevice(), 0, "occaDevice default");
     ok &= check(cfg.fluxType() == FluxType::Llf, "fluxType == Llf");
     ok &= checkInt(cfg.fluxTypeInt(), 0, "fluxTypeInt");
     return ok;
@@ -131,6 +134,9 @@ mach = 0.8
 
 [occa]
 mode = "OpenMP"
+threads = 8
+platform = 1
+device = 2
 )";
     const std::string path    = writeTempToml(content);
     if (path.empty())
@@ -160,6 +166,9 @@ mode = "OpenMP"
     ok &= checkReal(cfg.flowP(), Real(2.5), "flowP");
     ok &= checkReal(cfg.flowMach(), Real(0.8), "flowMach");
     ok &= checkStr(cfg.occaMode(), "OpenMP", "occaMode");
+    ok &= checkInt(cfg.occaThreads(), 8, "occaThreads (parsed)");
+    ok &= checkInt(cfg.occaPlatform(), 1, "occaPlatform (parsed)");
+    ok &= checkInt(cfg.occaDevice(), 2, "occaDevice (parsed)");
 
     std::remove(path.c_str());
     return ok;
@@ -199,12 +208,65 @@ flux = "llf"
 }
 
 // ---------------------------------------------------------------------------
-// 4. FluxType name mapping
+// 4. [occa] threads validation
+// ---------------------------------------------------------------------------
+
+static bool testOcaThreadsValidation()
+{
+    std::cout << "Test 4: occa threads validation\n";
+    bool ok = true;
+
+    // Negative count must throw; zero (env default) must be accepted.
+    bool threw                = false;
+    const std::string bad     = R"(
+[time_marching]
+t_final = 1.0
+
+[occa]
+threads = -2
+)";
+    const std::string badPath = writeTempToml(bad);
+    try
+    {
+        Config cfg(badPath);
+    }
+    catch (const std::exception &)
+    {
+        threw = true;
+    }
+    ok &= check(threw, "negative threads throws");
+    std::remove(badPath.c_str());
+
+    const std::string good     = R"(
+[time_marching]
+t_final = 1.0
+
+[occa]
+mode = "OpenMP"
+threads = 0
+)";
+    const std::string goodPath = writeTempToml(good);
+    try
+    {
+        Config cfg(goodPath);
+        ok &= checkInt(cfg.occaThreads(), 0, "threads = 0 accepted");
+    }
+    catch (const std::exception &e)
+    {
+        std::cout << "  FAIL threads = 0 threw: " << e.what() << "\n";
+        ok = false;
+    }
+    std::remove(goodPath.c_str());
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// 5. FluxType name mapping
 // ---------------------------------------------------------------------------
 
 static bool testFluxTypeNames()
 {
-    std::cout << "Test 4: flux type names\n";
+    std::cout << "Test 5: flux type names\n";
     bool ok = true;
     ok &= check(parseFluxType("llf") == FluxType::Llf, "parse 'llf'");
     ok &= check(parseFluxType("LLF") == FluxType::Llf, "parse 'LLF' (upper)");
@@ -242,6 +304,7 @@ int main()
         {"testDefaults", testDefaults},
         {"testParseFull", testParseFull},
         {"testParsePartial", testParsePartial},
+        {"testOcaThreadsValidation", testOcaThreadsValidation},
         {"testFluxTypeNames", testFluxTypeNames},
     };
     for (const auto &c : cases)

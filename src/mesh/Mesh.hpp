@@ -26,12 +26,13 @@
 class Mesh
 {
 public:
-    /// @brief Face type. Only Interior/Boundary are distinguished for now;
-    ///        the boundary-condition module will extend this enum later.
+    /// @brief Face type. The periodic type marks boundary faces that have
+    ///        been paired by applyPeriodicPairing.
     enum class FaceType : int
     {
         Interior = 0,
-        Boundary = 1
+        Boundary = 1,
+        Periodic = 2
     };
 
     /// @brief Construct from raw topology and build the face list.
@@ -92,7 +93,12 @@ public:
 
     /// @brief Per-face adjacency, shape $N_{\text{face}} \times 4$; row
     ///        $= (K_L, f_L, K_R, f_R)$. Boundary faces have $K_R = -1$.
-    const Eigen::Matrix<int, Eigen::Dynamic, 4, Eigen::RowMajor> &faceElements()
+    ///
+    /// Stored **column-major** (unlike the other topology matrices): the
+    /// device consumes the four adjacency columns as separate contiguous
+    /// arrays (faceKL/faceFL/faceKR/faceFR), so column-major storage lets
+    /// MeshGeometry wrap them directly without a per-column copy.
+    const Eigen::Matrix<int, Eigen::Dynamic, 4, Eigen::ColMajor> &faceElements()
         const noexcept
     {
         return face_elements_;
@@ -114,10 +120,55 @@ public:
     }
 
     /// @brief Whether face \p face is a boundary face ($K_R = -1$).
+    ///
+    /// Periodic faces are not boundary faces: after applyPeriodicPairing
+    /// their $K_R$ slot holds the partner element.
     bool isBoundaryFace(int face) const noexcept
     {
         return face_elements_(face, 2) == -1;
     }
+
+    /// @brief Whether face \p face has been paired periodically.
+    bool isPeriodicFace(int face) const noexcept
+    {
+        return face_types_(face) == int(FaceType::Periodic);
+    }
+
+    /// @brief Pair boundary faces that coincide under a domain translation
+    ///        and turn them into pseudo-interior faces.
+    ///
+    /// Implements the periodic boundary condition of
+    /// docs/tech_docs/mesh_and_geometry.md Section 1.7 via the
+    /// pseudo-interior representation: both paired faces keep their own
+    /// physical element as the left element, and the $K_R/f_R$ slots of each
+    /// face are filled with the *partner face's own left element and local
+    /// face*. The face-flux kernel then interpolates the exterior state from
+    /// the partner element exactly like an interior face.
+    ///
+    /// Why this is exact: for a translation-paired boundary (x-pairing
+    /// $f{=}0 \leftrightarrow f{=}2$, y-pairing $f{=}1 \leftrightarrow f{=}3$)
+    /// the two face parameterisations satisfy $t_2 = -t_1$ at coincident
+    /// physical points, which is precisely the reversal built into
+    /// faceRefMapRight — so the existing right-state Vandermonde rows match
+    /// pointwise. The numerical flux is odd under (state swap, $-n$), hence
+    /// the two computed face fluxes are exact negatives and the paired
+    /// residual contributions balance as required by
+    /// $\hat F_2 = -\hat F_1$.
+    ///
+    /// Matching condition for a pair $(F_1, F_2)$ with directed endpoints
+    /// $(A_1, B_1)$, $(A_2, B_2)$ and translation $T \in \{(L_x, 0),
+    /// (-L_x, 0), (0, L_y), (0, -L_y)\}$ (the reversed traversal guarantees
+    /// $t_2 = -t_1$):
+    ///   $A_1 + T = B_2$ and $B_1 + T = A_2$.
+    ///
+    /// @param Lx  Domain period in x (0 disables x pairing).
+    /// @param Ly  Domain period in y (0 disables y pairing).
+    ///
+    /// @throws std::runtime_error if any boundary face remains unpaired
+    ///         (e.g. sheared meshes whose top/bottom edges do not coincide
+    ///         under a pure translation) or if pairing is requested with no
+    ///         translation enabled.
+    void applyPeriodicPairing(Real Lx, Real Ly);
 
     /// @brief Directed endpoint pair $(v_A, v_B)$ of local face \p f of
     ///        element \p elem; the direction $A \to B$ is the direction of
@@ -138,7 +189,9 @@ private:
     MatrixX2r vertices_;
     Eigen::Matrix<int, Eigen::Dynamic, 4, Eigen::RowMajor> elem_verts_;
     Eigen::Matrix<int, Eigen::Dynamic, 4, Eigen::RowMajor> elem_faces_;
-    Eigen::Matrix<int, Eigen::Dynamic, 4, Eigen::RowMajor> face_elements_;
+    /// Column-major: the four adjacency columns wrap to the device without
+    /// per-column copies (see faceElements()).
+    Eigen::Matrix<int, Eigen::Dynamic, 4, Eigen::ColMajor> face_elements_;
     Eigen::VectorXi face_types_;
 
     /// @brief Build the face list by matching shared edges.

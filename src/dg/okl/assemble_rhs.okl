@@ -1,29 +1,79 @@
-// assemble_rhs.okl — Final RHS assembly.
+// assemble_rhs.okl — Final RHS assembly (surface gather fused).
 //
-//   res[e][var][mode] = sum_{m'} Minv[e][mode][m'] * ( R_vol[e][var][m'] - R_surf[e][var][m'] )
+//   res[e][var][mode] = sum_{m'} Minv[e][mode][m'] *
+//                         ( R_vol[e][var][m'] - G[e][var][m'] )
+//
+// with the surface contribution gathered in-place from the per-face modal
+// flux slots,
+//
+//   G[e][var][m'] = sum_{f local faces} s(e,f) *
+//                     faceFlux[F(e,f)][var][side(e,f)][m'],
+//   s = +1 / side 0 when e is the face's left element, -1 / side 1
+//   otherwise.
+//
+// Fusing the gather removes the R_surf scratch round-trip (one full write
+// plus one full read of the modal residual per RHS evaluation) and one
+// kernel launch. The per-slot accumulation order (faces in ascending
+// local order, starting from 0.0) and the Minv contraction order match
+// the previous two-kernel form exactly, so the results are bit-for-bit
+// identical.
 //
 // Minv is the pre-computed inverse mass matrix of each element,
 // $M^{-1}$ with $M = V^T diag(Lambda_wJ) V$, stored element-major and
-// row-major per element. See docs/tech_docs/governed_equations_and_DG_field.md,
-// Section (四).
+// row-major per element. The gather buffer uses a compile-time stride of
+// 16 (N_modes <= 16; see the cap table in docs/tech_docs/occa.md).
+// See docs/tech_docs/governed_equations_and_DG_field.md, Section (四).
 
 @kernel void assembleRHS(const int N_elem,
                          const int N_vars, const int N_modes,
                          const Real *R_vol,
-                         const Real *R_surf,
+                         const Real *faceFlux,
+                         const int *elemFaces,
+                         const int *faceKL, const int *faceKR,
                          const Real *Minv,
                          Real *res) {
   for (int elem = 0; elem < N_elem; ++elem; @tile(TILE_SIZE, @outer, @inner)) {
     const int eBase = elem * N_vars * N_modes;
     const int mBase = elem * N_modes * N_modes;
 
+    // In-place surface gather (thread-local, fixed stride 16).
+    Real g[4 * 16];
+    for (int var = 0; var < N_vars; ++var) {
+      for (int l = 0; l < N_modes; ++l) {
+        g[var * 16 + l] = 0.0;
+      }
+    }
+    for (int f = 0; f < 4; ++f) {
+      const int F = elemFaces[elem * 4 + f];
+      if (F >= 0) {
+        const int KL = faceKL[F];
+        if (elem == KL) {
+          // This element is the left element: + side 0.
+          for (int var = 0; var < N_vars; ++var) {
+            for (int l = 0; l < N_modes; ++l) {
+              g[var * 16 + l] +=
+                  faceFlux[((F * N_vars + var) * 2 + 0) * N_modes + l];
+            }
+          }
+        } else {
+          // This element is the right element: - side 1.
+          for (int var = 0; var < N_vars; ++var) {
+            for (int l = 0; l < N_modes; ++l) {
+              g[var * 16 + l] -=
+                  faceFlux[((F * N_vars + var) * 2 + 1) * N_modes + l];
+            }
+          }
+        }
+      }
+    }
+
+    // Mass inversion of the volume minus surface contribution.
     for (int var = 0; var < N_vars; ++var) {
       for (int l = 0; l < N_modes; ++l) {
         Real acc = 0.0;
         for (int mp = 0; mp < N_modes; ++mp) {
           acc += Minv[mBase + l * N_modes + mp] *
-                 (R_vol[eBase + var * N_modes + mp] -
-                  R_surf[eBase + var * N_modes + mp]);
+                 (R_vol[eBase + var * N_modes + mp] - g[var * 16 + mp]);
         }
         res[eBase + var * N_modes + l] = acc;
       }

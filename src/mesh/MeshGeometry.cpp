@@ -229,20 +229,17 @@ void MeshGeometry::allocateDeviceMemory(DeviceMemoryManager &mgr)
     const auto &elemFaces = mesh_->elementFaces();
     const auto &faceTypes = mesh_->faceTypes();
 
-    // Row-major Eigen matrices have non-contiguous columns; copy each
-    // column into a contiguous int buffer before wrapping. The buffers are
-    // members (face_kl_ etc.) so that the wrapMemory handles stay valid on
-    // unified memory backends (zero-copy aliases the host pointer).
-    face_kl_     = faceElems.col(0);
-    face_fl_     = faceElems.col(1);
-    face_kr_     = faceElems.col(2);
-    face_fr_     = faceElems.col(3);
-    o_faceKL_    = mgr.wrapOrMallocInt(face_kl_.data(), N_face_);
-    o_faceFL_    = mgr.wrapOrMallocInt(face_fl_.data(), N_face_);
-    o_faceKR_    = mgr.wrapOrMallocInt(face_kr_.data(), N_face_);
-    o_faceFR_    = mgr.wrapOrMallocInt(face_fr_.data(), N_face_);
-    o_faceTypes_ = mgr.wrapOrMallocInt(faceTypes.data(), N_face_);
-    o_elemFaces_ = mgr.wrapOrMallocInt(
+    // faceElements is column-major, so its four adjacency columns are
+    // contiguous and wrap directly — no per-column copies. On unified
+    // memory backends the handles alias the mesh storage, which outlives
+    // the geometry (and its handles) in every owner.
+    const int *fe = faceElems.data();
+    o_faceKL_     = mgr.wrapOrMallocInt(fe, N_face_);
+    o_faceFL_     = mgr.wrapOrMallocInt(fe + N_face_, N_face_);
+    o_faceKR_     = mgr.wrapOrMallocInt(fe + 2 * N_face_, N_face_);
+    o_faceFR_     = mgr.wrapOrMallocInt(fe + 3 * N_face_, N_face_);
+    o_faceTypes_  = mgr.wrapOrMallocInt(faceTypes.data(), N_face_);
+    o_elemFaces_  = mgr.wrapOrMallocInt(
         elemFaces.data(), static_cast<occa::dim_t>(elemFaces.size()));
 }
 

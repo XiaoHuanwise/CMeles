@@ -4,12 +4,15 @@
 
 #include "dg/DgField.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
 #include "basis/BasisFunctions1D.hpp"
 #include "basis/BasisFunctions2D.hpp"
+#include "common/KernelProps.hpp"
 #include "mesh/Mesh.hpp"
 #include "mesh/MeshGeometry.hpp"
 #include "mesh/StructuredMeshGenerator.hpp"
@@ -39,6 +42,14 @@ void DgField::setup()
             cfg_.meshNx(), cfg_.meshNy(), cfg_.meshX0(), cfg_.meshY0(),
             cfg_.meshDx(), cfg_.meshDy(), cfg_.meshShear(),
             cfg_.meshSplitTriangles()}));
+    // Periodic boundaries: pair the boundary faces into pseudo-interior
+    // faces before the geometry is built, so the K_R/f_R adjacency columns
+    // uploaded by MeshGeometry carry the partner elements.
+    if (cfg_.bcType() == BcType::Periodic)
+    {
+        mesh_->applyPeriodicPairing(cfg_.meshNx() * cfg_.meshDx(),
+                                    cfg_.meshNy() * cfg_.meshDy());
+    }
     geo_ = std::make_unique<MeshGeometry>(*mesh_, *basis2D_);
 
     N_modes_ = basis2D_->numBases();
@@ -206,15 +217,20 @@ void DgField::allocateDeviceMemory()
     o_u_        = mem_.wrapOrMalloc(nEvm);
     o_res_      = mem_.wrapOrMalloc(nEvm);
     o_faceFlux_ = mem_.wrapOrMalloc(nFaceEvm);
-    // Scratch for the residual pipeline: R_vol and R_surf are both needed
-    // simultaneously in assembleRHS, so allocate two distinct buffers.
-    o_volScratch_  = mem_.wrapOrMalloc(nEvm);
-    o_surfScratch_ = mem_.wrapOrMalloc(nEvm);
+    // Scratch for the residual pipeline: R_vol is contracted by the fused
+    // assembleRHS together with the gathered face flux.
+    o_volScratch_ = mem_.wrapOrMalloc(nEvm);
     // Reserved for the viscous path: gradients at quadrature points,
     // N_elem * N_vars * 2 * N_q^2. Allocated but never written in this stage.
     const occa::dim_t nGrad =
         static_cast<occa::dim_t>(geo_->numElements()) * N_vars_ * 2 * N_q2_;
     o_gradU_ = mem_.wrapOrMalloc(nGrad);
+
+    // Time-step estimation scratch (element count; the host mirror is the
+    // wrap source on unified backends).
+    dt_elem_.assign(static_cast<std::size_t>(geo_->numElements()), Real(0));
+    o_dtElem_ = mem_.wrapOrMalloc(dt_elem_.data(),
+                                  static_cast<occa::dim_t>(dt_elem_.size()));
 }
 
 // ============================================================================
@@ -243,18 +259,18 @@ occa::kernel DgField::buildKernel(const std::string &file,
     props["defines/FLUX_VANLEER"] = fluxTypeValue(FluxType::VanLeer);
     // Search path for `#include` of shared device functions (llf.okl).
     props["okl/include_paths"].asArray().array().push_back(oklDir_);
-    props["header/include"] = "#include <cmath>";
+    cmeles::finaliseKernelProps(props, device_);
 
     return device_.buildKernel(oklDir_ + "/" + file, name, props);
 }
 
 void DgField::buildKernels()
 {
-    initModeCoeffs_   = buildKernel("init.okl", "initModeCoeffs");
-    volumeIntegral_   = buildKernel("volume_integral.okl", "volumeIntegral");
-    computeFaceFlux_  = buildKernel("surface_integral.okl", "computeFaceFlux");
-    gatherSurfaceRHS_ = buildKernel("surface_integral.okl", "gatherSurfaceRHS");
-    assembleRHS_      = buildKernel("assemble_rhs.okl", "assembleRHS");
+    initModeCoeffs_  = buildKernel("init.okl", "initModeCoeffs");
+    volumeIntegral_  = buildKernel("volume_integral.okl", "volumeIntegral");
+    computeFaceFlux_ = buildKernel("surface_integral.okl", "computeFaceFlux");
+    assembleRHS_     = buildKernel("assemble_rhs.okl", "assembleRHS");
+    estimateDt_      = buildKernel("estimate_dt.okl", "estimateDt");
     // computeGradient_ is reserved (viscous path); the kernel source is not
     // built in this stage.
 }
@@ -289,13 +305,13 @@ occa::kernel DgField::kernelComputeFaceFlux() const
 {
     return computeFaceFlux_;
 }
-occa::kernel DgField::kernelGatherSurfaceRHS() const
-{
-    return gatherSurfaceRHS_;
-}
 occa::kernel DgField::kernelAssembleRHS() const
 {
     return assembleRHS_;
+}
+occa::kernel DgField::kernelEstimateDt() const
+{
+    return estimateDt_;
 }
 
 // ============================================================================
@@ -402,12 +418,32 @@ void DgField::computeRHS(occa::memory o_u, occa::memory o_res)
                      geo_->o_faceKR(), geo_->o_faceFR(), geo_->o_faceNormals(),
                      geo_->o_faceJac(), o_free, gam, o_faceFlux_);
 
-    // 3. Gather the face contributions into R_surf (separate scratch).
-    gatherSurfaceRHS_(N_elem, N_vars_, N_modes_, o_faceFlux_,
-                      geo_->o_elemFaces(), geo_->o_faceKL(), geo_->o_faceKR(),
-                      o_surfScratch_);
-
-    // 4. Assembly: res = M^-1 (R_vol - R_surf).
-    assembleRHS_(N_elem, N_vars_, N_modes_, o_volScratch_, o_surfScratch_,
+    // 3. Assembly: res = M^-1 (R_vol - G), with the surface contribution G
+    //    gathered in-place from the face-flux slots inside the kernel
+    //    (fused gather; no R_surf scratch round-trip).
+    assembleRHS_(N_elem, N_vars_, N_modes_, o_volScratch_, o_faceFlux_,
+                 geo_->o_elemFaces(), geo_->o_faceKL(), geo_->o_faceKR(),
                  geo_->o_minv(), o_res);
+}
+
+Real DgField::estimateDt(occa::memory o_u, Real cfl)
+{
+    const int N_elem = geo_->numElements();
+    estimateDt_(N_elem, N_vars_, N_modes_, N_q2_, cfg_.polynomialOrder(),
+                cfg_.gamma(), cfl, o_u, basis2D_->o_V2D(), geo_->o_vertices(),
+                o_dtElem_);
+
+    // Host min-reduction (the estimate synchronises the loop anyway). On
+    // unified backends o_dtElem_ aliases dt_elem_ directly.
+    if (mem_.hasSeparateMemorySpace())
+    {
+        occa::memory o = o_dtElem_;
+        mem_.copyToHost(o, dt_elem_.data(), N_elem);
+    }
+    Real dt = std::numeric_limits<Real>::max();
+    for (Real d : dt_elem_)
+    {
+        dt = std::min(dt, d);
+    }
+    return dt;
 }

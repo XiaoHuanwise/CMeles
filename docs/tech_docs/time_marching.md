@@ -73,3 +73,33 @@ $$
 | 高精度非定常长时间积分       | 隐式 DITR（U3R1, 4 阶 + L 稳定）   | 四阶精度与 DG 空间精度匹配                               |
 | 强间断 / 激波捕捉            | SSPRK3 / 嵌入式 SSPRK 对           | SSP 性质确保 TVD/TVB 性质在时间离散中保持                |
 | GPU 加速隐式求解             | 阶段解耦 DITR + 自适应伪时间步     | 解耦降低系统规模，自适应步长 GPU 友好                    |
+
+
+---
+
+## 模块实现（src/time/）
+
+时间推进模块已实现，采用 **CRTP 编译期多态**（无虚函数）：
+
+| 文件 | 内容 |
+| ---- | ---- |
+| `TimeTypes.hpp` | `RhsFunction` / `PositivityLimiter` 类型别名 |
+| `StepperBase.hpp` | CRTP 基类：公共上下文（device/mem/rhs/Blas/更新内核/limiter 钩子）与静态接口 `advance(u, t, dt) -> 实际步长` |
+| `SimpleExplicitStepper.{hpp,cpp}` | `EulerStepper`（1 阶）、`SspRk3Stepper`（Shu–Osher 3 阶） |
+| `ButcherTable.hpp` | 6 张 constexpr Butcher 表（RK32/RK54/SSPRK221/321/332/432，系数取自原型与本文档） |
+| `RungeKuttaStepper.{hpp,cpp}` | 通用 embedded RK：Butcher 表为运行期数据（一次上传设备，内核运行期读取），FSAL、RMS 缩放误差、PI 控制器、Hairer 初始步长、`advanceFixed`（定步长伪推进） |
+| `ImplicitResidual.{hpp,cpp}` | `BackwardEulerStepper` 与 `DitrStepper`（U2R2/U2R1/U3R1 单类 + 变体系数）：仅构造时间残差 $\mathcal{F}$，含耦合预条件子与解耦每级残差 |
+| `DualStepper.hpp` | `DualStepper<PhyStepper>` 模板：伪时间自适应 RK 推进至 $\|\mathcal{F}\|_\infty$ 收敛（REF_STEP = 5 参考范数），耦合/解耦两种模式，内部维护 $u^{n-1}$ 与 $\theta$ |
+| `okl/time_update.okl` | 向量更新内核（`explicitEulerUpdate`、`sspConvexCombine`、Butcher 阶段/误差内核、`vecCombine4`、`absInto`） |
+
+要点：
+
+- RK 变体与 DITR 变体的差异是**数据**（Butcher 表 / 重构系数）而非行为，故以单类 + constexpr
+  表实现；真正的类型差异（Euler / SSPRK3 / RK / Dual）由模板分派。
+- 唯一的运行期→编译期分派点是 `runCompressibleFlowSolver(const Config&)`
+  （`src/solver/CompressibleFlowSolver.cpp`），共 5 个求解器实例化。
+- 时间步长：`DgField::estimateDt` 按本文档 CFL 公式每步重算（`estimate_dt.okl`），
+  `[time_marching] dt > 0` 时使用固定步长。
+- 正保持限制器钩子（`setPositivityLimiter`）在每个阶段状态后调用，默认 no-op（移植自原型）。
+- 单元测试见 `ctest/time/test_time_stepper.cpp`（ODE $u' = \lambda u$ 收敛阶）与
+  `ctest/solver/test_euler_vortex.cpp`（等熵涡整链路验证）。

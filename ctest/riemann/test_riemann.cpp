@@ -9,6 +9,7 @@
 
 #include <Eigen/Dense>
 #include <occa.hpp>
+#include <type_traits>
 
 #include <array>
 #include <cmath>
@@ -18,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "common/KernelProps.hpp"
 #include "common/Types.hpp"
 #include "core/DeviceMemoryManager.hpp"
 #include "riemann/Riemann.hpp"
@@ -82,7 +84,7 @@ static occa::kernel buildLlfKernel(occa::device &device, int tileSize,
     props["defines/Real"] = "double";
 #endif
     props["defines/TILE_SIZE"] = tileSize;
-    props["header/include"]    = "#include <cmath>";
+    cmeles::finaliseKernelProps(props, device);
     return device.buildKernel(oklDir + "/llf.okl", "llfFlux", props);
 }
 
@@ -92,11 +94,17 @@ static occa::kernel buildLlfKernel(occa::device &device, int tileSize,
 
 bool checkVec(const Real *value, const Real *ref, int n, const char *what)
 {
+    // Mixed absolute/relative criterion: flux components are differences of
+    // O(1) terms, so cancellation-heavy near-zero components carry float
+    // rounding noise (~1e-7 absolute) that a pure relative tolerance would
+    // reject when GPU FMA contraction differs from the host reference.
+    const Real absFloor =
+        std::is_same<Real, float>::value ? Real(1e-6) : Real(0);
     bool ok = true;
     for (int k = 0; k < n; ++k)
     {
         const Real denom = std::max(std::abs(ref[k]), RealEpsilon);
-        if (std::abs(value[k] - ref[k]) > tol * denom)
+        if (std::abs(value[k] - ref[k]) > absFloor + tol * denom)
         {
             std::cout << "  FAIL " << what << "[" << k
                       << "]: value=" << value[k] << " ref=" << ref[k] << "\n";
@@ -319,10 +327,9 @@ static bool runDeviceTest(const std::string &mode, occa::json props,
     occa::device device(props);
     DeviceMemoryManager mem(device);
 
-    // Build the llfFlux kernel. On the OpenCL backend the device-side `sqrt`
-    // (sound speed) fails to link because OCCA's OpenCL path (LLVM -> comgr)
-    // cannot resolve libm symbols on the device; this is an OCCA limitation,
-    // not a code defect. Treat such build failures as skipped.
+    // Build the llfFlux kernel. A build failure on an available backend is
+    // a real defect (math functions resolve to built-ins on GPU backends
+    // and to <cmath> via the serial/include_std property on CPU backends).
     occa::kernel kernel;
     try
     {
@@ -330,10 +337,9 @@ static bool runDeviceTest(const std::string &mode, occa::json props,
     }
     catch (const std::exception &e)
     {
-        std::cout << "  (skip " << mode << ": kernel build failed — "
+        std::cout << "  (FAILED " << mode << ": kernel build failed — "
                   << e.what() << ")\n";
-        ++skipped;
-        return true;
+        return false;
     }
 
     // Random state pairs (local frame states).

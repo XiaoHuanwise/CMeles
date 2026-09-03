@@ -151,6 +151,19 @@ public:
     /// @param o_res  Output residual (may alias a distinct buffer).
     void computeRHS(occa::memory o_u, occa::memory o_res);
 
+    /// @brief CFL-based time-step estimate
+    ///        $\Delta t = \mathrm{CFL} \min_K h_K / ((2N{+}1)\Lambda_{\max,K})$
+    ///        with $\Lambda_{\max} = |\vec u| + c$ maximised over the
+    ///        quadrature points of each element.
+    ///
+    /// Synchronises the device (host min-reduction over the per-element
+    /// steps).
+    ///
+    /// @param o_u  Input modal coefficients.
+    /// @param cfl  CFL number.
+    /// @return The minimum element time step.
+    Real estimateDt(occa::memory o_u, Real cfl);
+
     // ---- Viscous path (reserved skeleton) ----
 
     /// @brief Reserved interface skeleton for the viscous gradient
@@ -162,8 +175,8 @@ public:
     occa::kernel kernelInitModeCoeffs() const;
     occa::kernel kernelVolumeIntegral() const;
     occa::kernel kernelComputeFaceFlux() const;
-    occa::kernel kernelGatherSurfaceRHS() const;
     occa::kernel kernelAssembleRHS() const;
+    occa::kernel kernelEstimateDt() const;
 
 private:
     // ---- Kernels ----
@@ -224,16 +237,20 @@ private:
     occa::memory o_faceVandermonde_;
     occa::memory o_faceWeights_;
 
-    // Scratch buffers for the residual pipeline (R_vol and R_surf are both
-    // needed simultaneously in assembleRHS).
+    // Scratch buffer for the residual pipeline (R_vol is contracted by
+    // the fused assembleRHS together with the gathered face flux).
     occa::memory o_volScratch_;
-    occa::memory o_surfScratch_;
+
+    // Time-step estimation: per-element dt (device) and its host mirror
+    // (the wrap source on unified backends).
+    occa::memory o_dtElem_;
+    std::vector<Real> dt_elem_;
 
     // Cached kernels (lazy-compiled by buildKernels).
     occa::kernel initModeCoeffs_;
     occa::kernel computeGradient_; ///< Reserved skeleton.
     occa::kernel volumeIntegral_;
     occa::kernel computeFaceFlux_;
-    occa::kernel gatherSurfaceRHS_;
     occa::kernel assembleRHS_;
+    occa::kernel estimateDt_;
 };

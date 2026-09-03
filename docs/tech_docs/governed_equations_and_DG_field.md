@@ -466,17 +466,17 @@ $$
 R_{f,q}^{(k)} = \sum_{i=0}^{N_Q-1} w_i \, \hat{F}_k(t_i) \, \phi_q(t_i) \, |J_f|
 $$
 
-其中 $k$ 为守恒变量索引，$q$ 为基函数索引。此结果不直接写入体单元残差，而是存入中间数组 `face_flux[face][k][q]`。随后由 gather 核函数将各面对应的贡献按符号（左单元取正，右单元取负）累加到体单元的 `res` 数组中。
+其中 $k$ 为守恒变量索引，$q$ 为基函数索引。此结果不直接写入体单元残差，而是存入中间数组 `face_flux[face][k][side][q]`（side 0 = 左单元、side 1 = 右单元）。随后在组装核函数中（见第（四）节）将各面对应的贡献按符号（左单元取正，右单元取负）gather 并累加。
 
 **OCCA 核函数实现**：面积分采用**先计算再 gather**的两步策略，避免写冲突。
 
-1. **面通量计算核函数**（`computeFaceFlux`）：每个面单元独立计算数值通量在面积分点上的加权累加结果（对 $N_Q$ 个积分点做 $\sum_i w_i \hat{F}_k(t_i) \phi_q(t_i) |J_f|$ 收缩），输出为 $N_{\text{vars}} \times N_{\text{modes}}$ 个标量，存入中间数组 `face_flux[f][k][q]`。由于每个面只写自己的结果，面单元间完全独立并行，无需原子操作。
+1. **面通量计算核函数**（`computeFaceFlux`）：每个面单元独立计算数值通量在面积分点上的加权累加结果（对 $N_Q$ 个积分点做 $\sum_i w_i \hat{F}_k(t_i) \phi_q(t_i) |J_f|$ 收缩），输出为 $N_{\text{vars}} \times N_{\text{modes}}$ 个标量，存入中间数组 `face_flux[f][k][side][q]`。由于每个面只写自己的结果，面单元间完全独立并行，无需原子操作。核函数内部采用两趟结构：第一趟逐积分点计算物理通量并存入线程局部数组，第二趟按 $(k,q)$ 在寄存器中跨积分点累加后单次写出（避免对 `face_flux` 的逐积分点读-改-写）。
 
-2. **面贡献 gather 核函数**（`gatherSurfaceRHS`）：每个体单元遍历其关联的面（四边形 4 条边），根据该面在体单元中的局部面朝向和符号（左单元 + / 右单元 −），从 `face_flux` 中读取对应的模态系数向量，累加到体单元的残差 `res` 中。此核函数以体单元为单位并行，每个体单元只写自己的残差，同样无写冲突。
+2. **面贡献 gather（融合进组装核函数）**：每个体单元遍历其关联的面（四边形 4 条边），根据该面在体单元中的局部面朝向和符号（左单元 + / 右单元 −），从 `face_flux` 中读取对应的模态系数向量，在线程局部缓冲中累加得到 $\boldsymbol{R}_{\text{surf}}$，随后立即与 $\boldsymbol{R}_{\text{vol}}$ 相减并左乘 $\mathbf{M}^{-1}$（即与 `assembleRHS` 融合为一个核函数）。以体单元为单位并行，每个体单元只写自己的残差，同样无写冲突；融合省去了 $R_{\text{surf}}$ 中间数组的一轮完整写+读往返。
 
 两步核函数均使用 `@tile(TILE_SIZE, @outer, @inner)`（GPU）或 `@outer`（OpenMP），并行模式与体积分一致。
 
-此设计避免了 `@atomic` 操作——`@atomic` 仅支持简单标量操作，无法原子更新完整残差向量（$N_{\text{vars}} \times N_{\text{modes}}$ 个 double），且高竞争下性能很差。同时，两步法只需两次核函数启动（一次面、一次体），面核函数间的独立并行性更好，体核函数对残差的写入具有良好缓存局部性。
+此设计避免了 `@atomic` 操作——`@atomic` 仅支持简单标量操作，无法原子更新完整残差向量（$N_{\text{vars}} \times N_{\text{modes}}$ 个 double），且高竞争下性能很差。同时整个残差流水线只需三次核函数启动（体积、面、组装+gather），面核函数间的独立并行性更好，体核函数对残差的写入具有良好缓存局部性。
 
 #### （四）右端项组装
 
@@ -490,7 +490,7 @@ $$
 
 $\mathbf{M}^{-1}$ 可在预处理阶段逐单元预计算并存储，每次右端项组装仅需一次小规模矩阵-向量乘法（$N_{\text{modes}}$ 维），计算量远小于体积分和面积分。
 
-组装核函数 `assembleRHS` 对每个单元执行：先将体积分和面积分贡献按 $(k,j)$ 逐分量相减得到半离散残差 $\boldsymbol{R}_{\text{vol}} - \boldsymbol{R}_{\text{surf}}$，再左乘预计算的 $\mathbf{M}^{-1}$，结果写入 `res` 数组。注意：$\boldsymbol{R}_{\text{surf}}$ 并非独立存储的完整数组——面积分的结果已通过 `gatherSurfaceRHS` 核函数直接累加到 `res` 中（或独立数组中再由此核函数减掉）。具体实现中 `assembleRHS` 可直接在 `res` 上原地完成减法与矩阵乘法。
+组装核函数 `assembleRHS` 对每个单元执行：先在线程局部缓冲中 gather 面积分贡献 $\boldsymbol{R}_{\text{surf}}$（按 $(k,j)$ 逐分量、左单元 + / 右单元 −），再将其与体积分贡献相减并左乘预计算的 $\mathbf{M}^{-1}$，结果写入 `res` 数组。$\boldsymbol{R}_{\text{surf}}$ 不落盘为独立数组——gather 与组装融合在同一个核函数中完成，省去一轮完整的中间数组写+读往返；每槽位的累加顺序与 contraction 顺序与融合前的两核函数形式一致，结果逐位相同。
 
 #### 核函数概览
 
@@ -500,10 +500,9 @@ $\mathbf{M}^{-1}$ 可在预处理阶段逐单元预计算并存储，每次右�
 | `computeGradient`  |     `gradient.okl`     | 积分点上的守恒变量梯度                                             |  每单元  |
 |  `volumeIntegral`  | `volume_integral.okl`  | 体积分：$\int \boldsymbol{F} \cdot \nabla\phi \, \mathrm{d}\Omega$ |  每单元  |
 | `computeFaceFlux`  | `surface_integral.okl` | 面通量计算：每个面单元独立计算加权数值通量，输出模态系数向量       | 每面单元 |
-| `gatherSurfaceRHS` | `surface_integral.okl` | 面贡献 gather：每个体单元遍历关联面累加符号化通量到残差            |  每单元  |
-|   `assembleRHS`    |   `assemble_rhs.okl`   | 体积分 − 面积分，左乘 $\mathbf{M}^{-1}$                            |  每单元  |
+|   `assembleRHS`    |   `assemble_rhs.okl`   | 融合 gather 的组装：$R_{\text{surf}}$ 累加 + $M^{-1}(R_{\text{vol}} - R_{\text{surf}})$ |  每单元  |
 
-> **注**：`computeFaceFlux` 和 `gatherSurfaceRHS` 可放在同一 `.okl` 文件中，以不同 `@kernel` 函数区分（OCCA 一次编译可生成多个 kernel 对象）。
+> **注**：核函数按 OKL 文件组织（`surface_integral.okl` 只含面通量计算；gather 逻辑融合在 `assemble_rhs.okl` 中）。
 
 #### DG 场模块的完整调用流程
 
@@ -513,8 +512,7 @@ $\mathbf{M}^{-1}$ 可在预处理阶段逐单元预计算并存储，每次右�
 1. [可选] computeGradient    → 积分点上的梯度 grad_u
 2. volumeIntegral            → 体积分贡献 R_vol
 3. computeFaceFlux           → 面单元模态系数 face_flux
-4. gatherSurfaceRHS          → 面贡献 gather 到体单元残差 R_surf
-5. assembleRHS               → R = M⁻¹ * (R_vol - R_surf)
+4. assembleRHS（融合 gather） → R = M⁻¹ * (R_vol - gather(face_flux))
 
 输出: 残差数组 res = R(u_f)
 ```

@@ -17,14 +17,15 @@
 //
 // OCCA rule: no C++ reference parameters — pass by value / pointer only.
 //
-// NOTE on math functions: `fabs` is avoided in favour of the ternary
-// `(x >= 0) ? x : -x` because OCCA's OpenCL path (LLVM -> comgr) cannot
-// resolve libm symbols on the device. `sqrt` (sound speed) is physically
-// required by LLF and is therefore kept; kernels using it compile and run
-// on the Serial/OpenMP backends but fail to link on OpenCL (OCCA
-// limitation, not a code defect). See docs/tech_docs/occa.md.
-
-#include <math.h>
+// NOTE on math functions: sqrt (sound speed) is physically required by LLF.
+// On GPU backends (OpenCL/CUDA/HIP/Metal) sqrt/fabs/pow are language
+// built-ins; on Serial/OpenMP the <cmath> header is injected through the
+// serial/include_std kernel property (set in DgField::buildKernel). Never
+// write `#include <math.h>` in .okl sources: OCCA passes it through
+// verbatim into every backend's generated source, and on OpenCL the host
+// declarations shadow the built-ins and break the device link. The ternary
+// `(x >= 0) ? x : -x` used below predates this convention and is kept as a
+// branch-free equivalent of fabs. See docs/tech_docs/occa.md.
 
 // --- Primitive-variable helpers ---------------------------------------------
 

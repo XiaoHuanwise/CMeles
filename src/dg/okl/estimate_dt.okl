@@ -1,0 +1,87 @@
+// estimate_dt.okl — CFL-based time-step estimation.
+//
+// Implements the CFL condition of
+// docs/tech_docs/time_marching/explicit_time_marching.md Section 2.3:
+//
+//   dt = CFL * min_K h_K / ((2N + 1) * Lam_max_K),
+//   Lam_max = max_q ( |u| + c )   (spectral radius of the Euler flux)
+//
+// The per-element characteristic size h_K follows the documented
+// conventions: quads take the minimum edge length, (degenerate) triangles
+// take sqrt(2 A). The state is evaluated at the volume quadrature points
+// via the Vandermonde contraction (identical to the volume integral's
+// modal -> nodal step) and the spectral radius is maximised over the
+// points. One thread per element; the host reduces min over dtElem.
+//
+// sqrt & friends are math built-ins on GPU backends; the CPU backends get
+// <cmath> through the serial/include_std kernel property (set in
+// DgField::buildKernel). Never #include <math.h> here: OCCA passes it
+// through verbatim into every backend's source and breaks the OpenCL
+// device link. See docs/tech_docs/occa.md.
+
+@kernel void estimateDt(const int N_elem,
+                        const int N_vars, const int N_modes, const int Nq2,
+                        const int polyOrder,
+                        const Real gamma,
+                        const Real cfl,
+                        const Real *u,
+                        const Real *V2D,
+                        const Real *vertices,
+                        Real *dtElem) {
+  for (int elem = 0; elem < N_elem; ++elem; @tile(TILE_SIZE, @outer, @inner)) {
+    const int vOff = elem * 8;
+    const Real x1 = vertices[vOff + 0], y1 = vertices[vOff + 1];
+    const Real x2 = vertices[vOff + 2], y2 = vertices[vOff + 3];
+    const Real x3 = vertices[vOff + 4], y3 = vertices[vOff + 5];
+    const Real x4 = vertices[vOff + 6], y4 = vertices[vOff + 7];
+
+    // Characteristic element size h_K.
+    Real h;
+    if (x3 == x4 && y3 == y4) {
+      // Degenerate quad = triangle: h = sqrt(2 A) with the cross product
+      // of the two edge vectors from P1.
+      const Real ax = x2 - x1, ay = y2 - y1;
+      const Real bx = x4 - x1, by = y4 - y1;
+      const Real area = (Real)0.5 * (ax * by - ay * bx);
+      const Real a2 = area < 0 ? -area : area;
+      h = sqrt((Real)2 * a2);
+    } else {
+      const Real e01x = x2 - x1, e01y = y2 - y1;
+      const Real e12x = x3 - x2, e12y = y3 - y2;
+      const Real e23x = x4 - x3, e23y = y4 - y3;
+      const Real e30x = x1 - x4, e30y = y1 - y4;
+      Real m = sqrt(e01x * e01x + e01y * e01y);
+      m = m < sqrt(e12x * e12x + e12y * e12y) ? m : sqrt(e12x * e12x + e12y * e12y);
+      m = m < sqrt(e23x * e23x + e23y * e23y) ? m : sqrt(e23x * e23x + e23y * e23y);
+      m = m < sqrt(e30x * e30x + e30y * e30y) ? m : sqrt(e30x * e30x + e30y * e30y);
+      h = m;
+    }
+
+    // Spectral radius max over the quadrature points.
+    Real lam = (Real)0;
+    const int uBase = elem * N_vars * N_modes;
+    for (int q = 0; q < Nq2; ++q) {
+      Real qv[4];
+      for (int var = 0; var < 4; ++var) {
+        Real acc = 0.0;
+        const int uOff = uBase + var * N_modes;
+        const int vOffQ = q * N_modes;
+        for (int m = 0; m < N_modes; ++m) {
+          acc += V2D[vOffQ + m] * u[uOff + m];
+        }
+        qv[var] = acc;
+      }
+      const Real rho = qv[0];
+      const Real ux = qv[1] / rho;
+      const Real uy = qv[2] / rho;
+      const Real p =
+          (gamma - (Real)1) * (qv[3] - (Real)0.5 * (qv[1] * qv[1] + qv[2] * qv[2]) / rho);
+      const Real a2 = gamma * p / rho;
+      const Real c = a2 < 0 ? (Real)0 : sqrt(a2);
+      const Real s = sqrt(ux * ux + uy * uy) + c;
+      lam = lam > s ? lam : s;
+    }
+
+    dtElem[elem] = cfl * h / ((Real)(2 * polyOrder + 1) * lam);
+  }
+}

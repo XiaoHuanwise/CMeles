@@ -232,11 +232,36 @@ mem_mgr.copyToHost(o_u, u_result.data(), N_total);
 | GPU  |       256        | 匹配 GPU warp/wavefront  |
 | CPU  |      按核数      | 通常设为物理核数的整数倍 |
 
+### 设备端数学函数（`sqrt` / `fabs` / `pow` …）
+
+**禁止在 `.okl` 源码中写 `#include <math.h>`（或任何标准 C/C++ 头文件）**，正确做法分两层：
+
+- **GPU 后端（OpenCL/CUDA/HIP/Metal）**：数学函数是语言内建，无需任何头文件。Metal/dpcpp 的 `<metal_stdlib>` / `<CL/sycl.hpp>` 由 OCCA 翻译器无条件注入，也不需要用户处理。
+- **CPU 后端（Serial/OpenMP）**：OCCA 生成的 C++ 源码默认**不含** `<cmath>`（属性 `serial/include_std` 默认为 false），宿主侧构建 kernel 时必须显式设置 `props["serial/include_std"] = true`。GPU 后端的 parser 忽略该属性，因此可以无条件设置、对所有设备统一生效。
+
+透传禁令的机理：OCCA 预处理器（`third_party/occa/src/occa/internal/lang/preprocessor.cpp` 的 `processInclude`）对 `standardHeaders` 白名单中的头文件（`math.h`、`cmath` 等）在磁盘上找不到时会**原样透传** `#include` 指令到**所有**后端生成的源码。Serial/OpenMP 下无害（宿主编译器正常解析），但 OpenCL 下 `math.h` 中的宿主端声明（`extern double sqrt(double)`）会**遮蔽 OpenCL C 内建函数**，设备链接期报 `undefined hidden symbol: sqrt` → `CL_BUILD_PROGRAM_FAILURE`（AMD comgr 实测）。
+
+其他要点：
+
+- **类型转换写法**：`.okl` 源码中必须使用 C 风格转换 `(Real)2`、`(Real)0.5`，**禁止**函数式写法 `Real(2)`——JIT define 替换后变成 `double(2)`，这是 C++ 语法，OpenCL C（基于 C99）无法编译（`CL_BUILD_PROGRAM_FAILURE`）。对复合表达式可用 `(Real)(2 * N + 1)`，但**后随二元运算符时须整体加括号**（如 `x / ((Real)(2 * N + 1) * lam)`）：OCCA 的 OKL 解析器对"cast 后直接跟运算符"的裸形式报 `Unable to apply operator`。AGENTS.md 的 `Real(...)` 包装约定仅适用于宿主端 C++ 代码。
+- **双精度**：OpenCL parser 强制注入 `#pragma OPENCL EXTENSION cl_khr_fp64 : enable`（`third_party/occa/src/occa/internal/lang/modes/opencl.cpp`），`Real = double` 无需额外配置。
+- 项目所有 kernel 构建点（`DgField`、`Blas`、`MathOps`、时间模块 `StepperBase` / `ImplicitResidual`，以及 riemann 测试）已统一设置 `serial/include_std`。
+- 官方佐证：`third_party/occa/tests/src/math/fpMath.cpp` 即采用 `serial/include_std` 属性测试各后端数学函数编译，但它**不覆盖 OpenCL**（该路径无官方 CI）。CMeles 的后端扫描测试（`test_dg_periodic` / `test_riemann`）在本机有 OpenCL 设备时会真实编译运行，补上这层覆盖。
+
 ### 关键技术要点
 
 - **SIMD 向量化**：不依赖 OKL 的 `@inner` 标注。实测 OCCA OpenMP 后端对 `@inner` 不生成任何 `#pragma omp simd`。SIMD 向量化由编译器在 `-O3 -march=native` 下自动完成，OKL 源码中无需额外标注。
 - **JIT 缓存**：不使用 `@shared` 时，`N_VARS`、`N_MODES`、`N_Q` 等维度作为 `const int` 核函数参数传入（非编译宏），最大化 JIT 缓存命中率。
 - **`@shared` 的限制**：若后续启用 `@shared`，数组大小必须为编译时常量，需通过 JIT 编译宏（`occa::kernelBuilder` 的 `addDefine`）传入。
+- **局部数组的编译期上限（重要约束）**：OKL 核函数内的线程局部数组大小必须是编译期常量，而维度（`N_q`、`N_modes` 等）是运行期参数，因此局部数组按**上限**声明、按下标裁剪使用。当前各核函数的上限约定：
+
+  | 核函数 | 局部数组 | 上限含义 |
+  | :----- | :------ | :------- |
+  | `volumeIntegral`（volume_integral.okl） | `qval[4][256]` 等 | $N_q^2 \le 256$，即 `nq <= 16` |
+  | `computeFaceFlux`（surface_integral.okl） | `fp[16 * 4]` | $N_q \le 16$（与体积项的 $N_q^2 \le 256$ 对齐） |
+  | `assembleRHS`（assemble_rhs.okl，融合 gather） | `g[4 * 16]` | $N_{\text{modes}} \le 16$（N=2 时 6 个模态；nq≈N+2 的常用配置下覆盖至 N=4） |
+
+  超限会静默越界写入（无运行期判别，属于刻意的性能取舍）。`Config` 不校验这些上限，提升 `order`/`nq` 前必须核对此表。
 - **禁止使用 C++ 引用传参**：OKL 核函数中**不允许**使用 `const T & value` 形式的 C++ 引用参数。OCCA 的 JIT 代码生成器（`launcher_source.cpp`）在生成 OpenCL kernel source 时可能原样输出引用语法，这在 OpenCL C 中是非法的（OpenCL C 只允许指针，不支持引用），会导致 `CL_BUILD_PROGRAM_FAILURE`。核函数的所有参数应通过**值传递**或**指针传递**，避免引用语法。**注意**：此规则仅适用于 `.okl` 核函数源码；托管端（host）C++ 代码中的 `occa::memory` 等 OCCA 对象正常使用值/引用传递无影响。
 
 ### 参考文档

@@ -29,6 +29,8 @@ file(COPY ${CMAKE_SOURCE_DIR}/src/riemann/okl
      DESTINATION ${CMAKE_BINARY_DIR}/occa)
 file(COPY ${CMAKE_SOURCE_DIR}/src/dg/okl
      DESTINATION ${CMAKE_BINARY_DIR}/occa)
+file(COPY ${CMAKE_SOURCE_DIR}/src/time/okl
+     DESTINATION ${CMAKE_BINARY_DIR}/occa)
 add_compile_definitions(OCCA_OKL_DIR="${CMAKE_BINARY_DIR}/occa/okl")
 
 add_subdirectory(src)
@@ -39,7 +41,15 @@ target_link_libraries(CMeles PRIVATE Eigen3::Eigen)
 find_package(OCCA REQUIRED CONFIG)
 target_link_libraries(CMeles PRIVATE OCCA::libocca)
 
+# Enable the in-process OpenMP thread-count override ([occa] threads);
+# OCCA's own OpenMP support guarantees the runtime is available.
+find_package(OpenMP QUIET)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(CMeles PRIVATE OpenMP::OpenMP_CXX)
+endif()
+
 target_include_directories(CMeles PRIVATE ${CMAKE_SOURCE_DIR}/third_party/tomlplusplus)
+target_include_directories(CMeles PRIVATE ${CMAKE_SOURCE_DIR}/third_party/exprtk)
 
 find_package(HighFive REQUIRED CONFIG)
 target_link_libraries(CMeles PRIVATE HighFive::HighFive)
