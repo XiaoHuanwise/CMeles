@@ -27,6 +27,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "ImplicitResidual.hpp"
 #include "RungeKuttaStepper.hpp"
@@ -82,6 +83,10 @@ private:
     /// @brief $\|f\|_\infty$ of a pseudo stepper's current residual.
     Real residualNorm(const RungeKuttaStepper &ps, occa::dim_t n);
 
+    /// @brief $\|x\|_\infty$ over \p n entries (host reduction; grows the
+    ///        scratch lazily, so it also serves the stacked dual-time state).
+    Real infNorm(occa::memory &o_x, occa::dim_t n);
+
     Params params_;
     std::unique_ptr<TemporalResidual> residual_;
     const int nStages_; ///< Stacked stages of the implicit state.
@@ -99,6 +104,10 @@ private:
     occa::memory o_Rnew0_; ///< Decoupled current $R(u^{n+c_2})$.
     occa::memory o_Rnew1_; ///< Decoupled current $R(u^{n+1})$.
     occa::memory o_uPrev_; ///< $u^{n-1}$ (U3R1); refreshed every step.
+
+    occa::kernel absInto_;      ///< |x| kernel of the inf-norm (lazy).
+    occa::memory o_abs_;        ///< |x| scratch of the inf-norm reduction.
+    std::vector<Real> absHost_; ///< Host mirror / wrap source of o_abs_.
 
     Real dtPrev_ = Real(0); ///< Previous physical step (for theta).
 };

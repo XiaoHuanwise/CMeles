@@ -3,7 +3,7 @@
 // See docs/tech_docs/time_marching/explicit_time_marching.md, Section 2.5
 // (explicitEulerUpdate / sspConvexCombine) and
 // docs/tech_docs/time_marching/explicit_adaptive_time_marching.md
-// (rkStageCombine / rkWeightedSum / rkFinalUpdate / rkScaledErrorSq).
+// (rkStageCombine / rkWeightedSum / rkFinalUpdate).
 //
 // All kernels are one-DOF-per-thread over the flattened ODE vector
 // $u \in R^{N_{dof}}$ (for the DG field: $N_{elem} \cdot N_{vars} \cdot
@@ -92,25 +92,6 @@
       acc += B[j] * K[j * N_dof + d];
     }
     u_new[d] = u[d] + dt * acc;
-  }
-}
-
-// out[d] = (err[d] / (atol + max(|u[d]|, |u_new[d]|) * rtol))^2
-// (per-DOF scaled error squares; sum via a host reduction for the RMS norm).
-@kernel void rkScaledErrorSq(const int N_dof,
-                             const Real atol,
-                             const Real rtol,
-                             const Real *err,
-                             const Real *u,
-                             const Real *u_new,
-                             Real *out) {
-  for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
-    const Real au = u[d] < 0 ? -u[d] : u[d];
-    const Real an = u_new[d] < 0 ? -u_new[d] : u_new[d];
-    const Real m = au > an ? au : an;
-    const Real scale = atol + m * rtol;
-    const Real e = err[d] / scale;
-    out[d] = e * e;
   }
 }
 

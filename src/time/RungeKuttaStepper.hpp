@@ -127,6 +127,19 @@ private:
     ///        with error norm \p sigma.
     void updateDt(Real sigma, bool accepted, bool wasRejected);
 
+    /// @brief Lazily compile the Butcher kernels (idempotent).
+    void ensureRkKernels()
+    {
+        if (rkKernelsBuilt_)
+        {
+            return;
+        }
+        rkStageCombine_ = buildTimeKernel("rkStageCombine");
+        rkWeightedSum_  = buildTimeKernel("rkWeightedSum");
+        rkFinalUpdate_  = buildTimeKernel("rkFinalUpdate");
+        rkKernelsBuilt_ = true;
+    }
+
     const ButcherTable &table_;
     Params params_;
     Real errorExponent_;
@@ -151,4 +164,10 @@ private:
     Real maxStep_       = std::numeric_limits<Real>::infinity();
     Real errorNormPrev_ = Real(1);
     bool stateValid_    = false;
+
+    // Butcher kernels (lazily built by ensureRkKernels()).
+    occa::kernel rkStageCombine_;
+    occa::kernel rkWeightedSum_;
+    occa::kernel rkFinalUpdate_;
+    bool rkKernelsBuilt_ = false;
 };

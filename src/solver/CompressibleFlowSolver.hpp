@@ -17,7 +17,6 @@
 
 #pragma once
 
-#include <algorithm>
 #include <functional>
 #include <memory>
 
@@ -138,97 +137,3 @@ private:
     int steps_         = 0;
     int printInterval_ = 100;
 };
-
-// ----------------------------------------------------------------------------
-// Implementation (header-only)
-// ----------------------------------------------------------------------------
-
-inline void CompressibleFlowSolver::applyInitialCondition()
-{
-    switch (cfg_.icType())
-    {
-        case IcType::Uniform:
-            field_->applyFreeStreamInitialCondition(field_->o_u());
-            break;
-        case IcType::Expr:
-            solver_detail::applyExprICFromConfig(*field_, cfg_);
-            break;
-    }
-}
-
-inline Real CompressibleFlowSolver::computeDt(Real t)
-{
-    const Real remaining = cfg_.timeFinal() - t;
-    Real dt = (cfg_.timeDt() > Real(0))
-                  ? cfg_.timeDt()
-                  : field_->estimateDt(field_->o_u(), cfg_.timeCfl());
-    return std::min(dt, remaining);
-}
-
-inline int CompressibleFlowSolver::run()
-{
-    // OCCA's OpenMP backend emits `#pragma omp parallel for` with no
-    // num_threads clause, so the runtime ICV governs every kernel; set it
-    // before the first parallel region (no-op for the non-OpenMP backends).
-    solver_detail::applyOmpThreads(cfg_.occaThreads());
-    // platform_id selects the OpenCL/dpcpp platform, device_id the device
-    // inside it (also the CUDA/HIP device id); Serial/OpenMP ignore both.
-    device_ = occa::device({{"mode", cfg_.occaMode()},
-                            {"platform_id", cfg_.occaPlatform()},
-                            {"device_id", cfg_.occaDevice()}});
-    mem_    = std::make_unique<DeviceMemoryManager>(device_);
-    blas_   = std::make_unique<Blas>(device_, *mem_);
-
-    field_ = std::make_unique<DgField>(cfg_, device_, *mem_);
-    field_->setup();
-
-    const occa::dim_t nDof = static_cast<occa::dim_t>(field_->numElements()) *
-                             field_->numVars() * field_->numModes();
-    DgField *f             = field_.get();
-    RhsFunction rhs        = [f](occa::memory u, occa::memory res) {
-        f->computeRHS(u, res);
-    };
-    stepper_ = makeStepper_(device_, *mem_, rhs, nDof);
-
-    applyInitialCondition();
-    device_.finish();
-
-    std::cout << "CMeles: method=" << stepper_->name()
-              << " order=" << stepper_->order()
-              << " elems=" << field_->numElements() << " dofs=" << nDof
-              << " T_final=" << cfg_.timeFinal() << "\n";
-
-    time_  = Real(0);
-    steps_ = 0;
-    while (time_ < cfg_.timeFinal() - Real(1e-12) * cfg_.timeFinal())
-    {
-        const Real dt    = computeDt(time_);
-        const Real taken = stepper_->advance(field_->o_u(), time_, dt);
-        time_ += taken;
-        ++steps_;
-
-        if (steps_ % printInterval_ == 0)
-        {
-            occa::memory ou = field_->o_u(), ores = field_->o_res();
-            rhs(ou, ores);
-            const Real resNorm = blas_->nrm2(nDof, ores);
-            std::cout << "  step " << steps_ << ": t = " << time_
-                      << ", dt = " << taken << ", |res|_2 = " << resNorm
-                      << "\n";
-        }
-        if (taken <= Real(0))
-        {
-            std::cout << "CMeles: zero time step at t = " << time_
-                      << " — aborting\n";
-            return 1;
-        }
-    }
-
-    occa::memory ou = field_->o_u(), ores = field_->o_res();
-    rhs(ou, ores);
-    const Real resNorm = blas_->nrm2(nDof, ores);
-    std::cout << "CMeles: finished t = " << time_ << " in " << steps_
-              << " steps, |res|_2 = " << resNorm << "\n";
-    device_.finish();
-    return 0;
-}

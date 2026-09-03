@@ -12,7 +12,6 @@ EulerStepper::EulerStepper(occa::device &device, DeviceMemoryManager &mem,
                            const std::string &oklDir)
     : StepperBase(device, mem, std::move(rhs), nDof, oklDir)
 {
-    ensureKernels();
     o_res_ = mem_.wrapOrMalloc(nDof_);
 }
 
@@ -35,7 +34,6 @@ SspRk3Stepper::SspRk3Stepper(occa::device &device, DeviceMemoryManager &mem,
                              const std::string &oklDir)
     : StepperBase(device, mem, std::move(rhs), nDof, oklDir)
 {
-    ensureKernels();
     o_res_ = mem_.wrapOrMalloc(nDof_);
     o_u1_  = mem_.wrapOrMalloc(nDof_);
     o_u2_  = mem_.wrapOrMalloc(nDof_);

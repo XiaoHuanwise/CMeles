@@ -27,7 +27,6 @@ DualStepper::DualStepper(occa::device &device, DeviceMemoryManager &mem,
         throw std::invalid_argument(
             "DualStepper: decoupled mode requires a DITR residual");
     }
-    ensureKernels();
 
     o_uNew_  = mem.wrapOrMalloc(nDof * nStages_);
     o_uNc2_  = mem.wrapOrMalloc(nDof);
@@ -59,6 +58,37 @@ Real DualStepper::residualNorm(const RungeKuttaStepper &ps, occa::dim_t n)
 {
     occa::memory f = ps.f();
     return infNorm(f, n);
+}
+
+Real DualStepper::infNorm(occa::memory &o_x, occa::dim_t n)
+{
+    if (o_abs_.size() < n)
+    {
+        o_abs_ = mem_.wrapOrMalloc(n);
+        absHost_.resize(n);
+    }
+    if (!absInto_.isInitialized())
+    {
+        absInto_ = buildTimeKernel("absInto");
+    }
+    occa::memory oxa = o_x;
+    absInto_(static_cast<int>(n), oxa, o_abs_);
+    if (mem_.hasSeparateMemorySpace())
+    {
+        occa::memory oa = o_abs_;
+        mem_.copyToHost(oa, absHost_.data(), n);
+    }
+    else
+    {
+        const Real *src = o_abs_.ptr<Real>();
+        std::copy(src, src + static_cast<std::size_t>(n), absHost_.begin());
+    }
+    Real m = Real(0);
+    for (std::size_t i = 0; i < static_cast<std::size_t>(n); ++i)
+    {
+        m = std::max(m, absHost_[i]);
+    }
+    return m;
 }
 
 Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt)

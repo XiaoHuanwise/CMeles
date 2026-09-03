@@ -65,7 +65,21 @@ public:
     }
 
 private:
-    occa::memory o_res_; ///< Stage residual buffer ($k_i$).
-    occa::memory o_u1_;  ///< First stage state $u^{(1)}$.
-    occa::memory o_u2_;  ///< Second stage state $u^{(2)}$.
+    /// @brief u_new = alpha * u_n + beta * u_temp (per-DOF aliasing safe);
+    ///        the kernel is built lazily on first use.
+    void convexCombine(Real alpha, Real beta, occa::memory &o_un,
+                       occa::memory &o_utemp, occa::memory &o_unew)
+    {
+        if (!sspConvexCombine_.isInitialized())
+        {
+            sspConvexCombine_ = buildTimeKernel("sspConvexCombine");
+        }
+        sspConvexCombine_(static_cast<int>(nDof_), alpha, beta, o_un, o_utemp,
+                          o_unew);
+    }
+
+    occa::memory o_res_;            ///< Stage residual buffer ($k_i$).
+    occa::memory o_u1_;             ///< First stage state $u^{(1)}$.
+    occa::memory o_u2_;             ///< Second stage state $u^{(2)}$.
+    occa::kernel sspConvexCombine_; ///< SSP averaging kernel (lazy).
 };

@@ -14,7 +14,6 @@ RungeKuttaStepper::RungeKuttaStepper(occa::device &device,
     : StepperBase(device, mem, std::move(rhs), nDof, oklDir), table_(table),
       params_(params)
 {
-    ensureKernels();
     errorExponent_ = Real(1) / Real(table_.errorEstimatorOrder + 1);
 
     const int s       = table_.nStages;
@@ -62,6 +61,7 @@ void RungeKuttaStepper::setRhs(RhsFunction rhs)
 void RungeKuttaStepper::rkStep(occa::memory &o_u, occa::memory &o_uNew,
                                occa::memory &o_fNew)
 {
+    ensureRkKernels();
     const int n    = static_cast<int>(nDof_);
     const int s    = table_.nStages;
     const auto nSz = static_cast<std::size_t>(nDof_);
@@ -90,6 +90,7 @@ void RungeKuttaStepper::rkStep(occa::memory &o_u, occa::memory &o_uNew,
 
 Real RungeKuttaStepper::computeErrorNorm(Real rmsU, Real rmsUnew)
 {
+    ensureRkKernels();
     const int n = static_cast<int>(nDof_);
     rkWeightedSum_(n, dt_, table_.nStages + 1, o_E_, o_K_, o_err_);
 
