@@ -27,6 +27,10 @@ TemporalResidual::TemporalResidual(occa::device &device,
     cmeles::finaliseKernelProps(props, device_);
     vecCombine4_ =
         device_.buildKernel(oklDir_ + "/time_update.okl", "vecCombine4", props);
+    vecCombine5_ =
+        device_.buildKernel(oklDir_ + "/time_update.okl", "vecCombine5", props);
+    vecCombine7_ =
+        device_.buildKernel(oklDir_ + "/time_update.okl", "vecCombine7", props);
 }
 
 void TemporalResidual::combine4(Real c0, occa::memory &o_x0, Real c1,
@@ -36,6 +40,26 @@ void TemporalResidual::combine4(Real c0, occa::memory &o_x0, Real c1,
 {
     vecCombine4_(static_cast<int>(nDof_), c0, o_x0, c1, o_x1, c2, o_x2, c3,
                  o_x3, o_out);
+}
+
+void TemporalResidual::combine5(Real c0, occa::memory &o_x0, Real c1,
+                                occa::memory &o_x1, Real c2, occa::memory &o_x2,
+                                Real c3, occa::memory &o_x3, Real c4,
+                                occa::memory &o_x4, occa::memory &o_out)
+{
+    vecCombine5_(static_cast<int>(nDof_), c0, o_x0, c1, o_x1, c2, o_x2, c3,
+                 o_x3, c4, o_x4, o_out);
+}
+
+void TemporalResidual::combine7(Real c0, occa::memory &o_x0, Real c1,
+                                occa::memory &o_x1, Real c2, occa::memory &o_x2,
+                                Real c3, occa::memory &o_x3, Real c4,
+                                occa::memory &o_x4, Real c5, occa::memory &o_x5,
+                                Real c6, occa::memory &o_x6,
+                                occa::memory &o_out)
+{
+    vecCombine7_(static_cast<int>(nDof_), c0, o_x0, c1, o_x1, c2, o_x2, c3,
+                 o_x3, c4, o_x4, c5, o_x5, c6, o_x6, o_out);
 }
 
 // ============================================================================
@@ -143,22 +167,16 @@ void DitrResidual::temporalResidual(occa::memory &o_uNew2N, occa::memory &o_u,
     rhs_(o_uNc2, o_Rnc2_);
     rhs_(o_uN1, o_Rn1_);
 
-    // F0 = (a0 u_prev + a1 u_n + a2 u_n1 - u_nc2)/dt + d1 R_n + d2 R_n1.
-    combine4(a_[1] / dt, o_u, a_[2] / dt, o_uN1, -Real(1) / dt, o_uNc2, d_[1],
-             o_Rn, o_F0);
-    if (a_[0] != Real(0))
-    {
-        blas_.axpy(nDof_, a_[0] / dt, o_uPrev, o_F0);
-    }
-    blas_.axpy(nDof_, d_[2], o_Rn1_, o_F0);
-
     // F1 = (u_n - u_n1)/dt + b1 R_n + b2 R_nc2 + b3 R_n1.
-    combine4(Real(1) / dt, o_u, -Real(1) / dt, o_uN1, b_[2], o_Rnc2_, b_[3],
-             o_Rn1_, o_F1);
-    blas_.axpy(nDof_, b_[1], o_Rn, o_F1);
+    combine5(Real(1) / dt, o_u, -Real(1) / dt, o_uN1, b_[1], o_Rn, b_[2],
+             o_Rnc2_, b_[3], o_Rn1_, o_F1);
 
-    // Preconditioner: F0 += beta * F1.
-    blas_.axpy(nDof_, beta_, o_F1, o_F0);
+    // F0 = (a0 u_prev + a1 u_n + a2 u_n1 - u_nc2)/dt + d1 R_n + d2 R_n1
+    //      + beta * F1, with the coupling preconditioner folded in (the a0
+    //      term is zero for the U2 variants; o_uPrev is always valid).
+    combine7(a_[0] / dt, o_uPrev, a_[1] / dt, o_u, a_[2] / dt, o_uN1,
+             -Real(1) / dt, o_uNc2, d_[1], o_Rn, d_[2], o_Rn1_, beta_, o_F1,
+             o_F0);
 }
 
 void DitrResidual::temporalResidualStageC2(
@@ -168,17 +186,14 @@ void DitrResidual::temporalResidualStageC2(
 {
     rhs_(o_uNc2, o_Rnc2_);
 
-    // F0 = ((a1 + beta) u_n + (a2 - beta) u_n1 - u_nc2)/dt
+    // F0 = ((a1 + beta) u_n + (a2 - beta) u_n1 - u_nc2)/dt + a0 u_prev/dt
     //      + (d1 + beta b1) R_n + beta b2 R_nc2 + (d2 + beta b3) R_n1,
-    // plus the a0 u_prev / dt term of U3R1.
-    combine4((a_[1] + beta_) / dt, o_u, (a_[2] - beta_) / dt, o_uN1,
-             -Real(1) / dt, o_uNc2, (d_[1] + beta_ * b_[1]), o_Rn, o_F0);
-    if (a_[0] != Real(0))
-    {
-        blas_.axpy(nDof_, a_[0] / dt, o_uPrev, o_F0);
-    }
-    blas_.axpy(nDof_, beta_ * b_[2], o_Rnc2_, o_F0);
-    blas_.axpy(nDof_, (d_[2] + beta_ * b_[3]), o_Rn1, o_F0);
+    // with the preconditioner folded at coefficient level (the a0 term is
+    // zero for the U2 variants; o_uPrev is always valid).
+    combine7(a_[0] / dt, o_uPrev, (a_[1] + beta_) / dt, o_u,
+             (a_[2] - beta_) / dt, o_uN1, -Real(1) / dt, o_uNc2,
+             (d_[1] + beta_ * b_[1]), o_Rn, beta_ * b_[2], o_Rnc2_,
+             (d_[2] + beta_ * b_[3]), o_Rn1, o_F0);
 }
 
 void DitrResidual::temporalResidualStageN1(occa::memory &o_uN1,
@@ -190,7 +205,6 @@ void DitrResidual::temporalResidualStageN1(occa::memory &o_uN1,
     rhs_(o_uN1, o_Rn1_);
 
     // F1 = (u_n - u_n1)/dt + b1 R_n + b2 R_nc2 + b3 R_n1.
-    combine4(Real(1) / dt, o_u, -Real(1) / dt, o_uN1, b_[2], o_Rnc2, b_[3],
-             o_Rn1_, o_F1);
-    blas_.axpy(nDof_, b_[1], o_Rn, o_F1);
+    combine5(Real(1) / dt, o_u, -Real(1) / dt, o_uN1, b_[1], o_Rn, b_[2],
+             o_Rnc2, b_[3], o_Rn1_, o_F1);
 }

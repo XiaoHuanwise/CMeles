@@ -17,15 +17,15 @@
 /// coefficients $a$ and $d$:
 /// $$
 /// \begin{aligned}
-///   F_0 &= \frac{a_0 u^{n-1} + a_1 u^n + a_2 u^{n+1} - u^{n+c_2}}
-///              {\Delta t} + d_1 R^n + d_2 R^{n+1} \\
+///   F_0 &= \frac{a_0 u^{n-1} + a_1 u^n + a_2 u^{n+1} - u^{n+c_2}}{\Delta t}
+///               + d_1 R^n + d_2 R^{n+1} \\
 ///   F_1 &= \frac{u^n - u^{n+1}}{\Delta t}
 ///          + b_1 R^n + b_2 R^{n+c_2} + b_3 R^{n+1}
 /// \end{aligned}
 /// $$
-/// with the quadrature weights $b = [0, \frac12 - \frac{1}{6 c_2},
-/// \frac{1}{6 c_2 (1 - c_2)}, \frac12 - \frac{1}{6 (1 - c_2)}]$ and the
-/// coupling preconditioner $F_0 \mathrel{+}= \beta F_1$ ($\mathbf{P} =
+/// with the quadrature weights $$b = [0, \frac12 - \frac{1}{6 c_2},
+/// \frac{1}{6 c_2 (1 - c_2)}, \frac12 - \frac{1}{6 (1 - c_2)}]$$ and the
+/// coupling preconditioner $F_0 \mathrel{+}= \beta F_1$ ($$\mathbf{P} =
 /// \begin{bmatrix} I & \beta I \\ 0 & I \end{bmatrix}$, $\beta = 1$).
 /// The U2R2/U2R1/U3R1 variants differ only in the coefficient values
 /// ($a_0 = 0$ and $d_1 = 0$ except where noted; U3R1 additionally uses
@@ -126,6 +126,17 @@ protected:
                   Real c2, occa::memory &o_x2, Real c3, occa::memory &o_x3,
                   occa::memory &o_out);
 
+    /// @brief out = c0*x0 + ... + c4*x4 over nDof entries.
+    void combine5(Real c0, occa::memory &o_x0, Real c1, occa::memory &o_x1,
+                  Real c2, occa::memory &o_x2, Real c3, occa::memory &o_x3,
+                  Real c4, occa::memory &o_x4, occa::memory &o_out);
+
+    /// @brief out = c0*x0 + ... + c6*x6 over nDof entries.
+    void combine7(Real c0, occa::memory &o_x0, Real c1, occa::memory &o_x1,
+                  Real c2, occa::memory &o_x2, Real c3, occa::memory &o_x3,
+                  Real c4, occa::memory &o_x4, Real c5, occa::memory &o_x5,
+                  Real c6, occa::memory &o_x6, occa::memory &o_out);
+
     occa::device &device_;
     DeviceMemoryManager &mem_;
     RhsFunction rhs_;
@@ -135,6 +146,8 @@ protected:
 
 private:
     occa::kernel vecCombine4_;
+    occa::kernel vecCombine5_;
+    occa::kernel vecCombine7_;
 };
 
 /// @brief Backward Euler temporal residual.
@@ -170,12 +183,14 @@ private:
 class DitrResidual : public TemporalResidual
 {
 public:
-    /// @brief DITR reconstruction variant.
+    /// @brief DITR reconstruction variant. U = number of solution values in
+    ///        the reconstruction stencil, R = number of residual values (the
+    ///        quadrature weights themselves are shared by all variants).
     enum class Variant
     {
-        U2R2 = 0, ///< 2nd-order reconstruction, 2nd-order quadrature.
-        U2R1 = 1, ///< 2nd-order reconstruction, 1st-order quadrature.
-        U3R1 = 2  ///< 3rd-order reconstruction, 1st-order quadrature.
+        U2R2 = 0, ///< 2 u-values + 2 residuals: cubic Hermite reconstruction.
+        U2R1 = 1, ///< 2 u-values + 1 residual.
+        U3R1 = 2  ///< 3 u-values (incl. u_prev) + 1 residual.
     };
 
     DitrResidual(occa::device &device, DeviceMemoryManager &mem,

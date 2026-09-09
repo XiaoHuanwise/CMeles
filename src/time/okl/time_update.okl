@@ -110,6 +110,35 @@
   }
 }
 
+// out = c0*x0 + c1*x1 + c2*x2 + c3*x3 + c4*x4
+@kernel void vecCombine5(const int N_dof,
+                         const Real c0, const Real *x0,
+                         const Real c1, const Real *x1,
+                         const Real c2, const Real *x2,
+                         const Real c3, const Real *x3,
+                         const Real c4, const Real *x4,
+                         Real *out) {
+  for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+    out[d] = c0 * x0[d] + c1 * x1[d] + c2 * x2[d] + c3 * x3[d] + c4 * x4[d];
+  }
+}
+
+// out = c0*x0 + c1*x1 + c2*x2 + c3*x3 + c4*x4 + c5*x5 + c6*x6
+@kernel void vecCombine7(const int N_dof,
+                         const Real c0, const Real *x0,
+                         const Real c1, const Real *x1,
+                         const Real c2, const Real *x2,
+                         const Real c3, const Real *x3,
+                         const Real c4, const Real *x4,
+                         const Real c5, const Real *x5,
+                         const Real c6, const Real *x6,
+                         Real *out) {
+  for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+    out[d] = c0 * x0[d] + c1 * x1[d] + c2 * x2[d] + c3 * x3[d] + c4 * x4[d] +
+             c5 * x5[d] + c6 * x6[d];
+  }
+}
+
 // --- Reduction helpers ---------------------------------------------------------
 
 // out[d] = |x[d]|  (pre-processing for an inf-norm host reduction).
