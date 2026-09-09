@@ -63,7 +63,8 @@ static void readResult(DeviceMemoryManager &mem, occa::memory &o_data,
     }
     else
     {
-        std::memcpy(dst, hostAlias, static_cast<std::size_t>(entries) * sizeof(Real));
+        std::memcpy(dst, hostAlias,
+                    static_cast<std::size_t>(entries) * sizeof(Real));
     }
 }
 
@@ -73,7 +74,7 @@ static void readResult(DeviceMemoryManager &mem, occa::memory &o_data,
 static bool checkRelative(Real computed, Real reference, Real tol,
                           const std::string &label)
 {
-    const Real denom = std::max(std::abs(reference), RealEpsilon);
+    const Real denom  = std::max(std::abs(reference), RealEpsilon);
     const Real relErr = std::abs(computed - reference) / denom;
     if (relErr > tol)
     {
@@ -96,7 +97,7 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
     DeviceMemoryManager mem(device);
     Blas blas(device, mem);
 
-    bool allPass = true;
+    bool allPass   = true;
     const Real tol = Real(1e3) * RealEpsilon;
 
     // ---- Test sizes (cover tile boundaries) ----
@@ -113,8 +114,8 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
 
         // -- scal: x = alpha * x --
         {
-            VectorXr h_x    = VectorXr::Random(n);
-            VectorXr h_xRef = h_x;
+            VectorXr h_x     = VectorXr::Random(n);
+            VectorXr h_xRef  = h_x;
             occa::memory o_x = mem.wrapOrMalloc(h_x.data(), n);
             blas.scal(n, alpha, o_x);
             h_xRef *= alpha;
@@ -123,14 +124,17 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
             readResult(mem, o_x, h_r.data(), n, h_x.data());
             if ((h_r - h_xRef).template lpNorm<Eigen::Infinity>() >
                 tol * h_xRef.template lpNorm<Eigen::Infinity>())
-            { allPass = false; std::cerr << "  FAIL scal n=" << n << '\n'; }
+            {
+                allPass = false;
+                std::cerr << "  FAIL scal n=" << n << '\n';
+            }
         }
 
         // -- copy: y = x --
         {
-            VectorXr h_x = VectorXr::Random(n);
-            VectorXr h_y = VectorXr::Zero(n);
-            VectorXr h_yRef = h_x;
+            VectorXr h_x     = VectorXr::Random(n);
+            VectorXr h_y     = VectorXr::Zero(n);
+            VectorXr h_yRef  = h_x;
             occa::memory o_x = mem.wrapOrMalloc(h_x.data(), n);
             occa::memory o_y = mem.wrapOrMalloc(h_y.data(), n);
             blas.copy(n, o_x, o_y);
@@ -138,14 +142,17 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
             VectorXr h_r(n);
             readResult(mem, o_y, h_r.data(), n, h_y.data());
             if ((h_r - h_yRef).template lpNorm<Eigen::Infinity>() > tol)
-            { allPass = false; std::cerr << "  FAIL copy n=" << n << '\n'; }
+            {
+                allPass = false;
+                std::cerr << "  FAIL copy n=" << n << '\n';
+            }
         }
 
         // -- axpy: y = alpha * x + y --
         {
-            VectorXr h_x    = VectorXr::Random(n);
-            VectorXr h_y    = VectorXr::Random(n);
-            VectorXr h_yRef = alpha * h_x + h_y;
+            VectorXr h_x     = VectorXr::Random(n);
+            VectorXr h_y     = VectorXr::Random(n);
+            VectorXr h_yRef  = alpha * h_x + h_y;
             occa::memory o_x = mem.wrapOrMalloc(h_x.data(), n);
             occa::memory o_y = mem.wrapOrMalloc(h_y.data(), n);
             blas.axpy(n, alpha, o_x, o_y);
@@ -154,14 +161,17 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
             readResult(mem, o_y, h_r.data(), n, h_y.data());
             if ((h_r - h_yRef).template lpNorm<Eigen::Infinity>() >
                 tol * h_yRef.template lpNorm<Eigen::Infinity>())
-            { allPass = false; std::cerr << "  FAIL axpy n=" << n << '\n'; }
+            {
+                allPass = false;
+                std::cerr << "  FAIL axpy n=" << n << '\n';
+            }
         }
 
         // -- axpy(alpha=0): y unchanged --
         {
-            VectorXr h_x    = VectorXr::Random(n);
-            VectorXr h_y    = VectorXr::Random(n);
-            VectorXr h_yRef = h_y;
+            VectorXr h_x     = VectorXr::Random(n);
+            VectorXr h_y     = VectorXr::Random(n);
+            VectorXr h_yRef  = h_y;
             occa::memory o_x = mem.wrapOrMalloc(h_x.data(), n);
             occa::memory o_y = mem.wrapOrMalloc(h_y.data(), n);
             blas.axpy(n, Real(0), o_x, o_y);
@@ -169,12 +179,15 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
             VectorXr h_r(n);
             readResult(mem, o_y, h_r.data(), n, h_y.data());
             if ((h_r - h_yRef).template lpNorm<Eigen::Infinity>() > tol)
-            { allPass = false; std::cerr << "  FAIL axpy(alpha=0) n=" << n << '\n'; }
+            {
+                allPass = false;
+                std::cerr << "  FAIL axpy(alpha=0) n=" << n << '\n';
+            }
         }
     }
 
     // ========================================================================
-    // BLAS-1 reductions: dot, nrm2, asum
+    // BLAS-1 reductions: dot, nrm2, asum, amax
     // ========================================================================
     std::cout << "  --- BLAS-1 reductions ---" << std::endl;
 
@@ -205,17 +218,36 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
         ref      = h_x.template lpNorm<1>();
         if (!checkRelative(computed, ref, tol, "asum n=" + std::to_string(n)))
             allPass = false;
+
+        computed = blas.amax(n, o_x);
+        ref      = h_x.template lpNorm<Eigen::Infinity>();
+        if (!checkRelative(computed, ref, tol, "amax n=" + std::to_string(n)))
+            allPass = false;
     }
 
     // n=0 edge cases
     {
         occa::memory o_d0 = mem.wrapOrMalloc(occa::dim_t(0));
         if (blas.dot(0, o_d0, o_d0) != Real(0))
-        { allPass = false; std::cerr << "  FAIL dot n=0\n"; }
+        {
+            allPass = false;
+            std::cerr << "  FAIL dot n=0\n";
+        }
         if (blas.nrm2(0, o_d0) != Real(0))
-        { allPass = false; std::cerr << "  FAIL nrm2 n=0\n"; }
+        {
+            allPass = false;
+            std::cerr << "  FAIL nrm2 n=0\n";
+        }
         if (blas.asum(0, o_d0) != Real(0))
-        { allPass = false; std::cerr << "  FAIL asum n=0\n"; }
+        {
+            allPass = false;
+            std::cerr << "  FAIL asum n=0\n";
+        }
+        if (blas.amax(0, o_d0) != Real(0))
+        {
+            allPass = false;
+            std::cerr << "  FAIL amax n=0\n";
+        }
     }
 
     // ========================================================================
@@ -229,9 +261,9 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
 
         // gemv
         {
-            MatrixXr h_A = MatrixXr::Random(m, n);
-            VectorXr h_x = VectorXr::Random(n);
-            VectorXr h_y = VectorXr::Random(m);
+            MatrixXr h_A    = MatrixXr::Random(m, n);
+            VectorXr h_x    = VectorXr::Random(n);
+            VectorXr h_y    = VectorXr::Random(m);
             VectorXr h_yRef = alpha * (h_A * h_x) + beta * h_y;
 
             occa::memory o_A = mem.wrapOrMalloc(h_A.data(), m * n);
@@ -244,7 +276,10 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
             readResult(mem, o_y, h_r.data(), m, h_y.data());
             if ((h_r - h_yRef).template lpNorm<Eigen::Infinity>() >
                 tol * h_yRef.template lpNorm<Eigen::Infinity>())
-            { allPass = false; std::cerr << "  FAIL gemv\n"; }
+            {
+                allPass = false;
+                std::cerr << "  FAIL gemv\n";
+            }
         }
 
         // ger
@@ -265,7 +300,10 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
             readResult(mem, o_A, h_r.data(), m * n, h_A.data());
             if ((h_r - h_ARef).template lpNorm<Eigen::Infinity>() >
                 tol * h_ARef.template lpNorm<Eigen::Infinity>())
-            { allPass = false; std::cerr << "  FAIL ger\n"; }
+            {
+                allPass = false;
+                std::cerr << "  FAIL ger\n";
+            }
         }
     }
 
@@ -275,7 +313,10 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
     std::cout << "  --- BLAS-3 ---" << std::endl;
 
     {
-        struct Dims { int m, n, k; };
+        struct Dims
+        {
+            int m, n, k;
+        };
         const std::vector<Dims> gemmShapes = {
             {2, 3, 4},
             {16, 16, 16},
@@ -288,9 +329,9 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
             const int m = d.m, n = d.n, k = d.k;
             const Real alpha = Real(1.5), beta = Real(0.5);
 
-            MatrixXr h_A = MatrixXr::Random(m, k);
-            MatrixXr h_B = MatrixXr::Random(k, n);
-            MatrixXr h_C = MatrixXr::Random(m, n);
+            MatrixXr h_A    = MatrixXr::Random(m, k);
+            MatrixXr h_B    = MatrixXr::Random(k, n);
+            MatrixXr h_C    = MatrixXr::Random(m, n);
             MatrixXr h_CRef = alpha * (h_A * h_B) + beta * h_C;
 
             occa::memory o_A = mem.wrapOrMalloc(h_A.data(), m * k);
@@ -303,9 +344,11 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
             readResult(mem, o_C, h_r.data(), m * n, h_C.data());
             const Real gemmTol = k * tol;
             const Real refNorm = h_CRef.template lpNorm<Eigen::Infinity>();
-            if ((h_r - h_CRef).template lpNorm<Eigen::Infinity>() > gemmTol * refNorm)
+            if ((h_r - h_CRef).template lpNorm<Eigen::Infinity>() >
+                gemmTol * refNorm)
             {
-                std::cerr << "  FAIL gemm (" << m << 'x' << n << 'x' << k << ")\n";
+                std::cerr << "  FAIL gemm (" << m << 'x' << n << 'x' << k
+                          << ")\n";
                 allPass = false;
             }
         }
@@ -316,16 +359,16 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
     // ========================================================================
     std::cout << "  --- setTileSize ---" << std::endl;
     {
-        const int n = 512;
+        const int n      = 512;
         const Real alpha = Real(3.0);
 
-        VectorXr h_x = VectorXr::Random(n);
+        VectorXr h_x     = VectorXr::Random(n);
         occa::memory o_x = mem.wrapOrMalloc(h_x.data(), n);
 
         // Default tile
         {
-            VectorXr h_y    = VectorXr::Random(n);
-            VectorXr h_yRef = alpha * h_x + h_y;
+            VectorXr h_y     = VectorXr::Random(n);
+            VectorXr h_yRef  = alpha * h_x + h_y;
             occa::memory o_y = mem.wrapOrMalloc(h_y.data(), n);
             blas.axpy(n, alpha, o_x, o_y);
             device.finish();
@@ -333,14 +376,17 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
             readResult(mem, o_y, h_r.data(), n, h_y.data());
             if ((h_r - h_yRef).template lpNorm<Eigen::Infinity>() >
                 tol * h_yRef.template lpNorm<Eigen::Infinity>())
-            { allPass = false; std::cerr << "  FAIL setTileSize default\n"; }
+            {
+                allPass = false;
+                std::cerr << "  FAIL setTileSize default\n";
+            }
         }
 
         // 128 tile
         blas.setTileSize(128);
         {
-            VectorXr h_y    = VectorXr::Random(n);
-            VectorXr h_yRef = alpha * h_x + h_y;
+            VectorXr h_y     = VectorXr::Random(n);
+            VectorXr h_yRef  = alpha * h_x + h_y;
             occa::memory o_y = mem.wrapOrMalloc(h_y.data(), n);
             blas.axpy(n, alpha, o_x, o_y);
             device.finish();
@@ -348,13 +394,16 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
             readResult(mem, o_y, h_r.data(), n, h_y.data());
             if ((h_r - h_yRef).template lpNorm<Eigen::Infinity>() >
                 tol * h_yRef.template lpNorm<Eigen::Infinity>())
-            { allPass = false; std::cerr << "  FAIL setTileSize(128)\n"; }
+            {
+                allPass = false;
+                std::cerr << "  FAIL setTileSize(128)\n";
+            }
         }
         blas.setTileSize(256);
     }
 
-    std::cout << "  BLAS [" << mode << "]: "
-              << (allPass ? "ALL PASSED" : "SOME FAILED") << std::endl;
+    std::cout << "  BLAS [" << mode
+              << "]: " << (allPass ? "ALL PASSED" : "SOME FAILED") << std::endl;
     return allPass;
 }
 
@@ -363,11 +412,14 @@ static bool runBlasTests(const std::string &mode, occa::json &props)
 // ============================================================================
 int main()
 {
-    std::cout << "==================================================" << std::endl;
+    std::cout << "=================================================="
+              << std::endl;
     std::cout << "  CMeles BLAS Kernel Test Suite" << std::endl;
-    std::cout << "  Real = " << (sizeof(Real) == sizeof(float) ? "float" : "double")
+    std::cout << "  Real = "
+              << (sizeof(Real) == sizeof(float) ? "float" : "double")
               << ", RealEpsilon = " << RealEpsilon << std::endl;
-    std::cout << "==================================================" << std::endl;
+    std::cout << "=================================================="
+              << std::endl;
 
     int passed  = 0;
     int skipped = 0;
@@ -381,7 +433,10 @@ int main()
             std::cerr << "FATAL: Serial backend not available.\n";
             return 1;
         }
-        if (runBlasTests("Serial", props)) ++passed; else ++failed;
+        if (runBlasTests("Serial", props))
+            ++passed;
+        else
+            ++failed;
     }
 
     // OpenMP — optional
@@ -389,7 +444,10 @@ int main()
         occa::json props = tryMakeDevice("OpenMP");
         if (!props.isNull())
         {
-            if (runBlasTests("OpenMP", props)) ++passed; else ++failed;
+            if (runBlasTests("OpenMP", props))
+                ++passed;
+            else
+                ++failed;
         }
         else
         {
@@ -403,7 +461,10 @@ int main()
         occa::json props = tryMakeDevice("OpenCL");
         if (!props.isNull())
         {
-            if (runBlasTests("OpenCL", props)) ++passed; else ++failed;
+            if (runBlasTests("OpenCL", props))
+                ++passed;
+            else
+                ++failed;
         }
         else
         {
@@ -412,10 +473,12 @@ int main()
         }
     }
 
-    std::cout << "\n==================================================" << std::endl;
+    std::cout << "\n=================================================="
+              << std::endl;
     std::cout << "  Results: " << passed << " passed, " << skipped
               << " skipped, " << failed << " failed" << std::endl;
-    std::cout << "==================================================" << std::endl;
+    std::cout << "=================================================="
+              << std::endl;
 
     return failed > 0 ? 1 : 0;
 }

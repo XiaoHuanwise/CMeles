@@ -2,7 +2,9 @@
 // dot:   s = x^T y   (each block writes one partial sum)
 // nrm2:  s = ||x||_2 (sqrt taken on host)
 // asum:  s = ||x||_1
+// amax:  s = max|x|  (per-block partial maximum)
 // sumReduce: generic partial reduction for multi-level pipeline
+// maxReduce: generic partial maximum for multi-level pipeline
 //
 // This is the ONLY file in the project that uses @shared memory.
 // The tree-reduction pattern follows the OCCA official reductionWithSharedMemory
@@ -114,6 +116,61 @@
     for (int item = 0; item < TILE_SIZE; ++item; @inner) {
       if (item == 0) {
         partial[group] = s_sum[0];
+      }
+    }
+  }
+}
+
+// max|x| — per-block partial maximum (0.0 is the identity for absolute
+// values, so out-of-bounds lanes and padding are exact)
+@kernel void amax(const int n, const Real *x, Real *partial) {
+  for (int group = 0; group < ((n + TILE_SIZE - 1) / TILE_SIZE); ++group; @outer) {
+    @shared Real s_max[TILE_SIZE];
+
+    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+      const int i = group * TILE_SIZE + item;
+      s_max[item] = (i < n) ? (x[i] >= 0 ? x[i] : -x[i]) : 0.0;
+    }
+
+    for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
+      for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+        if (item < alive) {
+          s_max[item] =
+              s_max[item] > s_max[item + alive] ? s_max[item] : s_max[item + alive];
+        }
+      }
+    }
+
+    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+      if (item == 0) {
+        partial[group] = s_max[0];
+      }
+    }
+  }
+}
+
+// Generic max-reduction — multi-level pipeline counterpart of sumReduce.
+@kernel void maxReduce(const int count, const Real *v, Real *partial) {
+  for (int group = 0; group < ((count + TILE_SIZE - 1) / TILE_SIZE); ++group; @outer) {
+    @shared Real s_max[TILE_SIZE];
+
+    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+      const int i = group * TILE_SIZE + item;
+      s_max[item] = (i < count) ? v[i] : 0.0;
+    }
+
+    for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
+      for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+        if (item < alive) {
+          s_max[item] =
+              s_max[item] > s_max[item + alive] ? s_max[item] : s_max[item + alive];
+        }
+      }
+    }
+
+    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+      if (item == 0) {
+        partial[group] = s_max[0];
       }
     }
   }

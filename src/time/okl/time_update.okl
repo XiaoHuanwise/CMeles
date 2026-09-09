@@ -138,14 +138,3 @@
              c5 * x5[d] + c6 * x6[d];
   }
 }
-
-// --- Reduction helpers ---------------------------------------------------------
-
-// out[d] = |x[d]|  (pre-processing for an inf-norm host reduction).
-@kernel void absInto(const int N_dof,
-                     const Real *x,
-                     Real *out) {
-  for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
-    out[d] = x[d] < 0 ? -x[d] : x[d];
-  }
-}

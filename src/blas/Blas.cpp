@@ -5,6 +5,7 @@
 #include "blas/Blas.hpp"
 #include "common/KernelProps.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <stdexcept>
@@ -132,6 +133,33 @@ Real Blas::finalizeReduction(occa::dim_t count, FinalOp finalOp)
     return acc;
 }
 
+Real Blas::finalizeMaxReduction(occa::dim_t count)
+{
+    // Level-1+: device-side ping-pong maxReduce
+    occa::memory *src = &o_partial_a_;
+    occa::memory *dst = &o_partial_b_;
+
+    while (count > kHostReduceMax)
+    {
+        const occa::dim_t next = (count + tileSize_ - 1) / tileSize_;
+        ensureScratch(next);
+        maxReduce_(static_cast<int>(count), *src, *dst);
+        std::swap(src, dst);
+        count = next;
+    }
+
+    // Level-2: copy remaining partials to host and max (0.0 identity).
+    std::vector<Real> host(static_cast<std::size_t>(count));
+    src->copyTo(host.data());
+
+    Real m = Real(0);
+    for (occa::dim_t i = 0; i < count; ++i)
+    {
+        m = std::max(m, host[i]);
+    }
+    return m;
+}
+
 // ---- Reduction entry points ----
 
 Real Blas::dot(occa::dim_t n, occa::memory &x, occa::memory &y)
@@ -183,6 +211,23 @@ Real Blas::asum(occa::dim_t n, occa::memory &x)
     asum_(static_cast<int>(n), x, o_partial_a_);
 
     return finalizeReduction(count0, [](Real & /*acc*/) { /* identity */ });
+}
+
+Real Blas::amax(occa::dim_t n, occa::memory &x)
+{
+    if (n == 0)
+        return Real(0);
+
+    if (!amax_.isInitialized())
+        amax_ = buildKernel("reduce.okl", "amax");
+    if (!maxReduce_.isInitialized())
+        maxReduce_ = buildKernel("reduce.okl", "maxReduce");
+
+    const occa::dim_t count0 = (n + tileSize_ - 1) / tileSize_;
+    ensureScratch(count0);
+    amax_(static_cast<int>(n), x, o_partial_a_);
+
+    return finalizeMaxReduction(count0);
 }
 
 // ============================================================================
