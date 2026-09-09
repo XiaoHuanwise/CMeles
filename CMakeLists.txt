@@ -20,17 +20,21 @@ if(USE_FLOAT_PRECISION)
     target_compile_definitions(CMeles PRIVATE USE_FLOAT_PRECISION)
 endif()
 
-# Copy OKL kernel sources to the build tree so they are discoverable at runtime.
-file(COPY ${CMAKE_SOURCE_DIR}/src/blas/okl
-     DESTINATION ${CMAKE_BINARY_DIR}/occa)
-file(COPY ${CMAKE_SOURCE_DIR}/src/math/okl
-     DESTINATION ${CMAKE_BINARY_DIR}/occa)
-file(COPY ${CMAKE_SOURCE_DIR}/src/riemann/okl
-     DESTINATION ${CMAKE_BINARY_DIR}/occa)
-file(COPY ${CMAKE_SOURCE_DIR}/src/dg/okl
-     DESTINATION ${CMAKE_BINARY_DIR}/occa)
-file(COPY ${CMAKE_SOURCE_DIR}/src/time/okl
-     DESTINATION ${CMAKE_BINARY_DIR}/occa)
+# Refresh OKL kernel sources into the build tree on every build so kernel
+# edits take effect with `cmake --build` alone. (A configure-time file(COPY)
+# silently kept stale kernels around after .okl edits unless cmake was
+# re-run; CONFIGURE_DEPENDS also picks up newly added kernel files.)
+file(GLOB_RECURSE CMELES_OKL_KERNELS CONFIGURE_DEPENDS
+     "${CMAKE_SOURCE_DIR}/src/blas/okl/*.okl"
+     "${CMAKE_SOURCE_DIR}/src/math/okl/*.okl"
+     "${CMAKE_SOURCE_DIR}/src/riemann/okl/*.okl"
+     "${CMAKE_SOURCE_DIR}/src/dg/okl/*.okl"
+     "${CMAKE_SOURCE_DIR}/src/time/okl/*.okl")
+add_custom_target(okl_kernels ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMELES_OKL_KERNELS}
+            ${CMAKE_BINARY_DIR}/occa/okl
+    DEPENDS ${CMELES_OKL_KERNELS}
+    COMMENT "Refreshing OKL kernels in the build tree")
 add_compile_definitions(OCCA_OKL_DIR="${CMAKE_BINARY_DIR}/occa/okl")
 
 add_subdirectory(src)
@@ -58,3 +62,13 @@ include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(ctest)
 endif()
+
+# Every executable loads OKL kernels from the build tree at runtime: make
+# the kernel refresh a prerequisite of each binary (the ALL keyword only
+# covers default builds, not `cmake --build --target <name>`).
+foreach(_tgt CMeles test_blas test_basis test_device_memory test_config
+                test_dg_field test_dg_periodic test_math test_mesh_geometry
+                test_mesh_device_memory test_riemann test_euler_vortex
+                test_vortex_methods test_time_stepper)
+    add_dependencies(${_tgt} okl_kernels)
+endforeach()
