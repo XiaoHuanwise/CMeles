@@ -311,6 +311,20 @@ public:
         return time_pseudo_dt_;
     }
 
+    /// @brief Pseudo-stepper local error tolerance override (dual time,
+    ///        adaptive pseudo mode); $\le 0$ keeps the automatic heuristic
+    ///        ($10^{-3}$ double / $10^{-2}$ single precision).
+    Real timePseudoRtol() const noexcept
+    {
+        return time_pseudo_rtol_;
+    }
+
+    /// @brief See timePseudoRtol().
+    Real timePseudoAtol() const noexcept
+    {
+        return time_pseudo_atol_;
+    }
+
     /// @brief Whether the pseudo stepper uses a single (scalar) dt with the
     ///        RMS-based controller (`step_single_dt` in the prototype).
     bool timePseudoSingleDt() const noexcept
@@ -409,6 +423,8 @@ private:
     int time_max_pseudo_steps_     = 100;
     TimeMethod time_pseudo_method_ = TimeMethod::SspRk332;
     Real time_pseudo_dt_           = Real(0);
+    Real time_pseudo_rtol_         = Real(0); ///< <= 0: automatic heuristic.
+    Real time_pseudo_atol_         = Real(0); ///< <= 0: automatic heuristic.
     bool time_pseudo_single_dt_    = false;
     bool time_pseudo_reject_       = false;
     bool time_dual_decoupled_      = false;

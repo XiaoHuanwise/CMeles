@@ -410,7 +410,9 @@ Config::Config(const std::string &path)
                 pIt->second.value_or(std::string("ssprk332"));
             time_pseudo_method_ = parseTimeMethod(name);
         }
-        time_pseudo_dt_ = getReal(*tbl, "pseudo_dt", time_pseudo_dt_);
+        time_pseudo_dt_   = getReal(*tbl, "pseudo_dt", time_pseudo_dt_);
+        time_pseudo_rtol_ = getReal(*tbl, "pseudo_rtol", time_pseudo_rtol_);
+        time_pseudo_atol_ = getReal(*tbl, "pseudo_atol", time_pseudo_atol_);
         time_pseudo_single_dt_ =
             getBool(*tbl, "pseudo_single_dt", time_pseudo_single_dt_);
         time_pseudo_reject_ =
@@ -476,6 +478,11 @@ Config::Config(const std::string &path)
     if (time_max_pseudo_steps_ <= 0)
     {
         throw std::invalid_argument("Config: max_pseudo_steps must be > 0");
+    }
+    if (time_pseudo_rtol_ < Real(0) || time_pseudo_atol_ < Real(0))
+    {
+        throw std::invalid_argument(
+            "Config: pseudo_rtol and pseudo_atol must be >= 0 (0 = auto)");
     }
     if (occa_threads_ < 0)
     {

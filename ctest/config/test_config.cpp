@@ -261,12 +261,87 @@ threads = 0
 }
 
 // ---------------------------------------------------------------------------
-// 5. FluxType name mapping
+// 5. [time_marching] pseudo tolerance keys
+// ---------------------------------------------------------------------------
+
+static bool testPseudoToleranceKeys()
+{
+    std::cout << "Test 5: pseudo tolerance keys\n";
+    bool ok = true;
+
+    // Unset keys keep the sentinel 0 (automatic heuristic); explicit values
+    // parse through; negative values must throw.
+    const std::string good     = R"(
+[time_marching]
+t_final = 1.0
+pseudo_rtol = 1e-6
+pseudo_atol = 2e-6
+)";
+    const std::string goodPath = writeTempToml(good);
+    try
+    {
+        Config cfg(goodPath);
+        ok &=
+            checkReal(cfg.timePseudoRtol(), Real(1e-6), "pseudo_rtol (parsed)");
+        ok &=
+            checkReal(cfg.timePseudoAtol(), Real(2e-6), "pseudo_atol (parsed)");
+    }
+    catch (const std::exception &e)
+    {
+        std::cout << "  FAIL explicit pseudo tolerances threw: " << e.what()
+                  << "\n";
+        ok = false;
+    }
+    std::remove(goodPath.c_str());
+
+    const std::string unset     = R"(
+[time_marching]
+t_final = 1.0
+)";
+    const std::string unsetPath = writeTempToml(unset);
+    try
+    {
+        Config cfg(unsetPath);
+        ok &= checkReal(cfg.timePseudoRtol(), Real(0),
+                        "pseudo_rtol default (auto)");
+        ok &= checkReal(cfg.timePseudoAtol(), Real(0),
+                        "pseudo_atol default (auto)");
+    }
+    catch (const std::exception &e)
+    {
+        std::cout << "  FAIL unset pseudo tolerances threw: " << e.what()
+                  << "\n";
+        ok = false;
+    }
+    std::remove(unsetPath.c_str());
+
+    const std::string bad     = R"(
+[time_marching]
+t_final = 1.0
+pseudo_rtol = -1e-6
+)";
+    const std::string badPath = writeTempToml(bad);
+    bool threw                = false;
+    try
+    {
+        Config cfg(badPath);
+    }
+    catch (const std::exception &)
+    {
+        threw = true;
+    }
+    ok &= check(threw, "negative pseudo_rtol throws");
+    std::remove(badPath.c_str());
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// 6. FluxType name mapping
 // ---------------------------------------------------------------------------
 
 static bool testFluxTypeNames()
 {
-    std::cout << "Test 5: flux type names\n";
+    std::cout << "Test 6: flux type names\n";
     bool ok = true;
     ok &= check(parseFluxType("llf") == FluxType::Llf, "parse 'llf'");
     ok &= check(parseFluxType("LLF") == FluxType::Llf, "parse 'LLF' (upper)");
@@ -305,6 +380,7 @@ int main()
         {"testParseFull", testParseFull},
         {"testParsePartial", testParsePartial},
         {"testOcaThreadsValidation", testOcaThreadsValidation},
+        {"testPseudoToleranceKeys", testPseudoToleranceKeys},
         {"testFluxTypeNames", testFluxTypeNames},
     };
     for (const auto &c : cases)
