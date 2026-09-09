@@ -18,9 +18,7 @@ DualStepper::DualStepper(occa::device &device, DeviceMemoryManager &mem,
       // Coupled: the pseudo state is the stacked implicit state; decoupled:
       // each stage is advanced independently (N entries per stepper).
       pseudo_(device, mem, nullptr, params_.decoupled ? nDof : nDof * nStages_,
-              pseudoTable, params_.rkParams, oklDir),
-      pseudoC2_(device, mem, nullptr, nDof, pseudoTable, params_.rkParams,
-                oklDir)
+              pseudoTable, params_.rkParams, oklDir)
 {
     if (params_.decoupled && nStages_ != 2)
     {
@@ -28,13 +26,33 @@ DualStepper::DualStepper(occa::device &device, DeviceMemoryManager &mem,
             "DualStepper: decoupled mode requires a DITR residual");
     }
 
-    o_uNew_  = mem.wrapOrMalloc(nDof * nStages_);
-    o_uNc2_  = mem.wrapOrMalloc(nDof);
-    o_uN1_   = mem.wrapOrMalloc(nDof);
-    o_Rn_    = mem.wrapOrMalloc(nDof);
-    o_Rnew0_ = mem.wrapOrMalloc(nDof);
-    o_Rnew1_ = mem.wrapOrMalloc(nDof);
-    o_uPrev_ = mem.wrapOrMalloc(nDof);
+    // Buffers are allocated per mode/residual: coupled stages the guess in
+    // o_uNew_, decoupled keeps the two stage guesses plus their refreshed
+    // residuals and constructs the second pseudo stepper. o_Rn_ feeds the
+    // two-stage residuals; o_uPrev_ is needed by U3R1 only — the U2/BE
+    // residuals read the u-prev operand at zero coefficient, so advance()
+    // aliases a live buffer into it instead.
+    if (nStages_ == 2)
+    {
+        o_Rn_ = mem.wrapOrMalloc(nDof);
+    }
+    if (residual_->needsPrev())
+    {
+        o_uPrev_ = mem.wrapOrMalloc(nDof);
+    }
+    if (params_.decoupled)
+    {
+        pseudoC2_ = std::make_unique<RungeKuttaStepper>(
+            device, mem, nullptr, nDof, pseudoTable, params_.rkParams, oklDir);
+        o_uNc2_  = mem.wrapOrMalloc(nDof);
+        o_uN1_   = mem.wrapOrMalloc(nDof);
+        o_Rnew0_ = mem.wrapOrMalloc(nDof);
+        o_Rnew1_ = mem.wrapOrMalloc(nDof);
+    }
+    else
+    {
+        o_uNew_ = mem.wrapOrMalloc(nDof * nStages_);
+    }
 }
 
 void DualStepper::pseudoStep(RungeKuttaStepper &ps)
@@ -86,27 +104,31 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt)
         blas_.copy(nDof_, o_Rn_, o_Rnew0_);
         blas_.copy(nDof_, o_Rn_, o_Rnew1_);
 
-        occa::memory oUN = o_u, oUP = o_uPrev_, oRN = o_Rn_;
+        occa::memory oUN = o_u, oRN = o_Rn_;
+        // Zero-coefficient u-prev operand: a live buffer for the U2
+        // variants (no o_uPrev_ allocation), the true u^{n-1} for U3R1.
+        occa::memory oUP =
+            residual_->needsPrev() ? occa::memory(o_uPrev_) : o_u;
         occa::memory oUN1 = o_uN1_, oRN1 = o_Rnew1_, oRN0 = o_Rnew0_;
         TemporalResidual &res = *residual_;
         pseudo_.setRhs([&res, oUN1, oRN0, oUN, oRN,
                         dt](occa::memory x, occa::memory F) mutable {
             res.temporalResidualStageN1(x, oRN0, oUN, oRN, dt, F);
         });
-        pseudoC2_.setRhs([&res, oUN1, oRN1, oUN, oRN, oUP,
-                          dt](occa::memory x, occa::memory F) mutable {
+        pseudoC2_->setRhs([&res, oUN1, oRN1, oUN, oRN, oUP,
+                           dt](occa::memory x, occa::memory F) mutable {
             res.temporalResidualStageC2(x, oUN1, oRN1, oUN, oRN, oUP, dt, F);
         });
 
-        pseudoC2_.setState(o_uNc2_, dt);
+        pseudoC2_->setState(o_uNc2_, dt);
         pseudo_.setState(o_uN1_, dt);
 
         f0Norm = residualNorm(pseudo_, nDof_);
         fNorm  = f0Norm;
         while (notConverged(fNorm, f0Norm) && cnt < params_.maxPseudoSteps)
         {
-            pseudoStep(pseudoC2_);
-            occa::memory sC2 = pseudoC2_.state();
+            pseudoStep(*pseudoC2_);
+            occa::memory sC2 = pseudoC2_->state();
             blas_.copy(nDof_, sC2, o_uNc2_);
             rhs_(o_uNc2_, o_Rnew0_);
             pseudoStep(pseudo_);
@@ -137,7 +159,10 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt)
             blas_.copy(nDof_, o_u, stage1);
         }
 
-        occa::memory oUN = o_u, oUP = o_uPrev_, oRN = o_Rn_;
+        occa::memory oUN = o_u, oRN = o_Rn_;
+        // Zero-coefficient u-prev operand (see the decoupled branch).
+        occa::memory oUP =
+            residual_->needsPrev() ? occa::memory(o_uPrev_) : o_u;
         TemporalResidual &res = *residual_;
         pseudo_.setRhs(
             [&res, oUN, oUP, oRN, dt](occa::memory x, occa::memory F) mutable {
@@ -167,12 +192,16 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt)
                   << ")\n";
     }
 
-    // Publish: u^{n-1} <- u^n, u^{n+1} <- the marched pseudo state. The
-    // pseudo steppers own copies of the state (setState copies the guess
-    // in), so the result must be read back from them: the coupled state is
-    // the stacked [u^{n+c_2}, u^{n+1}] (publish the last stage), the
-    // decoupled stage-n+1 stepper holds u^{n+1} directly.
-    blas_.copy(nDof_, o_u, o_uPrev_);
+    // Publish: u^{n-1} <- u^n (U3R1 only), u^{n+1} <- the marched pseudo
+    // state. The pseudo steppers own copies of the state (setState copies
+    // the guess in), so the result must be read back from them: the coupled
+    // state is the stacked [u^{n+c_2}, u^{n+1}] (publish the last stage),
+    // the decoupled stage-n+1 stepper holds u^{n+1} directly.
+    if (residual_->needsPrev())
+    {
+        blas_.copy(nDof_, o_u, o_uPrev_);
+        dtPrev_ = dt;
+    }
     occa::memory pseudoState = pseudo_.state();
     if (params_.decoupled || nStages_ == 1)
     {
@@ -183,6 +212,5 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt)
         occa::memory stage1 = pseudoState.slice(nDof_, nDof_);
         blas_.copy(nDof_, stage1, o_u);
     }
-    dtPrev_ = dt;
     return dt;
 }

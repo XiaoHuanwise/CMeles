@@ -27,7 +27,6 @@
 
 #include <memory>
 #include <string>
-#include <vector>
 
 #include "ImplicitResidual.hpp"
 #include "RungeKuttaStepper.hpp"
@@ -83,31 +82,29 @@ private:
     /// @brief $\|f\|_\infty$ of a pseudo stepper's current residual.
     Real residualNorm(const RungeKuttaStepper &ps, occa::dim_t n);
 
-    /// @brief $\|x\|_\infty$ over \p n entries (host reduction; grows the
-    ///        scratch lazily, so it also serves the stacked dual-time state).
-    Real infNorm(occa::memory &o_x, occa::dim_t n);
-
     Params params_;
     std::unique_ptr<TemporalResidual> residual_;
     const int nStages_; ///< Stacked stages of the implicit state.
 
     /// @brief Pseudo steppers. Coupled DITR works on the stacked 2N state;
     ///        in decoupled mode both work on N entries. The c2 stepper is
-    ///        only used in decoupled mode.
+    ///        constructed only in decoupled mode (coupled never touches it).
     RungeKuttaStepper pseudo_;
-    RungeKuttaStepper pseudoC2_;
+    std::unique_ptr<RungeKuttaStepper> pseudoC2_;
 
-    occa::memory o_uNew_;  ///< Implicit state guess (stacked for DITR).
+    /// @brief Stage buffers, allocated per mode in the constructor: coupled
+    ///        stages the guess in @p o_uNew_, decoupled keeps the two stage
+    ///        guesses and their refreshed residuals instead. @p o_Rn_ exists
+    ///        only for the two-stage residuals, @p o_uPrev_ only for U3R1 —
+    ///        otherwise the u-prev operand is a zero-coefficient alias and
+    ///        advance() passes a live buffer in its place.
+    occa::memory o_uNew_;  ///< Coupled implicit state guess (stacked).
     occa::memory o_uNc2_;  ///< Decoupled stage $u^{n+c_2}$.
     occa::memory o_uN1_;   ///< Decoupled stage $u^{n+1}$.
-    occa::memory o_Rn_;    ///< $R(u^n)$.
+    occa::memory o_Rn_;    ///< $R(u^n)$ (two-stage residuals only).
     occa::memory o_Rnew0_; ///< Decoupled current $R(u^{n+c_2})$.
     occa::memory o_Rnew1_; ///< Decoupled current $R(u^{n+1})$.
-    occa::memory o_uPrev_; ///< $u^{n-1}$ (U3R1); refreshed every step.
-
-    occa::kernel absInto_;      ///< |x| kernel of the inf-norm (lazy).
-    occa::memory o_abs_;        ///< |x| scratch of the inf-norm reduction.
-    std::vector<Real> absHost_; ///< Host mirror / wrap source of o_abs_.
+    occa::memory o_uPrev_; ///< $u^{n-1}$ (U3R1 only); published every step.
 
     Real dtPrev_ = Real(0); ///< Previous physical step (for theta).
 };
