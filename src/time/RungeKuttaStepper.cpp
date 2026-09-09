@@ -73,14 +73,12 @@ void RungeKuttaStepper::rkStep(occa::memory &o_u, occa::memory &o_uNew,
     for (int stage = 1; stage < s; ++stage)
     {
         rkStageCombine_(n, dt_, stage, s, o_A_, o_u, o_K_, o_uStage_);
-        applyLimiter(o_uStage_);
         occa::memory kS =
             o_K_.slice(nSz * static_cast<std::size_t>(stage), nSz);
         rhs_(o_uStage_, kS);
     }
 
     rkFinalUpdate_(n, dt_, s, o_B_, o_u, o_K_, o_uNew);
-    applyLimiter(o_uNew_);
     rhs_(o_uNew_, o_fNew);
 
     // FSAL row: K[s] = f_new (consumed by the error estimate).
@@ -138,7 +136,6 @@ Real RungeKuttaStepper::selectInitialStep(occa::memory &o_u)
 
     // Trial step: f1 = R(u + h0 * f).
     eulerUpdate(o_u, h0, o_f_, o_uStage_);
-    applyLimiter(o_uStage_);
     rhs_(o_uStage_, o_scratch_);
 
     // d2 = RMS((f1 - f0) / scale) / h0.
@@ -167,34 +164,38 @@ Real RungeKuttaStepper::advance(occa::memory o_u, Real /*t*/, Real dtMax)
     maxStep_ = std::min(maxStep_, dtMax);
     dt_      = std::min(dt_, maxStep_);
 
-    bool accepted      = false;
-    bool wasRejected   = false;
-    Real sigma         = Real(1);
-    const Real attempt = dt_;
-    while (!accepted)
+    bool wasRejected = false;
+    Real sigma       = Real(1);
+    Real taken       = dt_;
+    for (;;)
     {
+        taken           = dt_;
         const Real rmsU = blas_.nrm2(nDof_, o_u) / std::sqrt(Real(nDof_));
         rkStep(o_u, o_uNew_, o_fNew_);
-        sigma    = computeErrorNorm(rmsU, blas_.nrm2(nDof_, o_uNew_) /
-                                              std::sqrt(Real(nDof_)));
-        accepted = sigma < Real(1);
-        updateDt(sigma, accepted, wasRejected);
-        if (!accepted)
+        sigma = computeErrorNorm(rmsU, blas_.nrm2(nDof_, o_uNew_) /
+                                           std::sqrt(Real(nDof_)));
+        if (sigma < Real(1))
         {
-            wasRejected = true;
-            // Guard against an endless loop when the step has bottomed out
-            // at minStep: accept the attempt as-is.
-            if (dt_ <= params_.minStep)
-            {
-                accepted = true;
-            }
+            updateDt(sigma, /*accepted=*/true, wasRejected);
+            break;
         }
+        // Guard against an endless loop when the step has bottomed out at
+        // minStep: the attempt just made already ran at the floor step size,
+        // so commit it as-is — the smallest-error option among the steps the
+        // controller would otherwise force through, and retrying would repeat
+        // the identical attempt forever.
+        if (dt_ <= params_.minStep)
+        {
+            break;
+        }
+        updateDt(sigma, /*accepted=*/false, wasRejected);
+        wasRejected = true;
     }
 
     blas_.copy(nDof_, o_uNew_, o_u);
     blas_.copy(nDof_, o_fNew_, o_f_);
     errorNormPrev_ = sigma;
-    return attempt;
+    return taken;
 }
 
 void RungeKuttaStepper::setState(occa::memory &o_u0, Real phyDtCap)
@@ -210,27 +211,37 @@ void RungeKuttaStepper::setState(occa::memory &o_u0, Real phyDtCap)
 
 void RungeKuttaStepper::stepPseudo(bool allowReject)
 {
-    bool accepted    = false;
     bool wasRejected = false;
     Real sigma       = Real(1);
-    while (!accepted)
+    for (;;)
     {
         const Real rmsU = blas_.nrm2(nDof_, o_u_) / std::sqrt(Real(nDof_));
         rkStep(o_u_, o_uNew_, o_fNew_);
-        sigma    = computeErrorNorm(rmsU, blas_.nrm2(nDof_, o_uNew_) /
-                                              std::sqrt(Real(nDof_)));
-        accepted = sigma < Real(1);
-        updateDt(sigma, accepted, wasRejected);
-        if (!accepted)
+        sigma = computeErrorNorm(rmsU, blas_.nrm2(nDof_, o_uNew_) /
+                                           std::sqrt(Real(nDof_)));
+        if (sigma < Real(1))
         {
-            wasRejected = true;
-            if (!allowReject || dt_ <= params_.minStep)
-            {
-                // Forced accept (prototype step(reject=False): one attempt,
-                // the state still advances).
-                accepted = true;
-            }
+            updateDt(sigma, /*accepted=*/true, wasRejected);
+            break;
         }
+        // Single-attempt mode (prototype step(reject=False)): the attempt is
+        // unconditionally accepted, but the controller still adapts dt for
+        // the next pseudo step.
+        if (!allowReject)
+        {
+            updateDt(sigma, /*accepted=*/false, wasRejected);
+            break;
+        }
+        // Guard against an endless loop when the step has bottomed out at
+        // minStep: the attempt just made already ran at the floor step size,
+        // so commit it as-is (retrying would repeat the identical attempt
+        // forever).
+        if (dt_ <= params_.minStep)
+        {
+            break;
+        }
+        updateDt(sigma, /*accepted=*/false, wasRejected);
+        wasRejected = true;
     }
 
     blas_.copy(nDof_, o_uNew_, o_u_);
