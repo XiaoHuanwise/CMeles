@@ -12,6 +12,3 @@
 /// Time is not an argument (matching the prototype); time-dependent
 /// boundary conditions will be introduced through a closure later.
 using RhsFunction = std::function<void(occa::memory, occa::memory)>;
-
-/// @brief Positivity-preserving limiter applied to stage states in place.
-using PositivityLimiter = std::function<void(occa::memory)>;

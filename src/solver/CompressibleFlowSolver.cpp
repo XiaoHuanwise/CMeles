@@ -1,29 +1,20 @@
 /// @file CompressibleFlowSolver.cpp
-/// @brief The single stepper dispatch point: switches on the configured
-///        time-marching method and runs the (non-template) solver with a
-///        factory for the matching stepper — EulerStepper, SspRk3Stepper,
-///        RungeKuttaStepper (tableau selected by data), or DualStepper
-///        owning a BackwardEulerResidual / DitrResidual (variant selected
-///        by data).
+/// @brief Implementation of the solver controller and the
+///        runCompressibleFlowSolver entry point. The stepper itself is
+///        selected by the time module's factory (makeStepperFactory).
 
 #include "CompressibleFlowSolver.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <iostream>
 #include <memory>
-#include <stdexcept>
-#include <string>
-#include <type_traits>
 
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
-#include "time/DualStepper.hpp"
-#include "time/ImplicitResidual.hpp"
-#include "time/RungeKuttaStepper.hpp"
-#include "time/SimpleExplicitStepper.hpp"
+#include "ExprInitialCondition.hpp"
+#include "time/StepperFactory.hpp"
 
 namespace solver_detail
 {
@@ -48,143 +39,29 @@ void applyOmpThreads(int threads)
 }
 } // namespace solver_detail
 
-namespace
-{
-/// @brief Physical temporal-residual factory:
-///        (device, mem, rhs, nDof) -> owned TemporalResidual.
-using ResidualFactory = std::function<std::unique_ptr<TemporalResidual>(
-    occa::device &, DeviceMemoryManager &, const RhsFunction &, occa::dim_t)>;
-
-/// @brief Run the solver with a default-constructed simple stepper.
-template <class Stepper> int runWith(const Config &cfg)
-{
-    CompressibleFlowSolver solver(
-        cfg, [](occa::device &device, DeviceMemoryManager &mem,
-                const RhsFunction &rhs, occa::dim_t nDof) {
-            return std::make_unique<Stepper>(device, mem, rhs, nDof);
-        });
-    return solver.run();
-}
-
-/// @brief Run the solver with an adaptive embedded RK stepper.
-int runWithRk(const Config &cfg)
-{
-    const ButcherTable *table = butcherTableForMethod(cfg.timeMethod());
-    if (table == nullptr)
-    {
-        throw std::invalid_argument(
-            "runCompressibleFlowSolver: method is not an embedded RK pair");
-    }
-    RungeKuttaStepper::Params params;
-    params.rtol = cfg.timeRtol();
-    params.atol = cfg.timeAtol();
-
-    const ButcherTable &tab = *table;
-    CompressibleFlowSolver solver(
-        cfg, [&tab, params](occa::device &device, DeviceMemoryManager &mem,
-                            const RhsFunction &rhs, occa::dim_t nDof) {
-            return std::make_unique<RungeKuttaStepper>(device, mem, rhs, nDof,
-                                                       tab, params);
-        });
-    return solver.run();
-}
-
-/// @brief Run the solver with dual time stepping.
-int runWithDual(const Config &cfg, ResidualFactory makeResidual)
-{
-    const ButcherTable *pseudoTable =
-        butcherTableForMethod(cfg.timePseudoMethod());
-    if (pseudoTable == nullptr)
-    {
-        throw std::invalid_argument(
-            "runCompressibleFlowSolver: pseudo_method must be an embedded "
-            "RK pair");
-    }
-
-    DualStepper::Params params;
-    params.atol           = cfg.timeAtol();
-    params.rtol           = cfg.timeRtol();
-    params.maxPseudoSteps = cfg.timeMaxPseudoSteps();
-    params.pseudoFixedDt  = cfg.timePseudoDt();
-    params.allowReject    = cfg.timePseudoReject();
-    params.decoupled      = cfg.timeDualDecoupled();
-    // Loose pseudo-local accuracy: the dual-time convergence criterion
-    // governs, and a large initial pseudo step keeps the iteration count
-    // sane (the Hairer heuristic otherwise starts far below the stability
-    // limit). In single precision the extra-loose tolerance keeps the
-    // pseudo step near the stability limit — the rounding-floor-limited
-    // error estimate otherwise stalls the residual reduction.
-    params.rkParams.rtol =
-        std::is_same<Real, float>::value ? Real(1e-2) : Real(1e-3);
-    params.rkParams.atol = params.rkParams.rtol;
-
-    const ButcherTable &tab = *pseudoTable;
-    CompressibleFlowSolver solver(
-        cfg, [&tab, params,
-              makeResidual](occa::device &device, DeviceMemoryManager &mem,
-                            const RhsFunction &rhs, occa::dim_t nDof) {
-            return std::make_unique<DualStepper>(
-                device, mem, rhs, nDof, tab, params,
-                makeResidual(device, mem, rhs, nDof));
-        });
-    return solver.run();
-}
-
-/// @brief DITR variant for the configured method.
-DitrResidual::Variant ditrVariant(const Config &cfg)
-{
-    switch (cfg.timeMethod())
-    {
-        case TimeMethod::DitrU2R1:
-            return DitrResidual::Variant::U2R1;
-        case TimeMethod::DitrU3R1:
-            return DitrResidual::Variant::U3R1;
-        default:
-            return DitrResidual::Variant::U2R2;
-    }
-}
-} // namespace
-
 int runCompressibleFlowSolver(const Config &cfg)
 {
-    switch (cfg.timeMethod())
-    {
-        case TimeMethod::Euler:
-            return runWith<EulerStepper>(cfg);
-        case TimeMethod::SspRk3:
-            return runWith<SspRk3Stepper>(cfg);
-        case TimeMethod::Rk32:
-        case TimeMethod::Rk54:
-        case TimeMethod::SspRk221:
-        case TimeMethod::SspRk321:
-        case TimeMethod::SspRk332:
-        case TimeMethod::SspRk432:
-            return runWithRk(cfg);
-        case TimeMethod::BackwardEuler:
-            return runWithDual(
-                cfg, [](occa::device &device, DeviceMemoryManager &mem,
-                        const RhsFunction &rhs, occa::dim_t nDof) {
-                    return std::make_unique<BackwardEulerResidual>(device, mem,
-                                                                   rhs, nDof);
-                });
-        case TimeMethod::DitrU2R2:
-        case TimeMethod::DitrU2R1:
-        case TimeMethod::DitrU3R1:
-            return runWithDual(
-                cfg, [cfg](occa::device &device, DeviceMemoryManager &mem,
-                           const RhsFunction &rhs, occa::dim_t nDof) {
-                    return std::make_unique<DitrResidual>(
-                        device, mem, rhs, nDof, ditrVariant(cfg));
-                });
-        default:
-            throw std::invalid_argument(
-                "runCompressibleFlowSolver: unknown time method");
-    }
+    CompressibleFlowSolver solver(cfg);
+    return solver.run();
 }
 
 // ----------------------------------------------------------------------------
 // CompressibleFlowSolver
 // ----------------------------------------------------------------------------
+
+CompressibleFlowSolver::CompressibleFlowSolver(Config cfg)
+    : cfg_(std::move(cfg))
+{
+}
+
+CompressibleFlowSolver::~CompressibleFlowSolver()
+{
+    stepper_.reset();
+    field_.reset();
+    blas_.reset();
+    mem_.reset();
+    device_.free();
+}
 
 void CompressibleFlowSolver::applyInitialCondition()
 {
@@ -231,7 +108,7 @@ int CompressibleFlowSolver::run()
     RhsFunction rhs        = [f](occa::memory u, occa::memory res) {
         f->computeRHS(u, res);
     };
-    stepper_ = makeStepper_(device_, *mem_, rhs, nDof);
+    stepper_ = makeStepperFactory(cfg_)(device_, *mem_, rhs, nDof);
 
     applyInitialCondition();
     device_.finish();

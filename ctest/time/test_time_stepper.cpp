@@ -99,11 +99,12 @@ struct DecayOde
 
 /// @brief Integrate with a fixed-dt stepper and return the max error
 ///        against e^{lambda T} u0 at T = 1.
-template <class Stepper>
+/// @param stepper Concrete stepper, advanced through the StepperBase
+///        interface.
 Real fixedStepError(occa::device &device, DeviceMemoryManager &mem,
-                    DecayOde &ode, Real dt)
+                    DecayOde &ode, Real dt,
+                    std::unique_ptr<StepperBase> stepper)
 {
-    Stepper stepper(device, mem, ode.rhs(), ode.n);
     occa::memory o_u   = mem.wrapOrMalloc(static_cast<occa::dim_t>(ode.n));
     occa::memory o_src = ode.o_u0;
     Blas blas(device, mem);
@@ -112,7 +113,7 @@ Real fixedStepError(occa::device &device, DeviceMemoryManager &mem,
     Real t = Real(0);
     while (t < Real(1) - Real(0.5) * dt)
     {
-        const Real taken = stepper.advance(o_u, t, dt);
+        const Real taken = stepper->advance(o_u, t, dt);
         t += taken;
     }
 
@@ -153,8 +154,9 @@ static bool testSimpleExplicit()
         Real errors[3];
         for (int k = 0; k < 3; ++k)
         {
-            errors[k] = fixedStepError<EulerStepper>(
-                device, mem, ode, Real(0.1) / std::pow(Real(2), k));
+            errors[k] = fixedStepError(
+                device, mem, ode, Real(0.1) / std::pow(Real(2), k),
+                std::make_unique<EulerStepper>(device, mem, ode.rhs(), ode.n));
         }
         const Real p = measuredOrder(errors);
         std::cout << "  euler  errors " << errors[0] << " -> " << errors[2]
@@ -165,8 +167,9 @@ static bool testSimpleExplicit()
         Real errors[3];
         for (int k = 0; k < 3; ++k)
         {
-            errors[k] = fixedStepError<SspRk3Stepper>(
-                device, mem, ode, Real(0.2) / std::pow(Real(2), k));
+            errors[k] = fixedStepError(
+                device, mem, ode, Real(0.2) / std::pow(Real(2), k),
+                std::make_unique<SspRk3Stepper>(device, mem, ode.rhs(), ode.n));
         }
         const Real p = measuredOrder(errors);
         std::cout << "  ssprk3 errors " << errors[0] << " -> " << errors[2]

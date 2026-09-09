@@ -3,11 +3,11 @@
 ///        lifetimes of all modules (device, memory manager, DG field,
 ///        time stepper).
 ///
-/// The stepper is owned through the abstract StepperBase interface (one
-/// virtual advance() call per physical time step — negligible next to the
-/// per-stage device kernels, and it keeps the controller non-template).
-/// The single dispatch point is runCompressibleFlowSolver, which switches
-/// on [time_marching] method and constructs the matching stepper factory.
+/// The stepper is selected by the time module's factory
+/// (makeStepperFactory, src/time/StepperFactory.cpp) from the
+/// [time_marching] configuration and owned through the abstract
+/// StepperBase interface — one virtual advance() call per physical time
+/// step, negligible next to the per-stage device kernels.
 ///
 /// Flow: setup the DG field -> apply the initial condition
 /// (uniform free stream or exprtk expressions) -> march to t_final with
@@ -17,7 +17,6 @@
 
 #pragma once
 
-#include <functional>
 #include <memory>
 
 #include <occa.hpp>
@@ -31,18 +30,13 @@
 
 namespace solver_detail
 {
-/// Defined in ExprInitialCondition.cpp: evaluates the configured
-/// expressions and projects them onto the field.
-void applyExprICFromConfig(DgField &field, const Config &cfg);
-
 /// Defined in CompressibleFlowSolver.cpp: overrides the OpenMP thread
 /// count (no-op for threads <= 0).
 void applyOmpThreads(int threads);
 } // namespace solver_detail
 
 /// @brief Run a complete computation for the configured time-marching
-///        method — the single runtime-to-compile-time dispatch point
-///        (defined in CompressibleFlowSolver.cpp).
+///        method (defined in CompressibleFlowSolver.cpp).
 /// @return Process exit code (0 on success).
 int runCompressibleFlowSolver(const Config &cfg);
 
@@ -50,18 +44,8 @@ int runCompressibleFlowSolver(const Config &cfg);
 class CompressibleFlowSolver
 {
 public:
-    /// @brief Factory invoked after the DG field is set up; binds the
-    ///        residual to the field and constructs the stepper.
-    using StepperFactory = std::function<std::unique_ptr<StepperBase>(
-        occa::device &, DeviceMemoryManager &, const RhsFunction &,
-        occa::dim_t)>;
-
-    /// @param cfg     Configuration (kept by value; the field references it).
-    /// @param factory Stepper construction callback.
-    CompressibleFlowSolver(Config cfg, StepperFactory factory)
-        : cfg_(std::move(cfg)), makeStepper_(std::move(factory))
-    {
-    }
+    /// @param cfg Configuration (kept by value; the field references it).
+    explicit CompressibleFlowSolver(Config cfg);
 
     /// @brief Deterministic teardown in reverse dependency order: the
     ///        stepper and the DG field own the occa::memory /
@@ -70,14 +54,7 @@ public:
     ///        order anyway; the explicit sequence also drops the device
     ///        context before the members, keeping the GPU context alive
     ///        only as long as needed (relevant for iGPU/OpenCL sessions).
-    ~CompressibleFlowSolver()
-    {
-        stepper_.reset();
-        field_.reset();
-        blas_.reset();
-        mem_.reset();
-        device_.free();
-    }
+    ~CompressibleFlowSolver();
 
     /// @brief Run the full computation. Member order guarantees the
     ///        destruction order stepper -> field -> blas -> memory manager
@@ -125,7 +102,6 @@ private:
     Real computeDt(Real t);
 
     Config cfg_;
-    StepperFactory makeStepper_;
 
     occa::device device_;
     std::unique_ptr<DeviceMemoryManager> mem_;

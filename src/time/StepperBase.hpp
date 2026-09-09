@@ -11,9 +11,7 @@
 /// The base carries only what is shared by several steppers: the OCCA
 /// device / memory manager / Blas context, the right-hand-side callable
 /// $\mathcal{R}(u)$ (boundary conditions live inside the DG residual, so
-/// they are re-applied at every RK stage), the positivity-preserving
-/// limiter hook (identity by default, invoked after every stage state —
-/// ported from the reference prototype), the shared kernel builder, and
+/// they are re-applied at every RK stage), the shared kernel builder, and
 /// the Euler-update kernel. Steppers own the further kernels they launch
 /// and build them lazily on first use, so a stepper never JIT-compiles a
 /// kernel it does not launch.
@@ -26,9 +24,7 @@
 
 #include <occa.hpp>
 
-#include <functional>
 #include <string>
-#include <vector>
 
 #include "blas/Blas.hpp"
 #include "common/KernelProps.hpp"
@@ -57,12 +53,6 @@ public:
 
     /// @brief Canonical method name.
     virtual const char *name() const = 0;
-
-    /// @brief Install a positivity-preserving limiter (no-op by default).
-    void setPositivityLimiter(PositivityLimiter limiter)
-    {
-        limiter_ = std::move(limiter);
-    }
 
 protected:
     /// @param device  OCCA device (lifetime must exceed this object).
@@ -105,16 +95,6 @@ protected:
         explicitEulerUpdate_(static_cast<int>(nDof_), dt, o_un, o_res, o_unp1);
     }
 
-    /// @brief Apply the positivity limiter to a stage state (no-op unless
-    ///        installed).
-    void applyLimiter(occa::memory &o_u)
-    {
-        if (limiter_)
-        {
-            limiter_(o_u);
-        }
-    }
-
     // ---- Shared context
     // --------------------------------------------------------
 
@@ -124,7 +104,6 @@ protected:
     occa::dim_t nDof_;
     std::string oklDir_;
     Blas blas_;
-    PositivityLimiter limiter_;
 
 private:
     /// Shared Euler-update kernel (lazily built by eulerUpdate()).
