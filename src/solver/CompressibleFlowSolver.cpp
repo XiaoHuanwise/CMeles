@@ -6,6 +6,7 @@
 #include "CompressibleFlowSolver.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <memory>
 
@@ -132,6 +133,12 @@ int CompressibleFlowSolver::run()
             occa::memory ou = field_->o_u(), ores = field_->o_res();
             rhs(ou, ores);
             const Real resNorm = blas_->nrm2(nDof, ores);
+            if (!std::isfinite(resNorm))
+            {
+                std::cout << "CMeles: residual is not finite at step " << steps_
+                          << ", t = " << time_ << " — aborting\n";
+                return 1;
+            }
             std::cout << "  step " << steps_ << ": t = " << time_
                       << ", dt = " << taken << ", |res|_2 = " << resNorm
                       << "\n";
@@ -147,6 +154,12 @@ int CompressibleFlowSolver::run()
     occa::memory ou = field_->o_u(), ores = field_->o_res();
     rhs(ou, ores);
     const Real resNorm = blas_->nrm2(nDof, ores);
+    if (!std::isfinite(resNorm))
+    {
+        std::cout << "CMeles: final residual is not finite after " << steps_
+                  << " steps — aborting\n";
+        return 1;
+    }
     std::cout << "CMeles: finished t = " << time_ << " in " << steps_
               << " steps, |res|_2 = " << resNorm << "\n";
     device_.finish();
