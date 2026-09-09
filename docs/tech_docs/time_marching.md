@@ -83,14 +83,15 @@ $$
 
 | 文件 | 内容 |
 | ---- | ---- |
-| `TimeTypes.hpp` | `RhsFunction` / `PositivityLimiter` 类型别名 |
-| `StepperBase.hpp` | 抽象基类：虚接口 `advance(u, t, dt) -> 实际步长` + 公共上下文（device/mem/rhs/Blas/limiter 钩子）与跨 stepper 共享的 Euler 更新内核 |
+| `TimeTypes.hpp` | `RhsFunction` 类型别名 |
+| `StepperBase.hpp` | 抽象基类：虚接口 `advance(u, t, dt) -> 实际步长` + 公共上下文（device/mem/rhs/Blas）与跨 stepper 共享的 Euler 更新内核 |
 | `SimpleExplicitStepper.{hpp,cpp}` | `EulerStepper`（1 阶）、`SspRk3Stepper`（Shu–Osher 3 阶，自持 `sspConvexCombine` 内核） |
 | `ButcherTable.hpp` | 6 张 constexpr Butcher 表（RK32/RK54/SSPRK221/321/332/432，系数取自原型与本文档） |
 | `RungeKuttaStepper.{hpp,cpp}` | 通用 embedded RK：Butcher 表为运行期数据（一次上传设备，内核运行期读取），FSAL、RMS 缩放误差、PI 控制器、Hairer 初始步长、`advanceFixed`（定步长伪推进），自持 3 个 Butcher 内核 |
 | `ImplicitResidual.{hpp,cpp}` | 抽象类 `TemporalResidual` 与其实现 `BackwardEulerResidual`、`DitrResidual`（U2R2/U2R1/U3R1 单类 + 变体系数）：仅构造时间残差 $\mathcal{F}$（统一签名，单级方案忽略多级参数），含耦合预条件子与解耦每级残差 |
-| `DualStepper.{hpp,cpp}` | `DualStepper`（持有 `unique_ptr<TemporalResidual>`）：伪时间自适应 RK 推进至 $\|\mathcal{F}\|_\infty$ 收敛（REF_STEP = 5 参考范数），耦合/解耦两种模式，内部维护 $u^{n-1}$ 与 $\theta$，自持 inf-范数内核 |
-| `okl/time_update.okl` | 向量更新内核（`explicitEulerUpdate`、`sspConvexCombine`、Butcher 阶段/误差内核、`vecCombine4`、`absInto`） |
+| `DualStepper.{hpp,cpp}` | `DualStepper`（持有 `unique_ptr<TemporalResidual>`）：伪时间自适应 RK 推进至 $\|\mathcal{F}\|_\infty$ 收敛（REF_STEP = 5 参考范数，范数经 `Blas::amax` 设备端分级归约），耦合/解耦两种模式，内部维护 $u^{n-1}$ 与 $\theta$ |
+| `StepperFactory.{hpp,cpp}` | `StepperFactory` 类型别名与 `makeStepperFactory(const Config&)`：[time_marching] method → 具体 stepper 工厂的唯一运行期分派点（含 Butcher 表选取与容差提取；双时间伪步进器的局部容差默认取自动启发式 1e-3——单精度下比此更松会使伪时间迭代发散——可经 `pseudo_rtol`/`pseudo_atol` 覆盖；`dual_decoupled = true` 配 `method = "be"` 在此于配置期被拒绝——解耦分 stage 求解仅对两 stage 的 DITR 残差有意义） |
+| `okl/time_update.okl` | 向量更新内核（`explicitEulerUpdate`、`sspConvexCombine`、Butcher 阶段/误差内核、`vecCombine4/5/7`） |
 
 要点：
 
@@ -100,11 +101,12 @@ $$
   `ImplicitStepper.trhs`）。
 - **内核按需 JIT**：各 stepper 只构建并发射自己用到的内核（首次调用时懒构建），
   一个 stepper 实例不会为其不发射的内核付出 JIT 编译开销。
-- 唯一的运行期分派点是 `runCompressibleFlowSolver(const Config&)`
-  （`src/solver/CompressibleFlowSolver.cpp`），按配置构造具体 stepper 的工厂；
-  求解器控制器本身为非模板类（单一实例化，实现在 .cpp）。
+- 唯一的运行期分派点是 time 模块的 `makeStepperFactory(const Config&)`
+  （`src/time/StepperFactory.cpp`），按配置返回具体 stepper 的工厂；
+  `runCompressibleFlowSolver` 仅构造非模板的求解器控制器（单一实例化，实现在 .cpp）并运行，
+  新增时间格式只需改动 time 模块。
 - 时间步长：`DgField::estimateDt` 按本文档 CFL 公式每步重算（`estimate_dt.okl`），
   `[time_marching] dt > 0` 时使用固定步长。
-- 正保持限制器钩子（`setPositivityLimiter`）在每个阶段状态后调用，默认 no-op（移植自原型）。
-- 单元测试见 `ctest/time/test_time_stepper.cpp`（ODE $u' = \lambda u$ 收敛阶）与
-  `ctest/solver/test_euler_vortex.cpp`（等熵涡整链路验证）。
+- 单元测试见 `ctest/time/test_time_stepper.cpp`（ODE $u' = \lambda u$ 收敛阶）、
+  `ctest/solver/test_euler_vortex.cpp`（SSPRK3 等熵涡整链路）与
+  `ctest/solver/test_vortex_methods.cpp`（其余全部方法的精度/收敛阶，经由生产工厂分派）。
