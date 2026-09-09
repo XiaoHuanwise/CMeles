@@ -15,7 +15,6 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -26,7 +25,7 @@
 #include "dg/DgField.hpp"
 #include "mesh/MeshGeometry.hpp"
 #include "solver/CompressibleFlowSolver.hpp"
-#include "time/StepperBase.hpp"
+#include "solver/ExprInitialCondition.hpp"
 
 namespace vortex
 {
@@ -34,14 +33,17 @@ namespace vortex
 /// @brief Options of one vortex run.
 struct Options
 {
-    int nx               = 16;        ///< Mesh resolution (nx x nx).
-    std::string method   = "ssprk3";  ///< Time-marching method.
-    Real dt              = Real(0);   ///< Fixed dt; <= 0 uses the CFL estimate.
-    Real cfl             = Real(0.2); ///< CFL number.
-    Real tFinal          = Real(2);   ///< Final time.
-    Real rtol            = Real(1e-6); ///< Adaptive / dual-time tolerance.
-    Real atol            = Real(1e-6);
-    int maxPseudoSteps   = 100; ///< Dual-time cap.
+    int nx             = 16;         ///< Mesh resolution (nx x nx).
+    std::string method = "ssprk3";   ///< Time-marching method.
+    Real dt            = Real(0);    ///< Fixed dt; <= 0 uses the CFL estimate.
+    Real cfl           = Real(0.2);  ///< CFL number.
+    Real tFinal        = Real(2);    ///< Final time.
+    Real rtol          = Real(1e-6); ///< Adaptive / dual-time tolerance.
+    Real atol          = Real(1e-6);
+    int maxPseudoSteps = 100;  ///< Dual-time cap.
+    Real pseudoRtol = Real(0); ///< Pseudo-stepper local tolerance; <= 0 keeps
+                               ///< the automatic heuristic.
+    Real pseudoAtol      = Real(0); ///< Same for the absolute tolerance.
     std::string occaMode = "Serial";
 };
 
@@ -70,7 +72,19 @@ inline Config makeConfig(const Options &opt, const std::string &path)
                  "[gas]\ngamma = 1.4\n\n[flow]\nrho = 1.0\nu = 1.0\nv = 1.0\n"
                  "p = 1.0\n\n[time_marching]\nmethod = \"%s\"\ncfl = %.12g\n"
                  "dt = %.12g\nt_final = %.12g\nrtol = %.12g\natol = %.12g\n"
-                 "max_pseudo_steps = %d\n\n[initial_condition]\n"
+                 "max_pseudo_steps = %d\n",
+                 opt.nx, opt.nx, dx, dx, opt.method.c_str(), opt.cfl, opt.dt,
+                 opt.tFinal, opt.rtol, opt.atol, opt.maxPseudoSteps);
+    if (opt.pseudoRtol > Real(0))
+    {
+        std::fprintf(f, "pseudo_rtol = %.12g\n", opt.pseudoRtol);
+    }
+    if (opt.pseudoAtol > Real(0))
+    {
+        std::fprintf(f, "pseudo_atol = %.12g\n", opt.pseudoAtol);
+    }
+    std::fprintf(f,
+                 "\n[initial_condition]\n"
                  "type = \"expr\"\n"
                  "rho = \"(1 - (gamma-1)*beta^2/(8*gamma*pi^2)*"
                  "exp(1 - (x-x0)^2 - (y-y0)^2))^(1/(gamma-1))\"\n"
@@ -82,8 +96,6 @@ inline Config makeConfig(const Options &opt, const std::string &path)
                  "exp(1 - (x-x0)^2 - (y-y0)^2))^(gamma/(gamma-1))\"\n\n"
                  "[initial_condition.symbols]\nbeta = 5.0\nx0 = 5.0\ny0 = 5.0\n"
                  "uinf = 1.0\nvinf = 1.0\n\n[occa]\nmode = \"%s\"\n",
-                 opt.nx, opt.nx, dx, dx, opt.method.c_str(), opt.cfl, opt.dt,
-                 opt.tFinal, opt.rtol, opt.atol, opt.maxPseudoSteps,
                  opt.occaMode.c_str());
     std::fclose(f);
     Config cfg(path);
@@ -102,11 +114,11 @@ struct Errors
     int steps      = 0;
 };
 
-/// @brief Run one configured solver and evaluate the errors.
-inline Errors runAndMeasure(
-    const Config &cfg, const CompressibleFlowSolver::StepperFactory &factory)
+/// @brief Run one configured solver and evaluate the errors. The stepper
+///        is selected by makeStepperFactory from the configuration.
+inline Errors runAndMeasure(const Config &cfg)
 {
-    CompressibleFlowSolver solver(cfg, factory);
+    CompressibleFlowSolver solver(cfg);
     Errors err;
     if (solver.run() != 0)
     {
@@ -139,8 +151,7 @@ inline Errors runAndMeasure(
 
     const MatrixXr &V      = field.basis().vandermonde();
     const VectorXr &lamAll = field.geometry().lambdaWJ();
-    const auto &e8         = field.geometry().vertices();
-    const MatrixX2r &qp    = field.basis().quadraturePoints();
+    const MatrixX2r xy     = quadraturePhysicalCoords(field);
 
     const Real gamma = cfg.gamma();
     const Real tEnd  = cfg.timeFinal();
@@ -157,19 +168,10 @@ inline Errors runAndMeasure(
         Eigen::Map<const VectorXr> lam(
             lamAll.data() + static_cast<std::size_t>(e) * Nq2, Nq2);
 
-        const Real x1 = e8(e, 0), y1 = e8(e, 1);
-        const Real x2 = e8(e, 2), y2 = e8(e, 3);
-        const Real x3 = e8(e, 4), y3 = e8(e, 5);
-        const Real x4 = e8(e, 6), y4 = e8(e, 7);
         for (int q = 0; q < Nq2; ++q)
         {
-            const Real r = qp(q, 0), s = qp(q, 1);
-            const Real phi1 = (Real(1) - r) * (Real(1) - s) / Real(4);
-            const Real phi2 = (Real(1) + r) * (Real(1) - s) / Real(4);
-            const Real phi3 = (Real(1) + r) * (Real(1) + s) / Real(4);
-            const Real phi4 = (Real(1) - r) * (Real(1) + s) / Real(4);
-            const Real x    = phi1 * x1 + phi2 * x2 + phi3 * x3 + phi4 * x4;
-            const Real y    = phi1 * y1 + phi2 * y2 + phi3 * y3 + phi4 * y4;
+            const Eigen::Index row = static_cast<Eigen::Index>(e) * Nq2 + q;
+            const Real x = xy(row, 0), y = xy(row, 1);
 
             const Real rhoEx = vortexRho(x, y, tEnd, gamma, 5, 5, 5, 1, 1);
             const Real rho0  = vortexRho(x, y, 0, gamma, 5, 5, 5, 1, 1);
@@ -186,15 +188,6 @@ inline Errors runAndMeasure(
     err.linf      = einf;
     err.massDrift = std::abs(massNow - mass0) / mass0;
     return err;
-}
-
-/// @brief Default factory for simple steppers (Euler / SSPRK3).
-template <class Stepper> CompressibleFlowSolver::StepperFactory simpleFactory()
-{
-    return [](occa::device &device, DeviceMemoryManager &mem,
-              const RhsFunction &rhs, occa::dim_t nDof) {
-        return std::make_unique<Stepper>(device, mem, rhs, nDof);
-    };
 }
 
 } // namespace vortex

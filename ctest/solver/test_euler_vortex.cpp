@@ -42,7 +42,6 @@
 #include "dg/DgField.hpp"
 #include "mesh/MeshGeometry.hpp"
 #include "solver/CompressibleFlowSolver.hpp"
-#include "time/SimpleExplicitStepper.hpp"
 
 namespace
 {
@@ -102,11 +101,7 @@ bool runVortex(const std::string &scratch, const std::string &mode, int nx,
                Real *l1, Real *l2, Real *linf, Real *massDrift)
 {
     const Config cfg = makeVortexConfig(nx, scratch, mode);
-    CompressibleFlowSolver solver(
-        cfg, [](occa::device &device, DeviceMemoryManager &mem,
-                const RhsFunction &rhs, occa::dim_t nDof) {
-            return std::make_unique<SspRk3Stepper>(device, mem, rhs, nDof);
-        });
+    CompressibleFlowSolver solver(cfg);
     if (solver.run() != 0)
     {
         return false;

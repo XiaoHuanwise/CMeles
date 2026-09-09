@@ -24,6 +24,7 @@ set(TIME_SOURCES
     ${CMAKE_SOURCE_DIR}/src/time/RungeKuttaStepper.cpp
     ${CMAKE_SOURCE_DIR}/src/time/DualStepper.cpp
     ${CMAKE_SOURCE_DIR}/src/time/ImplicitResidual.cpp
+    ${CMAKE_SOURCE_DIR}/src/time/StepperFactory.cpp
 )
 
 set(SOLVER_SOURCES
