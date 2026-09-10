@@ -70,11 +70,24 @@ constexpr Real RealEpsilon = Real(1e-15);
 **CMake 选项**：
 
 ```bash
-cmake -B build -DUSE_FLOAT_PRECISION=ON   # 使用 float（32-bit）
-cmake -B build                            # 使用 double（64-bit，默认）
+cmake -B build                                    # 默认：静态库 + Release + double
+cmake -B build -DUSE_FLOAT_PRECISION=ON           # 使用 float（32-bit）
+cmake -B build -DBUILD_SHARED_LIBS=ON             # cmeles_core 构建为动态库
+cmake -B build -DCMELES_ENABLE_LTO=ON             # 启用 LTO（默认关闭）
+cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo  # 性能剖析构建
+cmake -B build -DCMAKE_UNITY_BUILD=ON             # Unity build（进一步压缩编译时间）
 ```
 
-`USE_FLOAT_PRECISION` 宏通过 `target_compile_definitions` 传递给所有编译目标（主目标和测试目标），因此所有包含 `Types.hpp` 的文件自动切换精度。
+| 选项                         | 默认      | 说明                                                                 |
+| ---------------------------- | --------- | -------------------------------------------------------------------- |
+| `USE_FLOAT_PRECISION`        | `OFF`     | `Real` 切换为 `float`                                                |
+| `BUILD_SHARED_LIBS`          | `OFF`     | `cmeles_core` 构建为 SHARED 动态库（默认 STATIC 静态库）             |
+| `CMELES_ENABLE_LTO`          | `OFF`     | 链接期优化 `-flto=auto`，按运行时收益取舍                            |
+| `CMELES_ENABLE_PCH`          | `ON`      | 为 `cmeles_core` 预编译第三方重头部（occa/Eigen/toml++/exprtk）      |
+| `CMAKE_UNITY_BUILD`          | `OFF`     | 合并翻译单元减少重头解析（13/13 测试通过；单开比叠 PCH 更快）        |
+| `CMAKE_BUILD_TYPE`           | `Release` | 不再硬编码；`RelWithDebInfo` 为 `-O3 -g -DNDEBUG -fno-omit-frame-pointer`（perf/火焰图友好） |
+
+构建结构：全部模块源码编译进 `cmeles_core` 库（每个源文件只编译一次），主程序与所有测试可执行文件链接该库（公共依赖 Eigen/OCCA/toml++/exprtk 与精度宏经库的 PUBLIC 属性传递）。`-O3 -march=native -fopenmp` 为全局基础旗帜，所有 Build Type 均保持 `-O3` 优化。`USE_FLOAT_PRECISION` 经 `cmeles_core` 传递给所有目标，因此所有包含 `Types.hpp` 的文件自动切换精度。
 
 ## OCCA/OKL 核函数开发
 
