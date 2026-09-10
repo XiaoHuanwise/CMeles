@@ -89,7 +89,7 @@ static void rotate_flux_back(const Real *flux_rot, Real nx, Real ny,
 //   F = 0.5*(fL + fR) - 0.5*alpha*(qR - qL)
 //   alpha = max(|UL|+aL, |UR|+aR)
 static void llf_flux(const Real *qL, const Real *qR, Real gamma, Real *flux) {
-    Real fL[4], fR[4];
+    Real fL[N_VARS], fR[N_VARS];
     physical_flux(qL, gamma, fL);
     physical_flux(qR, gamma, fR);
 
@@ -99,7 +99,7 @@ static void llf_flux(const Real *qL, const Real *qR, Real gamma, Real *flux) {
     const Real aR    = ((uR >= 0.0) ? uR : -uR) + sound_speed(qR, gamma);
     const Real alpha = (aL > aR) ? aL : aR;
 
-    for (int k = 0; k < 4; ++k) {
+    for (int k = 0; k < N_VARS; ++k) {
         flux[k] = 0.5 * (fL[k] + fR[k]) - 0.5 * alpha * (qR[k] - qL[k]);
     }
 }
@@ -112,14 +112,14 @@ static void llf_flux(const Real *qL, const Real *qR, Real gamma, Real *flux) {
 @kernel void llfFlux(const int nPairs, const Real *qL, const Real *qR,
                      const Real *gammaArr, Real *flux) {
     for (int i = 0; i < nPairs; ++i; @tile(TILE_SIZE, @outer, @inner)) {
-        Real qL_i[4], qR_i[4], f[4];
-        for (int k = 0; k < 4; ++k) {
-            qL_i[k] = qL[i * 4 + k];
-            qR_i[k] = qR[i * 4 + k];
+        Real qL_i[N_VARS], qR_i[N_VARS], f[N_VARS];
+        for (int k = 0; k < N_VARS; ++k) {
+            qL_i[k] = qL[i * N_VARS + k];
+            qR_i[k] = qR[i * N_VARS + k];
         }
         llf_flux(qL_i, qR_i, gammaArr[0], f);
-        for (int k = 0; k < 4; ++k) {
-            flux[i * 4 + k] = f[k];
+        for (int k = 0; k < N_VARS; ++k) {
+            flux[i * N_VARS + k] = f[k];
         }
     }
 }

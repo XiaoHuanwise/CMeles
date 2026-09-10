@@ -23,10 +23,8 @@
 
 #include <array>
 
+#include "common/Constants.hpp"
 #include "common/Types.hpp"
-
-/// @brief Number of conserved variables for 2D Euler.
-inline constexpr int kNumVars2D = 4;
 
 /// @brief Primitive variables extracted from a conserved state.
 struct EulerState {

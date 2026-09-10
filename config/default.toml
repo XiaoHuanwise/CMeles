@@ -7,7 +7,14 @@
 # ---- DG basis ----
 [basis]
 order = 2                 # Polynomial order N of the DG approximation space.
+                          # Kernel capacity limit: N <= 4, because the modal
+                          # count (N+1)(N+2)/2 must stay <= kMaxModes = 16
+                          # (src/common/Constants.hpp; enforced at startup).
 nq = 4                    # Gauss-Legendre quadrature points per dimension N_q.
+                          # Kernel capacity limit: nq <= 6 (kMaxQuadPts1D,
+                          # enforced at startup). N+1 already integrates the
+                          # linear (mass/projection) terms exactly; the N+2
+                          # used here is the anti-aliasing margin.
 
 # ---- Structured mesh ----
 [mesh]

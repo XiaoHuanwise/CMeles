@@ -225,7 +225,7 @@ mem_mgr.copyToHost(o_u, u_result.data(), N_total);
 
 ### 平台间差异
 
-仅 `TILE_SIZE` 参数根据不同平台调优，OKL 源码本身完全一致：
+仅 `TILE_SIZE` 参数根据不同平台调优，OKL 源码本身完全一致。C++ 侧默认值统一为 `src/common/KernelProps.hpp` 中的 `cmeles::DefaultTileSize`（当前 256），各内核构建点均引用该常量，不再分散硬编码：
 
 | 平台 | TILE_SIZE 推荐值 | 说明                     |
 | :--- | :--------------: | :----------------------- |
@@ -251,15 +251,18 @@ mem_mgr.copyToHost(o_u, u_result.data(), N_total);
 ### 关键技术要点
 
 - **SIMD 向量化**：不依赖 OKL 的 `@inner` 标注。实测 OCCA OpenMP 后端对 `@inner` 不生成任何 `#pragma omp simd`。SIMD 向量化由编译器在 `-O3 -march=native` 下自动完成，OKL 源码中无需额外标注。
-- **JIT 缓存**：不使用 `@shared` 时，`N_VARS`、`N_MODES`、`N_Q` 等维度作为 `const int` 核函数参数传入（非编译宏），最大化 JIT 缓存命中率。
+- **JIT 缓存**：不使用 `@shared` 时，`N_MODES`、`N_Q` 等**随配置变化**的维度作为 `const int` 核函数参数传入（非编译宏），最大化 JIT 缓存命中率；`N_VARS` 与容量上限（`NQ_MAX`、`NQ2_MAX`、`NMODES_MAX`）物理固定不随配置变化，且线程局部数组需要编译期尺寸，因此与 `TILE_SIZE`/`Real` 同样以 JIT define 注入，定义集中在 `src/common/Constants.hpp`。
 - **`@shared` 的限制**：若后续启用 `@shared`，数组大小必须为编译时常量，需通过 JIT 编译宏（`occa::kernelBuilder` 的 `addDefine`）传入。
 - **局部数组的编译期上限（重要约束）**：OKL 核函数内的线程局部数组大小必须是编译期常量，而维度（`N_q`、`N_modes` 等）是运行期参数，因此局部数组按**上限**声明、按下标裁剪使用。当前各核函数的上限约定：
 
   | 核函数 | 局部数组 | 上限含义 |
   | :----- | :------ | :------- |
-  | `volumeIntegral`（volume_integral.okl） | `qval[4][256]` 等 | $N_q^2 \le 256$，即 `nq <= 16` |
-  | `computeFaceFlux`（surface_integral.okl） | `fp[16 * 4]` | $N_q \le 16$（与体积项的 $N_q^2 \le 256$ 对齐） |
-  | `assembleRHS`（assemble_rhs.okl，融合 gather） | `g[4 * 16]` | $N_{\text{modes}} \le 16$（N=2 时 6 个模态；nq≈N+2 的常用配置下覆盖至 N=4） |
+  | `volumeIntegral`（volume_integral.okl） | `qval[N_VARS][NQ2_MAX]` 等 | $N_q^2 \le 36$，即 `nq <= 6` |
+  | `computeFaceFlux`（surface_integral.okl） | `fp[NQ_MAX][N_VARS]` | $N_q \le 6$（与体积项的 $N_q^2 \le 36$ 对齐） |
+  | `assembleRHS`（assemble_rhs.okl，融合 gather） | `g[N_VARS][NMODES_MAX]` | $N_{\text{modes}} \le 16$ |
+  | `initModeCoeffs`（init.okl） | `b[NMODES_MAX]` | $N_{\text{modes}} \le 16$（与 assembleRHS 对齐） |
+
+  模态数与多项式阶的关系为 $N_{\text{modes}} = (N+1)(N+2)/2$（二维三角基），因此 `kMaxModes = 16` 覆盖至 $N = 4$（15 个模态）；`kMaxQuadPts1D = 6` 容纳 $N = 4$ 时的 $N_q = N + 2$ 抗混淆余量（高斯积分 $n$ 点精确至 $2n-1$ 次，$N+1$ 已保证线性项精确）。常量定义集中在 `src/common/Constants.hpp`（`kNumVars2D`、`kMaxQuadPts1D`、`kMaxQuadPts2D`、`kMaxModes`），经 `DgField::buildKernel` 的 JIT defines 注入内核；`DgField` 构造时对 `nq`/`order` 做运行期校验，超限会直接报错而非静默越界。
 
   超限会静默越界写入（无运行期判别，属于刻意的性能取舍）。`Config` 不校验这些上限，提升 `order`/`nq` 前必须核对此表。
 - **禁止使用 C++ 引用传参**：OKL 核函数中**不允许**使用 `const T & value` 形式的 C++ 引用参数。OCCA 的 JIT 代码生成器（`launcher_source.cpp`）在生成 OpenCL kernel source 时可能原样输出引用语法，这在 OpenCL C 中是非法的（OpenCL C 只允许指针，不支持引用），会导致 `CL_BUILD_PROGRAM_FAILURE`。核函数的所有参数应通过**值传递**或**指针传递**，避免引用语法。**注意**：此规则仅适用于 `.okl` 核函数源码；托管端（host）C++ 代码中的 `occa::memory` 等 OCCA 对象正常使用值/引用传递无影响。

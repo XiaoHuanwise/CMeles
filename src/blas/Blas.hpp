@@ -15,6 +15,7 @@
 
 #include <string>
 
+#include "common/KernelProps.hpp"
 #include "common/Types.hpp"
 #include "core/DeviceMemoryManager.hpp"
 
@@ -104,7 +105,7 @@ private:
     occa::device &device_;
     DeviceMemoryManager &mem_;
     std::string oklDir_;
-    int tileSize_ = 256;
+    int tileSize_ = cmeles::DefaultTileSize;
 
     /// Threshold for switching from device-side multi-level reduce to host sum.
     static constexpr occa::dim_t kHostReduceMax = 4096;

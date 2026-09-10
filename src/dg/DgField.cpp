@@ -53,6 +53,28 @@ void DgField::setup() {
     N_q_     = basis2D_->numPoints1D();
     N_q2_    = basis2D_->numPoints();
 
+    // Runtime guard for the OKL thread-local array capacity caps (JIT
+    // defines NQ_MAX / NQ2_MAX / NMODES_MAX, see src/common/Constants.hpp
+    // and the cap table in docs/tech_docs/occa.md): the kernels index the
+    // local arrays without bounds checks, so an oversized config silently
+    // corrupts memory. The N_q2 cap is implied by kMaxQuadPts2D =
+    // kMaxQuadPts1D^2.
+    if (N_q_ > kMaxQuadPts1D) {
+        throw std::invalid_argument(
+            "DgField: nq = " + std::to_string(N_q_) +
+            " exceeds the kernel capacity kMaxQuadPts1D = " +
+            std::to_string(kMaxQuadPts1D) +
+            " (raise the caps in src/common/Constants.hpp)");
+    }
+    if (N_modes_ > kMaxModes) {
+        throw std::invalid_argument(
+            "DgField: polynomial order N = " +
+            std::to_string(cfg_.polynomialOrder()) + " gives N_modes = " +
+            std::to_string(N_modes_) + " > kMaxModes = " +
+            std::to_string(kMaxModes) +
+            " (raise the caps in src/common/Constants.hpp)");
+    }
+
     // Upload the reference data to the device.
     basis1D_->allocateDeviceMemory(mem_);
     basis2D_->allocateDeviceMemory(mem_);
@@ -223,6 +245,14 @@ occa::kernel DgField::buildKernel(const std::string &file,
     props["defines/Real"] = "double";
 #endif
     props["defines/TILE_SIZE"] = tileSize_;
+    // Physics-fixed variable count and the local-array capacity caps
+    // (unlike N_q/N_modes these never vary at runtime, so they are JIT
+    // defines like TILE_SIZE): the OKL kernels size their thread-local
+    // arrays with them. Sources: src/common/Constants.hpp.
+    props["defines/N_VARS"]     = kNumVars2D;
+    props["defines/NQ_MAX"]     = kMaxQuadPts1D;
+    props["defines/NQ2_MAX"]    = kMaxQuadPts2D;
+    props["defines/NMODES_MAX"] = kMaxModes;
     // JIT define selecting the Riemann flux family. The preprocessor
     // removes the unused branches, so the compiled binary contains no
     // runtime flux-type branch (see surface_integral.okl).

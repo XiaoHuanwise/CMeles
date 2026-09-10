@@ -21,6 +21,11 @@
 
 namespace cmeles {
 
+/// @brief Default tile size for the `@tile(TILE_SIZE, @outer, @inner)`
+///        batching of every CMeles OKL kernel; injected as the `TILE_SIZE`
+///        JIT define at the kernel-build sites.
+inline constexpr int DefaultTileSize = 256;
+
 /// @brief Apply the JIT settings shared by all CMeles device kernels.
 /// @param props  Kernel properties under construction (modified in place).
 /// @param device Target device (its mode selects the CPU/GPU handling).

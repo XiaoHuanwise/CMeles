@@ -72,6 +72,9 @@ static occa::kernel buildLlfKernel(occa::device &device, int tileSize,
     props["defines/Real"] = "double";
 #endif
     props["defines/TILE_SIZE"] = tileSize;
+    // llf.okl sizes its thread-local state arrays with N_VARS (see
+    // src/common/Constants.hpp).
+    props["defines/N_VARS"] = kNumVars2D;
     cmeles::finaliseKernelProps(props, device);
     return device.buildKernel(oklDir + "/llf.okl", "llfFlux", props);
 }
@@ -307,7 +310,8 @@ static bool runDeviceTest(const std::string &mode, occa::json props,
     // and to <cmath> via the serial/include_std property on CPU backends).
     occa::kernel kernel;
     try {
-        kernel = buildLlfKernel(device, 256, std::string(OCCA_OKL_DIR));
+        kernel = buildLlfKernel(device, cmeles::DefaultTileSize,
+                                std::string(OCCA_OKL_DIR));
     } catch (const std::exception &e) {
         std::cout << "  (FAILED " << mode << ": kernel build failed — "
                   << e.what() << ")\n";

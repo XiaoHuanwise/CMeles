@@ -25,7 +25,7 @@
 
         for (int var = 0; var < N_vars; ++var) {
             // b[m] = sum_q lambdaWJ[q] * V2D[q][m] * freeState[var]
-            Real b[64];
+            Real b[NMODES_MAX];
             for (int m = 0; m < N_modes; ++m) {
                 Real acc = 0.0;
                 for (int q = 0; q < Nq2; ++q) {

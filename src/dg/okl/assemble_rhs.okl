@@ -20,8 +20,9 @@
 //
 // Minv is the pre-computed inverse mass matrix of each element,
 // $M^{-1}$ with $M = V^T diag(Lambda_wJ) V$, stored element-major and
-// row-major per element. The gather buffer uses a compile-time stride of
-// 16 (N_modes <= 16; see the cap table in docs/tech_docs/occa.md).
+// row-major per element. The gather buffer is sized [N_VARS][NMODES_MAX]
+// (JIT defines from src/common/Constants.hpp; see the cap table in
+// docs/tech_docs/occa.md).
 // See docs/tech_docs/governed_equations_and_DG_field.md, Section (四).
 
 @kernel void assembleRHS(const int N_elem, const int N_vars, const int N_modes,
@@ -33,11 +34,11 @@
         const int eBase = elem * N_vars * N_modes;
         const int mBase = elem * N_modes * N_modes;
 
-        // In-place surface gather (thread-local, fixed stride 16).
-        Real g[4 * 16];
+        // In-place surface gather (thread-local, row-major [var][mode]).
+        Real g[N_VARS][NMODES_MAX];
         for (int var = 0; var < N_vars; ++var) {
             for (int l = 0; l < N_modes; ++l) {
-                g[var * 16 + l] = 0.0;
+                g[var][l] = 0.0;
             }
         }
         for (int f = 0; f < 4; ++f) {
@@ -48,7 +49,7 @@
                     // This element is the left element: + side 0.
                     for (int var = 0; var < N_vars; ++var) {
                         for (int l = 0; l < N_modes; ++l) {
-                            g[var * 16 + l] +=
+                            g[var][l] +=
                                 faceFlux[((F * N_vars + var) * 2 + 0) *
                                              N_modes +
                                          l];
@@ -58,7 +59,7 @@
                     // This element is the right element: - side 1.
                     for (int var = 0; var < N_vars; ++var) {
                         for (int l = 0; l < N_modes; ++l) {
-                            g[var * 16 + l] -=
+                            g[var][l] -=
                                 faceFlux[((F * N_vars + var) * 2 + 1) *
                                              N_modes +
                                          l];
@@ -75,7 +76,7 @@
                 for (int mp = 0; mp < N_modes; ++mp) {
                     acc +=
                         Minv[mBase + l * N_modes + mp] *
-                        (R_vol[eBase + var * N_modes + mp] - g[var * 16 + mp]);
+                        (R_vol[eBase + var * N_modes + mp] - g[var][mp]);
                 }
                 res[eBase + var * N_modes + l] = acc;
             }

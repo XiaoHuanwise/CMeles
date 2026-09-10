@@ -63,8 +63,8 @@
         Real lam        = (Real)0;
         const int uBase = elem * N_vars * N_modes;
         for (int q = 0; q < Nq2; ++q) {
-            Real qv[4];
-            for (int var = 0; var < 4; ++var) {
+            Real qv[N_VARS];
+            for (int var = 0; var < N_VARS; ++var) {
                 Real acc        = 0.0;
                 const int uOff  = uBase + var * N_modes;
                 const int vOffQ = q * N_modes;

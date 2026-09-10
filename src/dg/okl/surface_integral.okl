@@ -62,12 +62,12 @@
             const Real nUy = faceN[F * 2 + 1] / ((Real)2 * faceJ[F]);
 
             // Pass 1: physical flux at every face quadrature point, stored
-            // locally (N_q x 4; the buffer is sized for N_q <= 16).
-            Real fp[16 * 4];
+            // locally, row-major [quad point][var] (N_q <= NQ_MAX).
+            Real fp[NQ_MAX][N_VARS];
             for (int i = 0; i < N_q; ++i) {
                 // Interpolate left state at face point t_i.
-                Real qL[4];
-                for (int var = 0; var < 4; ++var) {
+                Real qL[N_VARS];
+                for (int var = 0; var < N_VARS; ++var) {
                     Real acc = 0.0;
                     const int vBase =
                         (0 * 4 + fL) * (N_q * N_modes) + i * N_modes;
@@ -79,9 +79,9 @@
                 }
 
                 // Interpolate right state; boundary faces use the free-stream state.
-                Real qR[4];
+                Real qR[N_VARS];
                 if (KR >= 0) {
-                    for (int var = 0; var < 4; ++var) {
+                    for (int var = 0; var < N_VARS; ++var) {
                         Real acc = 0.0;
                         // Right state interpolated with Vface[side=1][fR]:
                         // faceRefMapRight is keyed by the *right* element's own
@@ -95,15 +95,15 @@
                         qR[var] = acc;
                     }
                 } else {
-                    for (int var = 0; var < 4; ++var) {
+                    for (int var = 0; var < N_VARS; ++var) {
                         qR[var] = freeState[var];
                     }
                 }
 
                 // Numerical flux in physical space (rotate -> 1-D flux -> rotate
                 // back). The flux family is selected at compile time via FLUX_TYPE.
-                Real fluxPhys[4];
-                Real qLr[4], qRr[4], fluxLoc[4];
+                Real fluxPhys[N_VARS];
+                Real qLr[N_VARS], qRr[N_VARS], fluxLoc[N_VARS];
                 rotate_state(qL, nUx, nUy, qLr);
                 rotate_state(qR, nUx, nUy, qRr);
 
@@ -127,8 +127,8 @@
 
                 rotate_flux_back(fluxLoc, nUx, nUy, fluxPhys);
 
-                for (int var = 0; var < 4; ++var) {
-                    fp[i * 4 + var] = fluxPhys[var];
+                for (int var = 0; var < N_VARS; ++var) {
+                    fp[i][var] = fluxPhys[var];
                 }
             }
 
@@ -154,7 +154,7 @@
                     Real accR        = 0.0;
                     for (int i = 0; i < N_q; ++i) {
                         const Real wJ = faceW[i] * faceJ[F];
-                        const Real fv = fp[i * 4 + var];
+                        const Real fv = fp[i][var];
                         accL += wJ * fv * Vface[vBaseL + i * N_modes];
                         accR += wJ * fv * Vface[vBaseR + i * N_modes];
                     }

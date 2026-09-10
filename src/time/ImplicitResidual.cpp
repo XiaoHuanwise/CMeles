@@ -22,7 +22,7 @@ TemporalResidual::TemporalResidual(occa::device &device,
 #else
     props["defines/Real"] = "double";
 #endif
-    props["defines/TILE_SIZE"] = 256;
+    props["defines/TILE_SIZE"] = cmeles::DefaultTileSize;
     cmeles::finaliseKernelProps(props, device_);
     vecCombine4_ =
         device_.buildKernel(oklDir_ + "/time_update.okl", "vecCombine4", props);

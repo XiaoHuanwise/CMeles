@@ -38,10 +38,11 @@
                             const Real gamma, Real *R_vol) {
     for (int elem = 0; elem < N_elem; ++elem;
          @tile(TILE_SIZE, @outer, @inner)) {
-        // Local arrays: quadrature-point conserved values (max 4 vars), fluxes.
-        Real qval[4][256];
-        Real Hr[4][256];
-        Real Hs[4][256];
+        // Local arrays: quadrature-point conserved values, fluxes. Caps are
+        // the JIT defines from src/common/Constants.hpp (NQ2_MAX = N_q^2).
+        Real qval[N_VARS][NQ2_MAX];
+        Real Hr[N_VARS][NQ2_MAX];
+        Real Hs[N_VARS][NQ2_MAX];
 
         // --- Step 1: modal -> nodal (quadrature-point values) ---
         // qval[var][q] = sum_m V2D[q][m] * u[elem][var][m]

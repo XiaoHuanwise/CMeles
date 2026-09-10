@@ -32,6 +32,8 @@
 #include <memory>
 #include <string>
 
+#include "common/Constants.hpp"
+#include "common/KernelProps.hpp"
 #include "common/Types.hpp"
 #include "config/Config.hpp"
 #include "core/DeviceMemoryManager.hpp"
@@ -198,7 +200,7 @@ private:
     occa::device &device_;
     DeviceMemoryManager &mem_;
     std::string oklDir_;
-    int tileSize_ = 256;
+    int tileSize_ = cmeles::DefaultTileSize;
 
     int N_vars_  = kNumVars2D;
     int N_modes_ = 0;
