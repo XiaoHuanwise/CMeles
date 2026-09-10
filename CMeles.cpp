@@ -1,9 +1,9 @@
 /// @file CMeles.cpp
 /// @brief Program entry point: CMeles <config.toml>.
 ///
-/// Full argument parsing, HDF5 output and checkpointing belong to the I/O
-/// module (docs/tech_docs/io_module.md) and are not implemented in this
-/// stage; the minimal CLI takes the configuration file path.
+/// HDF5 output (and checkpointing) is controlled by the [output] section
+/// of the configuration file (docs/tech_docs/io_module.md); the CLI takes
+/// the configuration file path.
 
 #include <iostream>
 #include <string>

@@ -2,6 +2,14 @@
 
 本文档描述 CMeles 中程序的输入（TOML 配置文件解析与命令行参数处理）和输出（HDF5 格式流场数据写入）模块的架构设计、数据格式与代码实现方案。
 
+> **实现状态（v1.1）**：HDF5 输出已实现，代码位于 `src/io/`（`HDF5Writer`、`SolutionWriter`、`CheckpointWriter`、`FieldOutput`、`CheckpointConvert`）与 `tools/CMelesConvert.cpp`，测试见 `ctest/io/test_hdf5_output.cpp`。要点与初版设计的差异：
+>
+> - **计算数据布局**：实际计算状态 `DgField::o_u()` 是模态系数，布局 `[elem][var][mode]`（EVM），而非下文历史版本假设的积分点 AoS `QPoint`。策略 A 输出前在主机端做一次模态→积分点的 Vandermonde 投影 $u(\xi_q) = \sum_m \hat u_m \phi_m(\xi_q)$（即 `DgField::setInitialConditionNodal` L2 投影的逆过程），随后按物理量拆分 SoA 写出。
+> - **输出默认关闭**：`[output] enable = false`（默认），关闭时求解器不构造输出器、不建目录、零文件副作用；现有测试均不受影响。
+> - **输出变量**：固定写出 7 个数据集——4 个守恒变量 `rho, rho_u, rho_v, E` 与 3 个派生原始变量 `u, v, p`（`format`、`variables` 选择键未实现，预留扩展）。
+> - **同步输出**：输出在时间步间同步执行（毫秒级、每 interval 步一次），异步流水线按 profiling 结果另议。
+> - **坐标源**：积分点物理坐标由 `quadraturePhysicalCoords`（`src/dg/QuadratureCoords.{hpp,cpp}`）提供，展平顺序 $k = e \cdot N_q^2 + q$。
+
 ---
 
 ## 一、读入模块：TOML 配置解析
@@ -128,12 +136,13 @@ v = 0.0
 p = 1.0
 
 [output]
+enable = false            # 总开关：false（默认）时不产生任何文件
 strategy = "direct"       # 输出策略："direct" (策略 A) | "checkpoint" (策略 B)
-format = "h5"             # 输出格式（当前仅支持 HDF5）
-interval = 100            # 每隔 N 个时间步输出一次
-directory = "./results"   # 输出目录（可被命令行 -o 覆盖）
-variables = ["rho", "u", "v", "p", "E"]  # 要输出的变量列表
+interval = 100            # 每隔 N 个时间步输出一次（enable 时须 >= 1）
+directory = "./results"   # 输出目录（不存在则自动创建）
 ```
+
+> 注：`format` 与 `variables` 键未实现（当前仅 HDF5 一种格式、总是全量输出 7 个物理量），预留为未来扩展。`enable = true` 时输出时机为：初始场（step 0）+ 每 `interval` 步 + 终态（与最后一次间隔输出重合时去重）。
 
 ### 1.4 配置结构体设计
 
@@ -269,18 +278,18 @@ CMeles 使用 [HighFive](https://github.com/BlueBrain/HighFive) 库将流场计�
 
 ### 2.1 模块架构
 
-输出模块的核心职责是：在指定的输出时间步，将 DG 场的计算数据持久化到 HDF5 文件。根据配置选择的策略，输出内容可以是经过 AoS→SoA 转换的积分点数据（策略 A），也可以是未经转换的模态系数检查点（策略 B）。图 1 描述了策略 A 从 AoS 计算格式到 SoA 输出格式的转换关系：
+输出模块的核心职责是：在指定的输出时间步，将 DG 场的计算数据持久化到 HDF5 文件。计算状态是**模态系数**（布局 `[elem][var][mode]`，EVM）：策略 A 在主机端将其投影到积分点并按物理量拆分 SoA 写出；策略 B 直接落盘原始模态系数，转换推迟到离线工具。图 1 描述策略 A 从模态计算格式到 SoA 输出格式的转换关系：
 
 ```
-计算阶段 (AoS, elem-major)             HDF5 文件结构 (SoA)
+计算阶段 (modal, EVM)                 HDF5 文件结构 (SoA)
 ┌──────────────────────────┐        ┌──────────────────────┐
-│ 单元0: [q0, q1, ..., qNq]│        │ /rho   (Dataset)     │
-│ 单元1: [q0, q1, ..., qNq]│  转换  │ /rho_u (Dataset)     │
-│ 单元2: [q0, q1, ..., qNq]│ ────▶  │ /rho_v (Dataset)     │
-│ ...                      │        │ /E     (Dataset)     │
-│                          │        │ /time  (Attribute)   │
-│ 每个 q 包含:             │        │ /step  (Attribute)   │
-│  (ρ, ρu, ρv, E)          │        │ /mesh/ (Group)       │
+│ 单元0: [û⁰₀..û⁰ₘ û¹₀....]│        │ /rho   (Dataset)     │
+│ 单元1: ...                │ V·û    │ /rho_u (Dataset)     │
+│ 单元2: ...                │ ────▶  │ /rho_v (Dataset)     │
+│ ...                      │ 投影   │ /E /u /v /p          │
+│ [elem][var][mode]        │        │ /time  (Attribute)   │
+│                          │        │ /step  (Attribute)   │
+│                          │        │ /mesh/ (Group)       │
 │                          │        │   /mesh/x            │
 └──────────────────────────┘        │   /mesh/y            │
                                     └──────────────────────┘
@@ -288,89 +297,46 @@ CMeles 使用 [HighFive](https://github.com/BlueBrain/HighFive) 库将流场计�
 
 #### 设计要点
 
-- **AoS → SoA 转换**：计算阶段采用单元主序的 AoS（Array of Structures）存储 $(e, q) \mapsto (\rho, \rho u, \rho v, E)$，保证 OCCA 核函数对同一积分点上所有变量的合并访问友好。输出阶段将 AoS 转换为 SoA——每个物理量提取为独立的 `std::vector<double>`，再写入对应的 HDF5 Dataset。转换与 HDF5 写入可合并为一次遍历，避免额外的中间缓冲。
-- **元数据以 Attribute 形式附加**：将当前物理时间、时间步数等标量信息作为 Group 或 File 级别的 Attribute 写入，方便后处理和可视化工具读取。
-- **OCCA 设备内存**：GPU 计算时，需先将 OCCA 设备内存通过 `occa::memory::copyTo` 拷贝到主机端，再执行 AoS → SoA 转换和写入。
+- **模态 → 积分点投影 + SoA 拆分**：输出阶段先把设备端模态系数拷回主机，逐单元逐变量计算 $u(\xi_q) = \sum_m \hat u_m \phi_m(\xi_q)$（Vandermonde 矩阵 $V_{qm} = \phi_m(\xi_q)$ 一次 GEMV），再按物理量拆分为独立数组和派生的原始变量（$u = \rho u/\rho$、$p = (\gamma-1)(E - \tfrac12\rho|\vec u|^2)$），写入对应 HDF5 Dataset。
+- **元数据以 Attribute 形式附加**：当前物理时间、时间步数等标量信息作为 File 级 Attribute 写入，方便后处理工具读取。
+- **OCCA 设备内存**：GPU 计算时需先取回主机。统一使用 `occa::memory::copyTo`（在统一与分离内存后端均有效）；注意 `DeviceMemoryManager::copyToHost` 在统一内存后端是 no-op，不能用于填充输出器自有缓冲。
 
-### 2.2 数据布局：AoS 计算格式与 SoA 输出格式
+### 2.2 数据布局：模态计算格式与 SoA 输出格式
 
-CMeles 采用**双格式策略**：计算阶段使用 AoS（Array of Structures）以优化核函数访存，输出阶段转换为 SoA（Structure of Arrays）以便后处理。
+CMeles 采用**双格式策略**：计算阶段使用单元主序的模态系数（EVM），输出阶段转换为积分点上的 SoA（Structure of Arrays）以便后处理。
 
-#### AoS：计算格式（单元主序，elem-major）
+#### 模态系数：计算格式（`[elem][var][mode]`，EVM）
 
-DG 核函数在每个积分点上需要同时访问所有守恒变量 $(\rho, \rho u, \rho v, E)$ 以计算通量。AoS 将同一积分点上的所有变量打包为结构体，同一单元内积分点连续排列：
-
-```
-单元 0: [s₀, s₁, ..., s_{Nq-1}]
-单元 1: [s₀, s₁, ..., s_{Nq-1}]
-...
-单元 Ne-1: [s₀, s₁, ..., s_{Nq-1}]
-
-其中 s_q = (ρ_q, ρu_q, ρv_q, E_q) 为单个积分点上的守恒变量结构体
-```
-
-积分点 $q$ 在单元 $e$ 中的展平索引为 $k = e \cdot N_q + q$，同一积分点上各变量在内存中相邻，对 OCCA 核函数的合并加载（coalesced access）有利。
-
-```cpp
-/// AoS 计算格式：每积分点的守恒变量打包
-struct alignas(32) QPoint {
-    double rho;
-    double rho_u;
-    double rho_v;
-    double E;
-};
-
-/// 所有积分点的 AoS 数组，长度 N_tot = N_e * N_q
-std::vector<QPoint> q_aos;
-```
+`DgField::o_u()` 按单元主序存储每个单元、每个守恒变量的模态系数 $\hat u^{(m)}_e$（单元 $e$、变量 $m$、模态 $i$），大小 $N_e \cdot N_v \cdot N_{\text{modes}}$，其中 $N_{\text{modes}} = (N+1)(N+2)/2$。该布局与全部 OKL 核函数（体积积分、面通量、装配）一致。
 
 #### SoA：输出格式
 
-后处理工具通常按物理量维度读取（如绘制密度云图时只读取 `rho` 数据集），因此输出时转换为 SoA——每个物理量提取为独立的连续数组：
+后处理工具通常按物理量维度读取（如绘制密度云图时只读取 `rho` 数据集），因此输出时每个物理量写成独立的一维 Dataset：
 
-| 对比维度     | AoS（计算用）              | SoA（输出用）                |
-| ------------ | -------------------------- | ---------------------------- |
-| 核函数访存   | 合并访问，cache 友好       | 跨步读取，效率低             |
-| 访问单物理量 | 跨步读取，cache 效率低     | 连续读取，cache 完全利用     |
-| 输出灵活性   | 必须写入整个结构体         | 可按需选择性地写入部分物理量 |
-| HDF5 存储    | 复合数据类型，工具兼容性差 | 简单数组，所有 HDF5 工具通用 |
+| 对比维度     | 模态（计算用）            | SoA（输出用）                |
+| ------------ | ------------------------- | ---------------------------- |
+| 核函数访存   | EVM 连续，kernel 原生布局 | 跨步读取，不用于计算        |
+| 访问单物理量 | 跨步读取                  | 连续读取，cache 完全利用     |
+| 输出灵活性   | 必须整体转换              | 每个物理量独立数据集         |
+| HDF5 存储    | 需要布局知识才能解读      | 简单数组，所有 HDF5 工具通用 |
 
-设网格包含 $N_e$ 个单元，每个单元有 $N_q$ 个积分点，$N_{\text{tot}} = N_e \times N_q$。转换为 SoA 后，各物理量的内存布局为：
+设网格包含 $N_e$ 个单元、每单元 $N_q^2$ 个体积积分点，$N_{\text{tot}} = N_e \times N_q^2$。投影与拆分在一次主机端遍历中完成：
+
+$$ u^{(m)}_e(\xi_q) = \sum_{i=0}^{N_{\text{modes}}-1} \hat u^{(m)}_{e,i} \, \phi_i(\xi_q) = (V \hat u^{(m)}_e)_q , $$
+
+其中 $V \in \mathbb{R}^{N_q^2 \times N_{\text{modes}}}$ 是 `BasisFunctions2D::vandermonde()`，投影即 `DgField::setInitialConditionNodal`（nodal→modal L2 投影）的逆过程。随后派生原始变量并按 $k = e \cdot N_q^2 + q$ 展平为各物理量的连续数组：
 
 ```
-rho   : [ρ₀,    ρ₁,    ..., ρ_{Ntot-1}   ]  ← 连续存储，Ntot 个 double
-rho_u : [ρu₀,   ρu₁,   ..., ρu_{Ntot-1}  ]  ← 连续存储，Ntot 个 double
-rho_v : [ρv₀,   ρv₁,   ..., ρv_{Ntot-1}  ]  ← 连续存储，Ntot 个 double
-E     : [E₀,    E₁,    ..., E_{Ntot-1}   ]  ← 连续存储，Ntot 个 double
+rho   : [ρ₀,    ρ₁,    ..., ρ_{Ntot-1}   ]  ← 连续存储，Ntot 个 Real
+rho_u : [ρu₀,   ρu₁,   ..., ρu_{Ntot-1}  ]
+rho_v : [ρv₀,   ρv₁,   ..., ρv_{Ntot-1}  ]
+E     : [E₀,    E₁,    ..., E_{Ntot-1}   ]
+u, v, p : 由守恒变量派生的原始变量数组
 ```
 
-SoA 的序列顺序与计算阶段的展平索引 $k = e \cdot N_q + q$ 保持一致，因此输出的 HDF5 坐标数据集和流场数据集的元素是一一对应的。
+SoA 的展平顺序与积分点坐标数据集（`mesh/x`、`mesh/y`，来自 `quadraturePhysicalCoords`）的行序一一对应。
 
-#### AoS → SoA 转换实现
-
-转换在 HDF5 写入前完成，与写入遍历合并，一次遍历中同时完成数据重排和写入：
-
-```cpp
-/// AoS → SoA 转换并写入 HDF5
-void write_aos_as_soa(HDF5Writer& writer, const std::vector<QPoint>& q_aos, size_t N_tot)
-{
-    std::vector<double> rho(N_tot), rho_u(N_tot), rho_v(N_tot), E(N_tot);
-
-    for (size_t k = 0; k < N_tot; ++k) {
-        rho[k]   = q_aos[k].rho;
-        rho_u[k] = q_aos[k].rho_u;
-        rho_v[k] = q_aos[k].rho_v;
-        E[k]     = q_aos[k].E;
-    }
-
-    writer.write_dataset("rho",   rho);
-    writer.write_dataset("rho_u", rho_u);
-    writer.write_dataset("rho_v", rho_v);
-    writer.write_dataset("E",     E);
-}
-```
-
-> **设计取舍**：AoS → SoA 转换引入了 $4 \times N_{\text{tot}} \times 8$ 字节的额外内存和一次全量遍历。对于典型问题规模（$10^4 \sim 10^6$ 积分点），额外开销在数 MB 至数十 MB 量级，完全可接受。若后续 profiling 显示转换成为瓶颈，可优化为分块流水线（chunked pipeline），将 AoS → SoA 转换与 HDF5 异步写入重叠执行。
+> **设计取舍**：投影 + SoA 拆分引入 $7 \times N_{\text{tot}}$ 个 `Real` 的额外主机内存与一次全量遍历，对典型问题规模（$10^4 \sim 10^6$ 积分点）在数 MB 至数十 MB 量级，每 interval 步发生一次，完全可接受。
 
 ### 2.3 HDF5 文件格式规范
 
@@ -389,25 +355,27 @@ void write_aos_as_soa(HDF5Writer& writer, const std::vector<QPoint>& q_aos, size
 ├── rho_u: Dataset<float64> (N_tot,)    x-动量
 ├── rho_v: Dataset<float64> (N_tot,)    y-动量
 ├── E:     Dataset<float64> (N_tot,)    总能量
-├── p:     Dataset<float64> (N_tot,)    压力（如需要）
+├── u:     Dataset<float64> (N_tot,)    x-速度（派生）
+├── v:     Dataset<float64> (N_tot,)    y-速度（派生）
+├── p:     Dataset<float64> (N_tot,)    压力（派生）
 └── mesh/                   (Group)
     ├── x:  Dataset<float64> (N_tot,)   x 坐标
     └── y:  Dataset<float64> (N_tot,)   y 坐标
 ```
 
+（`float64` 在 `USE_FLOAT_PRECISION` 构建下为 `float32`，即项目类型 `Real`。）
+
 #### 数据集维度说明
 
-每个 Dataset 的形状为 $(N_{\text{tot}},)$，即一维数组。对于二维网格，计算阶段采用单元主序（elem-major）的 AoS 形式存储，展平索引为：
+每个 Dataset 的形状为 $(N_{\text{tot}},)$，即一维数组，$N_{\text{tot}} = N_e \times N_q^2$，展平索引为：
 
 $$
-k_{\text{AoS}} = e \cdot N_q + q
+k = e \cdot N_q^2 + q
 $$
 
-其中 $e$ 为单元编号，$q$ 为单元内积分点编号。此展平方式保证同一单元内不同积分点的数据在内存中连续，与 OCCA 核函数 `@tile` 的 elem 分块访问模式一致。
+其中 $e$ 为单元编号，$q$ 为单元内积分点编号（$q = j N_q + i$，列主序网格序）。守恒变量由模态系数经 $V \hat u$ 投影得到，原始变量在主机端派生；所有数据集与 `/mesh/x`、`/mesh/y` 的坐标序列一一对应。
 
-输出时，将 AoS 布局**转换为 SoA**（Structure of Arrays）：每个物理量提取为独立的一维 Dataset，总长度为 $N_{\text{tot}}$。AoS → SoA 的转换在输出函数中完成，转换后的数据顺序与计算阶段的展平索引 $k_{\text{AoS}}$ 保持一致，因此 `/mesh/x` 和 `/mesh/y` 数据集中的坐标序列与流场数据的积分点一一对应。
-
-> **设计决策**：选择一维 Dataset 而非二维 Dataset 的原因在于：（1）避免了 VDS（Virtual Dataset）或 chunking 的复杂性；（2）DG 方法中积分点并非均匀网格节点的简单子集，维护严格的二维拓扑关系在后处理中并不直接有用；（3）简化了写入逻辑，`write` 调用可直接传入 `std::vector<T>::data()`，无数据重排开销。
+> **设计决策**：选择一维 Dataset 而非二维 Dataset 的原因在于：（1）避免了 VDS（Virtual Dataset）或 chunking 的复杂性；（2）DG 方法中积分点并非均匀网格节点的简单子集，维护严格的二维拓扑关系在后处理中并不直接有用；（3）简化了写入逻辑，`write` 调用可直接传入连续缓冲，无数据重排开销。
 
 > **注意**：上述文件格式对应策略 A（直接 SoA 输出）。策略 B（检查点 + 后转换）的文件格式见 [2.4 节策略 B](#策略-b检查点--后转换)，其输出采用模态系数二维数据集 $(N_e, N_{\text{modes}})$ 的布局。两种策略输出的 HDF5 结构不同，不可互换。
 
@@ -426,7 +394,7 @@ CMeles 提供两种输出策略以适应不同的使用场景，用户可通过�
 | **文件大小** | $N_{\text{vars}} \times N_{\text{tot}}$ 个 `double` | $N_{\text{vars}} \times N_e \times N_{\text{modes}}$ 个 `double` |
 | **适用场景** | 小/中规模问题，需要即时可视化 | 大规模/长时间计算，频繁输出检查点 |
 
-> **备注**：$N_{\text{tot}} = N_e \times N_q$ 为总积分点数，$N_{\text{modes}} = (p+1)^d$ 为每个单元每个变量的模态系数个数。当多项式阶数 $p$ 较高时，积分点数 $N_q \approx (p+2)^d$ 显著超过模态数 $N_{\text{modes}}$，策略 B 的存储量仅为策略 A 的 $N_{\text{modes}} / N_q \approx \left(\frac{p+1}{p+2}\right)^d$，高阶下优势突出。
+> **备注**：$N_{\text{tot}} = N_e \times N_q^2$ 为总积分点数，$N_{\text{modes}} = (N+1)(N+2)/2$ 为每个单元每个变量的模态系数个数。当多项式阶数 $N$ 较高时，积分点数 $N_q^2 \approx (N{+}2)^2$ 显著超过模态数 $N_{\text{modes}}$，策略 B 的存储量仅为策略 A 的 $N_{\text{modes}} / N_q^2 \approx \left(\frac{N+1}{N+2}\right)^2$，高阶下优势突出。
 
 #### 策略 A：直接 SoA 输出
 
@@ -498,50 +466,30 @@ private:
 };
 ```
 
-##### 典型输出流程
+##### 典型输出流程（实现见 `src/io/SolutionWriter.cpp`）
 
 ```cpp
-void write_solution(
-    HDF5Writer& writer,
-    const std::vector<QPoint>& q_aos,  // AoS 计算格式
-    int step,
-    double time,
-    int order)
+void SolutionWriter::write(long step, Real time)
 {
-    // Step 1: 写入元数据
-    writer.write_attribute("time", time);
-    writer.write_attribute("step", step);
-    writer.write_attribute("order", order);
+    // Step 1: 设备 -> 主机拷贝模态系数（[elem][var][mode]，EVM）。
+    //         平 occa::memory::copyTo：统一与分离内存后端均有效
+    //         （DeviceMemoryManager::copyToHost 在统一后端是 no-op）。
+    field_.o_u().copyTo(modal_.data(), nEvm);
 
-    // Step 2: AoS → SoA 转换并写入（复用 2.2 节 write_aos_as_soa）
-    write_aos_as_soa(writer, q_aos, q_aos.size());
-
-    // Step 3: 刷新缓冲区
-    writer.flush();
+    // Step 2: 逐单元逐变量投影到积分点并拆分 SoA：
+    //         nodal = V * u_hat（V 为 Vandermonde，见 2.2 节），
+    //         随后派生 u = rho_u/rho、v = rho_v/rho、
+    //         p = (gamma-1)(E - rho|u|^2/2)。
+    // Step 3: 写元数据属性 time/step/order + 7 个 SoA 数据集
+    //         + mesh/x、mesh/y，最后 flush。
 }
 ```
 
 ##### 与 OCCA GPU 数据的对接
 
-当数据驻留在 GPU 设备内存（`occa::memory` 对象）中时，AoS 格式的 `QPoint` 数组驻留在设备端。输出时需先拷贝到主机，再执行 AoS → SoA 转换并写入：
+当数据驻留在 GPU 设备内存（`occa::memory` 对象）中时，输出时先取回主机再投影写入（上节 Step 1）。注意统一使用 `occa::memory::copyTo`：`DeviceMemoryManager::copyToHost` 在统一内存后端（Serial/OpenMP）是 no-op，不能用于填充输出器自有缓冲。
 
-```cpp
-/// 从设备端 AoS 格式输出：设备 → 主机拷贝 → AoS → SoA 转换 → HDF5 写入
-void write_from_device(
-    HDF5Writer& writer,
-    occa::memory o_q_aos,   // 设备端 QPoint 数组（AoS 格式）
-    size_t N_tot)
-{
-    // Step 1: 设备 → 主机拷贝（AoS 格式）
-    std::vector<QPoint> host_aos(N_tot);
-    o_q_aos.copyTo(host_aos.data());
-
-    // Step 2: AoS → SoA 转换并写入
-    write_aos_as_soa(writer, host_aos, N_tot);
-}
-```
-
-对于多物理量的输出，可并行化拷贝（多个 `occa::memory::copyTo` 调用和 HDF5 写入交替进行，利用异步拷贝和磁盘 I/O 的重叠）。当前阶段优先保证正确性，后续根据 profiling 结果决定是否需要引入异步流水线。
+对于多物理量的输出，可并行化拷贝（多个 `occa::memory::copyTo` 调用和 HDF5 写入交替进行，利用异步拷贝和磁盘 I/O 的重叠）。当前实现为同步输出，后续根据 profiling 结果决定是否需要引入异步流水线。
 
 ##### RAII 与异常安全
 
@@ -575,9 +523,10 @@ results/
 ├── @N_elem: int            (Attribute) 单元总数
 ├── @order: int             (Attribute) 多项式阶数 p
 ├── @N_q: int               (Attribute) 每方向积分点数
+├── @N_modes: int           (Attribute) 每单元每变量模态数 (p+1)(p+2)/2
 ├── @element_type: string   (Attribute) "quad" | "tri"
-├── x: Dataset<float64>     (N_e * N_q,) 所有积分点 x 坐标
-└── y: Dataset<float64>     (N_e * N_q,) 所有积分点 y 坐标
+├── x: Dataset<float64>     (N_e * N_q^2,) 所有积分点 x 坐标
+└── y: Dataset<float64>     (N_e * N_q^2,) 所有积分点 y 坐标
 ```
 
 **检查点文件 `checkpoint_<step>.h5`**：
@@ -586,51 +535,33 @@ results/
 /                           (Root Group)
 ├── @time: double           (Attribute) 当前物理时间
 ├── @step: int              (Attribute) 当前时间步数
+├── @gamma: double          (Attribute) 比热比（离线转换派生原始变量所需）
 ├── rho:   Dataset<float64> (N_e, N_modes)  ρ 模态系数（按单元排列）
 ├── rho_u: Dataset<float64> (N_e, N_modes)  ρu 模态系数
 ├── rho_v: Dataset<float64> (N_e, N_modes)  ρv 模态系数
 └── E:     Dataset<float64> (N_e, N_modes)  E 模态系数
 ```
 
-其中 $N_{\text{modes}} = (p+1)^d$ 为每个单元、每个变量的模态系数个数。数据集的形状为二维 $(N_e, N_{\text{modes}})$：第一维为单元索引，第二维为模态索引。这种二维结构天然匹配计算阶段的 AoS 内存布局——`u[e][mode]` 可直接通过 `createDataSet` + `write_raw` 零拷贝写入。
+其中 $N_{\text{modes}} = (N+1)(N+2)/2$ 为每个单元、每个变量的模态系数个数。数据集的形状为二维 $(N_e, N_{\text{modes}})$：第一维为单元索引，第二维为模态索引。计算状态的 `[elem][var][mode]`（EVM）布局在写出前重排为每变量的行主序二维块，`createDataSet` + `write_raw` 一次写入。相比初版设计补充了 `N_modes` 与 `gamma` 属性——离线转换器重建基函数与派生原始变量时所需。
 
-##### 检查点写入器
+##### 检查点写入器（实现见 `src/io/CheckpointWriter.{hpp,cpp}`）
 
 ```cpp
-/// Lightweight checkpoint writer: dumps modal coefficients directly,
-/// no AoS→SoA conversion, minimal overhead for the computation loop.
-class CheckpointWriter {
+/// Strategy B writer: mesh.h5 (once) + checkpoint_<step>.h5.
+class CheckpointWriter : public OutputWriterBase {
 public:
-    explicit CheckpointWriter(const std::string& filename)
-        : file_(filename, HighFive::File::Overwrite)
-    {}
+    CheckpointWriter(const Config& cfg, const DgField& field);
 
-    void write_attributes(double time, int step) {
-        file_.createAttribute("time", time);
-        file_.createAttribute("step", step);
-    }
+    /// One-time mesh companion file (metadata + quadrature coordinates).
+    void writeMesh();
 
-    /// Write modal coefficients for one variable.
-    /// @param name     Variable name (e.g. "rho", "rho_u")
-    /// @param data     Pointer to host buffer of shape (N_e, N_modes), row-major
-    /// @param N_e      Number of elements
-    /// @param N_modes  Number of modes per element per variable
-    void write_modal_coeffs(const std::string& name,
-                            const double* data,
-                            size_t N_e,
-                            size_t N_modes)
-    {
-        file_.createDataSet<double>(name,
-            HighFive::DataSpace({N_e, N_modes}))
-            .write_raw(data);
-    }
-
-    void flush() { file_.flush(); }
-
-private:
-    HighFive::File file_;
+    /// Dump the raw modal coefficients as (N_e, N_modes) datasets,
+    /// plus time/step/gamma attributes; no projection, no conversion.
+    void write(long step, Real time) override;
 };
 ```
+
+模态系数在写出前由 `[elem][var][mode]`（EVM）重排为每变量的行主序 $(N_e, N_{\text{modes}})$ 块，`createDataSet` + `write_raw` 一次写入，对计算主循环的影响仅一次设备→主机拷贝。
 
 ##### 离线转换器：`CMelesConvert`
 
@@ -646,27 +577,33 @@ $$
 \mathbf{u}_e^{(m)}(\xi_q) = \sum_{i=0}^{N_{\text{modes}}-1} \hat{u}_{e,i}^{(m)} \,\phi_i(\xi_q)
 $$
 
-其中 $\{\phi_i\}$ 为基函数（详见[基函数文档](basis_functions.md)），$\{\xi_q\}$ 为积分点坐标。对所有单元和所有变量完成投影后，得到 AoS 格式的积分点值，再执行 AoS → SoA 转换写入标准输出文件。
+其中 $\{\phi_i\}$ 为基函数（详见[基函数文档](basis_functions.md)），$\{\xi_q\}$ 为积分点坐标。对所有单元和所有变量完成投影后，得到积分点上的守恒变量，再派生原始变量并按 SoA 写入标准输出文件。基函数与积分点规则由 `mesh.h5` 的 `order`/`N_q` 属性重建（`BasisFunctions1D(order, N_q)` + `BasisFunctions2D`），全程不涉及 OCCA 设备上下文。
 
-该工具可在计算完成后对单个检查点文件操作，也可批量处理全部检查点。由于转换不涉及 OCCA 设备上下文，可在无 GPU 的登录节点上独立运行。
+命令行用法（实现见 `tools/CMelesConvert.cpp`，转换核心为 `src/io/CheckpointConvert.cpp` 的 `convertCheckpoint`）：
 
-##### 配置项扩展
+```
+CMelesConvert <directory>                                # 批量：mesh.h5 + checkpoint_*.h5 -> solution_*.h5
+CMelesConvert <mesh.h5> <checkpoint.h5> [-o <out.h5>]    # 单个检查点转换
+```
 
-为支持两种策略，`[output]` 表增加 `strategy` 字段：
+批量模式按文件名顺序处理目录中全部 `checkpoint_<step>.h5`，输出同名 `solution_<step>.h5`。
+
+##### 配置项
+
+`[output]` 表通过 `strategy` 字段选择策略（完整键见 1.3 节）：
 
 ```toml
 [output]
+enable = true
 strategy = "checkpoint"    # 输出策略："direct" (策略 A) | "checkpoint" (策略 B)
-format = "h5"
 interval = 100
 directory = "./results"
-variables = ["rho", "u", "v", "p", "E"]
 ```
 
 - `strategy = "direct"`：采用策略 A，输出文件立即可用，适合中小规模计算
 - `strategy = "checkpoint"`：采用策略 B，输出原始模态系数，适合大规模/频繁输出的场景
 
-当 `strategy` 未指定时，默认使用 `"direct"` 以保持向后兼容。
+当 `strategy` 未指定时，默认使用 `"direct"`。输出策略的运行时分派由 `FieldOutput`（`src/io/FieldOutput.{hpp,cpp}`）完成：它创建输出目录，按策略持有 `SolutionWriter` 或 `CheckpointWriter`（策略 B 同时立即写出一次 `mesh.h5`），并向求解器主循环暴露统一的 `write(step, time)` 边界（抽象基类 `OutputWriterBase`，粗粒度边界用虚函数）。
 
 ### 2.5 未来扩展
 
@@ -687,4 +624,4 @@ variables = ["rho", "u", "v", "p", "E"]
 
 ---
 
-*文档版本: 1.0 | 最后更新: 2026-07-20*
+*文档版本: 1.1 | 最后更新: 2026-09-10*

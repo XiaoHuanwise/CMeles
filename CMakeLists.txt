@@ -71,6 +71,11 @@ target_link_libraries(cmeles_core PUBLIC Eigen3::Eigen)
 find_package(OCCA REQUIRED CONFIG)
 target_link_libraries(cmeles_core PUBLIC OCCA::libocca)
 
+# HDF5 output lives in the io module inside cmeles_core; PUBLIC so the
+# main executable, CMelesConvert and the tests inherit the headers/libs.
+find_package(HighFive REQUIRED CONFIG)
+target_link_libraries(cmeles_core PUBLIC HighFive::HighFive)
+
 # Enable the in-process OpenMP thread-count override ([occa] threads);
 # OCCA's own OpenMP support guarantees the runtime is available.
 find_package(OpenMP QUIET)
@@ -93,15 +98,17 @@ if(CMELES_ENABLE_PCH)
         <occa.hpp>
         <Eigen/Dense>
         <toml.hpp>
-        <exprtk.hpp>)
+        <exprtk.hpp>
+        <highfive/H5File.hpp>)
 endif()
 
 # ---- Main executable ----
 add_executable(CMeles CMeles.cpp)
 target_link_libraries(CMeles PRIVATE cmeles_core)
 
-find_package(HighFive REQUIRED CONFIG)
-target_link_libraries(CMeles PRIVATE HighFive::HighFive)
+# Offline checkpoint converter (host-only: no OKL kernels, no OCCA device).
+add_executable(CMelesConvert tools/CMelesConvert.cpp)
+target_link_libraries(CMelesConvert PRIVATE cmeles_core)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -114,6 +121,6 @@ endif()
 foreach(_tgt CMeles test_blas test_basis test_device_memory test_config
                 test_dg_field test_dg_periodic test_math test_mesh_geometry
                 test_mesh_device_memory test_riemann test_euler_vortex
-                test_vortex_methods test_time_stepper)
+                test_vortex_methods test_time_stepper test_hdf5_output)
     add_dependencies(${_tgt} okl_kernels)
 endforeach()

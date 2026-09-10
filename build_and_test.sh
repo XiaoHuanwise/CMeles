@@ -12,5 +12,15 @@ cmake -B build_float -DUSE_FLOAT_PRECISION=ON
 cmake --build build_float -j 4
 
 # 3) 跑测试
-ctest --test-dir build --output-on-failure        # double：13/13，约 86s
-ctest --test-dir build_float --output-on-failure  # float：13/13，约 65s
+ctest --test-dir build --output-on-failure        # double：14/14，约 80s
+ctest --test-dir build_float --output-on-failure  # float：14/14，约 60s
+
+# 4) 主程序用法：CMeles <config_name.toml>
+#    配置文件各节的键与默认值见 config/default.toml（输出由 [output] 节控制，默认关闭），例如：
+#      ./build/CMeles config/default.toml
+
+# 5) CMelesConvert 用法（离线检查点转换，[output] strategy = "checkpoint" 的配套工具）：
+#    批量：转换目录内 mesh.h5 + 全部 checkpoint_<step>.h5 -> solution_<step>.h5
+#      ./build/CMelesConvert <directory>
+#    单个：转换单个检查点（-o 省略时输出到检查点同目录的 solution_<step>.h5）
+#      ./build/CMelesConvert <mesh.h5> <checkpoint_<step>.h5> [-o <out.h5>]

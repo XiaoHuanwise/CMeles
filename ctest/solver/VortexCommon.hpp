@@ -23,6 +23,7 @@
 #include "config/Config.hpp"
 #include "core/DeviceMemoryManager.hpp"
 #include "dg/DgField.hpp"
+#include "dg/QuadratureCoords.hpp"
 #include "mesh/MeshGeometry.hpp"
 #include "solver/CompressibleFlowSolver.hpp"
 #include "solver/ExprInitialCondition.hpp"

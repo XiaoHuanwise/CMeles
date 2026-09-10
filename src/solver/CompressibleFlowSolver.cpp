@@ -15,6 +15,7 @@
 #endif
 
 #include "ExprInitialCondition.hpp"
+#include "io/FieldOutput.hpp"
 #include "time/StepperFactory.hpp"
 
 namespace solver_detail {
@@ -51,6 +52,7 @@ CompressibleFlowSolver::CompressibleFlowSolver(Config cfg)
 }
 
 CompressibleFlowSolver::~CompressibleFlowSolver() {
+    output_.reset();
     stepper_.reset();
     field_.reset();
     blas_.reset();
@@ -104,6 +106,13 @@ int CompressibleFlowSolver::run() {
     applyInitialCondition();
     device_.finish();
 
+    // Output stays completely dormant unless [output] enable is true.
+    if (cfg_.outputEnable()) {
+        outputInterval_ = cfg_.outputInterval();
+        output_         = std::make_unique<FieldOutput>(cfg_, *field_);
+        output_->write(0, time_);
+    }
+
     std::cout << "CMeles: method=" << stepper_->name()
               << " order=" << stepper_->order()
               << " elems=" << field_->numElements() << " dofs=" << nDof
@@ -135,6 +144,9 @@ int CompressibleFlowSolver::run() {
                       << " — aborting\n";
             return 1;
         }
+        if (output_ && steps_ % outputInterval_ == 0) {
+            output_->write(steps_, time_);
+        }
     }
 
     occa::memory ou = field_->o_u(), ores = field_->o_res();
@@ -144,6 +156,10 @@ int CompressibleFlowSolver::run() {
         std::cout << "CMeles: final residual is not finite after " << steps_
                   << " steps — aborting\n";
         return 1;
+    }
+    // Final state (skipped when the last interval output already covers it).
+    if (output_ && steps_ % outputInterval_ != 0) {
+        output_->write(steps_, time_);
     }
     std::cout << "CMeles: finished t = " << time_ << " in " << steps_
               << " steps, |res|_2 = " << resNorm << "\n";

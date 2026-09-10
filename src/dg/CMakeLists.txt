@@ -2,5 +2,6 @@
 
 target_sources(cmeles_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/DgField.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/QuadratureCoords.cpp
 )
 target_include_directories(cmeles_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -110,6 +110,23 @@ enum class IcType : int {
 /// Throws std::invalid_argument for unknown names.
 IcType parseIcType(const std::string &name);
 
+/// @brief Solution output strategy ([output] section).
+enum class OutputStrategy : int {
+    Direct =
+        0, ///< Strategy A: quadrature-point SoA files, ready for post-processing.
+    Checkpoint =
+        1 ///< Strategy B: modal-coefficient checkpoints + offline conversion.
+};
+
+/// @brief Parse an output-strategy name string into an \p OutputStrategy.
+///
+/// Accepted names (case-insensitive): "direct", "checkpoint". Throws
+/// std::invalid_argument for unknown names.
+OutputStrategy parseOutputStrategy(const std::string &name);
+
+/// @brief Convert an \p OutputStrategy back to its canonical string name.
+const char *outputStrategyName(OutputStrategy t) noexcept;
+
 /// @brief TOML configuration file parser and parameter store.
 class Config {
 public:
@@ -332,6 +349,30 @@ public:
         return ic_symbols_;
     }
 
+    // ---- Output ----
+
+    /// @brief Master switch of the [output] section. When false (the
+    ///        default) the solver produces no files at all.
+    bool outputEnable() const noexcept {
+        return output_enable_;
+    }
+
+    /// @brief Output strategy (see \p OutputStrategy).
+    OutputStrategy outputStrategy() const noexcept {
+        return output_strategy_;
+    }
+
+    /// @brief Number of time steps between two outputs ($\ge 1$ when
+    ///        output is enabled).
+    int outputInterval() const noexcept {
+        return output_interval_;
+    }
+
+    /// @brief Output directory (created if missing when output is enabled).
+    const std::string &outputDirectory() const noexcept {
+        return output_directory_;
+    }
+
 private:
     /// @brief Reset to built-in defaults (used by the default constructor).
     void setDefaults();
@@ -385,4 +426,9 @@ private:
     std::string ic_v_   = "0";
     std::string ic_p_   = "1";
     std::map<std::string, Real> ic_symbols_;
+
+    bool output_enable_             = false;
+    OutputStrategy output_strategy_ = OutputStrategy::Direct;
+    int output_interval_            = 100;
+    std::string output_directory_   = "./results";
 };

@@ -208,6 +208,29 @@ IcType parseIcType(const std::string &name) {
     throw std::invalid_argument("parseIcType: unknown ic name '" + name + "'");
 }
 
+OutputStrategy parseOutputStrategy(const std::string &name) {
+    const std::string key = toLower(name);
+    if (key == "direct") {
+        return OutputStrategy::Direct;
+    }
+    if (key == "checkpoint") {
+        return OutputStrategy::Checkpoint;
+    }
+    throw std::invalid_argument("parseOutputStrategy: unknown strategy name '" +
+                                name + "'");
+}
+
+const char *outputStrategyName(OutputStrategy t) noexcept {
+    switch (t) {
+        case OutputStrategy::Direct:
+            return "direct";
+        case OutputStrategy::Checkpoint:
+            return "checkpoint";
+        default:
+            return "unknown";
+    }
+}
+
 // ============================================================================
 // Config
 // ============================================================================
@@ -257,6 +280,11 @@ void Config::setDefaults() {
     ic_v_    = "0";
     ic_p_    = "1";
     ic_symbols_.clear();
+
+    output_enable_    = false;
+    output_strategy_  = OutputStrategy::Direct;
+    output_interval_  = 100;
+    output_directory_ = "./results";
 }
 
 Config::Config() {
@@ -394,6 +422,19 @@ Config::Config(const std::string &path) {
         }
     }
 
+    // [output]
+    if (const auto it = root.find("output"); it != root.end()) {
+        const auto &tbl = it->second.as_table();
+        output_enable_  = getBool(*tbl, "enable", output_enable_);
+        if (const auto sIt = tbl->find("strategy"); sIt != tbl->end()) {
+            const std::string name =
+                sIt->second.value_or(std::string("direct"));
+            output_strategy_ = parseOutputStrategy(name);
+        }
+        output_interval_  = getInt(*tbl, "interval", output_interval_);
+        output_directory_ = getString(*tbl, "directory", output_directory_);
+    }
+
     // Validation of the time-marching parameters.
     if (time_final_ <= Real(0)) {
         throw std::invalid_argument("Config: t_final must be > 0");
@@ -419,5 +460,9 @@ Config::Config(const std::string &path) {
     }
     if (occa_platform_ < 0 || occa_device_ < 0) {
         throw std::invalid_argument("Config: platform and device must be >= 0");
+    }
+    if (output_enable_ && output_interval_ < 1) {
+        throw std::invalid_argument(
+            "Config: output.interval must be >= 1 when output is enabled");
     }
 }

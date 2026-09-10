@@ -93,3 +93,16 @@ threads = 0               # OpenMP thread count; 0 keeps the OMP_NUM_THREADS
                           # environment default. Ignored by other backends.
 platform = 0              # Platform index (OpenCL / dpcpp multi-platform systems).
 device = 0                # Device index within the platform (also CUDA/HIP id).
+
+# ---- Output ----
+[output]
+enable = false            # Master switch. false (the default) produces no
+                          # files at all; true writes the initial state, every
+                          # `interval` steps and the final state (deduplicated).
+strategy = "direct"       # "direct" (strategy A: quadrature-point SoA files,
+                          # ready for post-processing) | "checkpoint"
+                          # (strategy B: modal-coefficient checkpoints +
+                          # mesh.h5; convert offline with CMelesConvert).
+interval = 100            # Number of time steps between two outputs (>= 1
+                          # when enabled).
+directory = "./results"   # Output directory, created if missing.

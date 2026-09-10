@@ -28,6 +28,8 @@
 #include "dg/DgField.hpp"
 #include "time/StepperBase.hpp"
 
+class FieldOutput;
+
 namespace solver_detail {
 /// Defined in CompressibleFlowSolver.cpp: overrides the OpenMP thread
 /// count (no-op for threads <= 0).
@@ -100,7 +102,12 @@ private:
     std::unique_ptr<DgField> field_;
     std::unique_ptr<StepperBase> stepper_;
 
-    Real time_         = Real(0);
-    int steps_         = 0;
-    int printInterval_ = 100;
+    /// Output facade; null unless [output] enable is true (the default),
+    /// so a default configuration produces no files at all.
+    std::unique_ptr<FieldOutput> output_;
+
+    Real time_          = Real(0);
+    int steps_          = 0;
+    int printInterval_  = 100;
+    int outputInterval_ = 100;
 };
