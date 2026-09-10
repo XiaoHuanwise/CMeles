@@ -8,14 +8,7 @@
 /// density is compared against the analytic translated vortex at the
 /// quadrature points:
 ///
-/// $$
-/// \begin{aligned}
-///   u &= u_\infty - \tfrac{\beta}{2\pi} e^{(1-r^2)/2} (y - y_c), \quad
-///   v = v_\infty + \tfrac{\beta}{2\pi} e^{(1-r^2)/2} (x - x_c), \\
-///   T &= 1 - \tfrac{(\gamma-1)\beta^2}{8\gamma\pi^2} e^{1-r^2}, \quad
-///   \rho = T^{1/(\gamma-1)}, \quad p = \rho^\gamma .
-/// \end{aligned}
-/// $$
+/// $$ \begin{aligned} u &= u_\infty - \tfrac{\beta}{2\pi} e^{(1-r^2)/2} (y - y_c), \quad v = v_\infty + \tfrac{\beta}{2\pi} e^{(1-r^2)/2} (x - x_c), \\ T &= 1 - \tfrac{(\gamma-1)\beta^2}{8\gamma\pi^2} e^{1-r^2}, \quad \rho = T^{1/(\gamma-1)}, \quad p = \rho^\gamma . \end{aligned} $$
 ///
 /// With SSPRK3 (3rd order) and N = 2 (3rd-order space) the observed
 /// convergence order must be ~3 under mesh refinement; the run goes through
@@ -43,8 +36,7 @@
 #include "mesh/MeshGeometry.hpp"
 #include "solver/CompressibleFlowSolver.hpp"
 
-namespace
-{
+namespace {
 /// @brief In single precision the 64x64 run bottoms out on accumulated
 ///        rounding; the refinement study uses two meshes and the drift
 ///        tolerance is scaled accordingly.
@@ -54,8 +46,7 @@ constexpr Real kMassDriftTol =
 
 /// @brief Density of the analytic isentropic vortex at time \p t.
 Real vortexRho(Real x, Real y, Real t, Real gamma, Real beta, Real x0, Real y0,
-               Real uInf, Real vInf)
-{
+               Real uInf, Real vInf) {
     const Real xc = x0 + uInf * t;
     const Real yc = y0 + vInf * t;
     const Real r2 = (x - xc) * (x - xc) + (y - yc) * (y - yc);
@@ -67,8 +58,7 @@ Real vortexRho(Real x, Real y, Real t, Real gamma, Real beta, Real x0, Real y0,
 
 /// @brief Write the vortex configuration for an nx x nx grid of [0,10]^2.
 Config makeVortexConfig(int nx, const std::string &path,
-                        const std::string &occaMode)
-{
+                        const std::string &occaMode) {
     const Real dx = Real(10) / Real(nx);
     std::FILE *f  = std::fopen(path.c_str(), "w");
     std::fprintf(f,
@@ -98,12 +88,10 @@ Config makeVortexConfig(int nx, const std::string &path,
 /// @brief Run the vortex and return the density errors (L1, L2, Linf) at
 ///        T = 2 against the analytic translated vortex.
 bool runVortex(const std::string &scratch, const std::string &mode, int nx,
-               Real *l1, Real *l2, Real *linf, Real *massDrift)
-{
+               Real *l1, Real *l2, Real *linf, Real *massDrift) {
     const Config cfg = makeVortexConfig(nx, scratch, mode);
     CompressibleFlowSolver solver(cfg);
-    if (solver.run() != 0)
-    {
+    if (solver.run() != 0) {
         return false;
     }
 
@@ -118,12 +106,9 @@ bool runVortex(const std::string &scratch, const std::string &mode, int nx,
     std::vector<Real> u(static_cast<std::size_t>(nEvm));
     {
         occa::memory ou = field.o_u();
-        if (solver.mem().hasSeparateMemorySpace())
-        {
+        if (solver.mem().hasSeparateMemorySpace()) {
             solver.mem().copyToHost(ou, u.data(), nEvm);
-        }
-        else
-        {
+        } else {
             const Real *src = ou.ptr<Real>();
             std::memcpy(u.data(), src,
                         static_cast<std::size_t>(nEvm) * sizeof(Real));
@@ -143,8 +128,7 @@ bool runVortex(const std::string &scratch, const std::string &mode, int nx,
 
     Real e1 = Real(0), e2 = Real(0), einf = Real(0);
     Real massNow = Real(0), mass0 = Real(0);
-    for (int e = 0; e < N_elem; ++e)
-    {
+    for (int e = 0; e < N_elem; ++e) {
         Eigen::Map<const VectorXr> rhot(
             u.data() +
                 (static_cast<std::size_t>(e) * field.numVars() + 0) * N_modes,
@@ -157,8 +141,7 @@ bool runVortex(const std::string &scratch, const std::string &mode, int nx,
         const Real x2 = e8(e, 2), y2 = e8(e, 3);
         const Real x3 = e8(e, 4), y3 = e8(e, 5);
         const Real x4 = e8(e, 6), y4 = e8(e, 7);
-        for (int q = 0; q < Nq2; ++q)
-        {
+        for (int q = 0; q < Nq2; ++q) {
             const Real r = qp(q, 0), s = qp(q, 1);
             const Real phi1 = (Real(1) - r) * (Real(1) - s) / Real(4);
             const Real phi2 = (Real(1) + r) * (Real(1) - s) / Real(4);
@@ -184,56 +167,44 @@ bool runVortex(const std::string &scratch, const std::string &mode, int nx,
     return true;
 }
 
-static occa::json tryMakeDevice(const std::string &mode)
-{
-    try
-    {
+static occa::json tryMakeDevice(const std::string &mode) {
+    try {
         occa::json props;
         props["mode"] = mode;
-        if (mode == "OpenCL")
-        {
+        if (mode == "OpenCL") {
             props["platform_id"] = 0;
             props["device_id"]   = 0;
         }
         occa::device dev(props);
-        if (dev.mode() != mode)
-        {
+        if (dev.mode() != mode) {
             dev.free();
             return occa::json();
         }
         dev.free();
         return props;
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception &e) {
         std::cout << "  (skip " << mode << ": " << e.what() << ")\n";
         return occa::json();
     }
 }
 
 /// @brief One coarse vortex run on a specific backend (skip on failure).
-bool runOnBackend(const std::string &mode)
-{
-    if (tryMakeDevice(mode).isNull())
-    {
+bool runOnBackend(const std::string &mode) {
+    if (tryMakeDevice(mode).isNull()) {
         return true;
     }
     std::cout << "\n===== vortex backend [" << mode << "] =====" << std::endl;
-    try
-    {
+    try {
         Real l1, l2, linf, drift;
         if (!runVortex("test_vortex_backend.toml", mode, 16, &l1, &l2, &linf,
-                       &drift))
-        {
+                       &drift)) {
             std::cout << "  (skip " << mode << ": solver failed)\n";
             return true;
         }
         std::cout << "  16x16: L1 = " << l1 << ", L2 = " << l2
                   << ", Linf = " << linf << ", mass drift = " << drift << "\n";
         return l2 < Real(1.0);
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception &e) {
         std::cout << "  (skip " << mode << ": " << e.what() << ")\n";
         return true;
     }
@@ -241,8 +212,7 @@ bool runOnBackend(const std::string &mode)
 
 } // namespace
 
-int main()
-{
+int main() {
     bool ok = true;
 
     std::cout << "Isentropic vortex, SSPRK3, N=2, CFL=0.2, T=2 (Serial)\n";
@@ -251,13 +221,11 @@ int main()
     const int nMeshes   = kSinglePrecision ? 2 : 3;
     std::vector<Real> errors(static_cast<std::size_t>(nMeshes));
     std::vector<Real> hs(static_cast<std::size_t>(nMeshes));
-    for (int k = 0; k < nMeshes; ++k)
-    {
+    for (int k = 0; k < nMeshes; ++k) {
         hs[static_cast<std::size_t>(k)] = Real(10) / Real(meshes[k]);
         Real l1, l2, linf, drift;
         if (!runVortex("test_vortex_scratch.toml", "Serial", meshes[k], &l1,
-                       &l2, &linf, &drift))
-        {
+                       &l2, &linf, &drift)) {
             ok = false;
             break;
         }
@@ -270,8 +238,7 @@ int main()
         prevL2 = l2;
     }
 
-    if (ok)
-    {
+    if (ok) {
         const Real order = std::log(errors[0] / errors[nMeshes - 1]) /
                            std::log(hs[0] / hs[nMeshes - 1]);
         std::cout << "  observed order (L2) = " << order << "\n";

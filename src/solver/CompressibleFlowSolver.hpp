@@ -28,8 +28,7 @@
 #include "dg/DgField.hpp"
 #include "time/StepperBase.hpp"
 
-namespace solver_detail
-{
+namespace solver_detail {
 /// Defined in CompressibleFlowSolver.cpp: overrides the OpenMP thread
 /// count (no-op for threads <= 0).
 void applyOmpThreads(int threads);
@@ -41,8 +40,7 @@ void applyOmpThreads(int threads);
 int runCompressibleFlowSolver(const Config &cfg);
 
 /// @brief Controller for one complete compressible-flow computation.
-class CompressibleFlowSolver
-{
+class CompressibleFlowSolver {
 public:
     /// @param cfg Configuration (kept by value; the field references it).
     explicit CompressibleFlowSolver(Config cfg);
@@ -64,32 +62,25 @@ public:
 
     // ---- Test accessors ----------------------------------------------------
 
-    const Config &config() const
-    {
+    const Config &config() const {
         return cfg_;
     }
-    DgField &field()
-    {
+    DgField &field() {
         return *field_;
     }
-    StepperBase &stepper()
-    {
+    StepperBase &stepper() {
         return *stepper_;
     }
-    occa::device &device()
-    {
+    occa::device &device() {
         return device_;
     }
-    DeviceMemoryManager &mem()
-    {
+    DeviceMemoryManager &mem() {
         return *mem_;
     }
-    Real time() const noexcept
-    {
+    Real time() const noexcept {
         return time_;
     }
-    int stepCount() const noexcept
-    {
+    int stepCount() const noexcept {
         return steps_;
     }
 

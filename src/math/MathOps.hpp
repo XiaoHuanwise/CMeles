@@ -15,8 +15,7 @@
 #include "core/DeviceMemoryManager.hpp"
 
 /// @brief Supplementary OCCA math kernels.
-class MathOps
-{
+class MathOps {
 public:
     MathOps(occa::device &device, DeviceMemoryManager &mem,
             const std::string &oklDir = OCCA_OKL_DIR);
@@ -33,10 +32,10 @@ public:
 private:
     occa::kernel buildKernel(const std::string &file, const std::string &name);
 
-    occa::device        &device_;
+    occa::device &device_;
     DeviceMemoryManager &mem_;
-    std::string          oklDir_;
-    int                  tileSize_ = 256;
+    std::string oklDir_;
+    int tileSize_ = 256;
 
     occa::kernel vmul_;
 };

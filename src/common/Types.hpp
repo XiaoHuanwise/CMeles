@@ -15,10 +15,10 @@
 #include <Eigen/Dense>
 
 #ifdef USE_FLOAT_PRECISION
-using Real = float;
+using Real                 = float;
 constexpr Real RealEpsilon = Real(1e-7);
 #else
-using Real = double;
+using Real                 = double;
 constexpr Real RealEpsilon = Real(1e-15);
 #endif
 

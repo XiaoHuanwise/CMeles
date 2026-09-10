@@ -17,8 +17,7 @@
 ///
 ///  - unified space: `wrapMemory` wraps existing host pointers (zero-copy)
 ///  - separate space: `malloc` allocates device memory (explicit copies needed)
-class DeviceMemoryManager
-{
+class DeviceMemoryManager {
 public:
     /// @brief Construct from a device reference.
     ///
@@ -27,8 +26,7 @@ public:
     explicit DeviceMemoryManager(occa::device &device);
 
     /// @brief Return the underlying `occa::device` reference.
-    occa::device &device()
-    {
+    occa::device &device() {
         return device_;
     }
 
@@ -89,8 +87,7 @@ public:
                       occa::dim_t entries);
 
     /// @brief Whether the backend uses a separate memory space.
-    bool hasSeparateMemorySpace() const
-    {
+    bool hasSeparateMemorySpace() const {
         return has_separate_;
     }
 

@@ -29,8 +29,7 @@
 inline constexpr int kNumVars2D = 4;
 
 /// @brief Primitive variables extracted from a conserved state.
-struct EulerState
-{
+struct EulerState {
     Real rho; ///< Density.
     Real u;   ///< x-velocity (or normal velocity in local frame).
     Real v;   ///< y-velocity (or tangential velocity in local frame).
@@ -55,13 +54,10 @@ void computePhysicalFlux(const Real q[4], Real gamma, Real f[4]);
 
 /// @brief Rotate a conserved state into the local normal-tangent frame.
 ///
-/// The unit normal $\mathbf{n}$ and unit tangent $\mathbf{t} =
-/// (-n_y, n_x)$ define an orthonormal basis. Velocities are projected onto
+/// The unit normal $\mathbf{n}$ and unit tangent $\mathbf{t} = (-n_y, n_x)$ define an orthonormal basis. Velocities are projected onto
 /// it:
 ///
-/// $$
-///   U = u n_x + v n_y, \qquad V = -u n_y + v n_x,
-/// $$
+/// $$ U = u n_x + v n_y, \qquad V = -u n_y + v n_x, $$
 ///
 /// so that $\tilde q = (\rho, \rho U, \rho V, E)$ is the state in the frame
 /// where the face normal is the local $x$ axis (the 1-D Riemann problem).
@@ -78,10 +74,7 @@ void rotateState(const Real q[4], Real n_unit_x, Real n_unit_y, Real q_rot[4]);
 /// Mass and energy components are scalars invariant under rotation; the
 /// momentum components are rotated back with $\mathbf{R}^T$:
 ///
-/// $$
-///   f_{\rho u} = n_x \tilde f_{\rho U} - n_y \tilde f_{\rho V},
-///   \qquad f_{\rho v} = n_y \tilde f_{\rho U} + n_x \tilde f_{\rho V}.
-/// $$
+/// $$ f_{\rho u} = n_x \tilde f_{\rho U} - n_y \tilde f_{\rho V}, \qquad f_{\rho v} = n_y \tilde f_{\rho U} + n_x \tilde f_{\rho V}. $$
 ///
 /// @param flux_rot     Flux in the local frame, size 4.
 /// @param n_unit_x     Unit normal x-component (normalised).
@@ -93,11 +86,7 @@ void rotateFluxBack(const Real flux_rot[4], Real n_unit_x, Real n_unit_y,
 /// @brief Local Lax-Friedrichs (Rusanov) numerical flux in the *local*
 ///        normal-tangent frame.
 ///
-/// $$
-///   \hat F^{LLF}(q_L, q_R) = \frac12 (f_L + f_R)
-///     - \frac12 \alpha (q_R - q_L), \quad
-///   \alpha = \max(|U_L| + a_L, |U_R| + a_R)
-/// $$
+/// $$ \hat F^{LLF}(q_L, q_R) = \frac12 (f_L + f_R) - \frac12 \alpha (q_R - q_L), \quad \alpha = \max(|U_L| + a_L, |U_R| + a_R) $$
 ///
 /// where $U$ is the normal velocity in the local frame and $a$ the sound
 /// speed. Both input states must already be rotated into the local frame.

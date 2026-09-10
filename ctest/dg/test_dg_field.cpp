@@ -38,32 +38,25 @@
 #include "mesh/MeshGeometry.hpp"
 #include "mesh/StructuredMeshGenerator.hpp"
 
-namespace
-{
+namespace {
 const Real tol = Real(1e3) * RealEpsilon;
 
-static occa::json tryMakeDevice(const std::string &mode)
-{
-    try
-    {
+static occa::json tryMakeDevice(const std::string &mode) {
+    try {
         occa::json props;
         props["mode"] = mode;
-        if (mode == "OpenCL")
-        {
+        if (mode == "OpenCL") {
             props["platform_id"] = 0;
             props["device_id"]   = 0;
         }
         occa::device dev(props);
-        if (dev.mode() != mode)
-        {
+        if (dev.mode() != mode) {
             dev.free();
             return occa::json();
         }
         dev.free();
         return props;
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception &e) {
         std::cout << "  (skip " << mode << ": " << e.what() << ")\n";
         return occa::json();
     }
@@ -77,23 +70,18 @@ static occa::json tryMakeDevice(const std::string &mode)
 /// memory backends, copyTo performs the transfer.
 static void readResult(DeviceMemoryManager &mem, const occa::memory &o_data,
                        Real *dst, occa::dim_t entries,
-                       const Real * /*hostAlias*/)
-{
-    if (mem.hasSeparateMemorySpace())
-    {
+                       const Real * /*hostAlias*/) {
+    if (mem.hasSeparateMemorySpace()) {
         occa::memory o = o_data;
         mem.copyToHost(o, dst, entries);
-    }
-    else
-    {
+    } else {
         const Real *src = o_data.ptr<Real>();
         std::memcpy(dst, src, static_cast<std::size_t>(entries) * sizeof(Real));
     }
 }
 
 /// @brief Free-stream conserved state matching a Config.
-static std::array<Real, 4> freeStateFrom(const Config &cfg)
-{
+static std::array<Real, 4> freeStateFrom(const Config &cfg) {
     const Real rho = cfg.flowRho();
     const Real u   = cfg.flowU();
     const Real v   = cfg.flowV();
@@ -105,8 +93,7 @@ static std::array<Real, 4> freeStateFrom(const Config &cfg)
 
 /// @brief Build a test configuration (uniform flow on an nx x ny grid).
 static Config makeConfig(int order = 2, int nq = 4, int nx = 4, int ny = 4,
-                         bool splitTriangles = false)
-{
+                         bool splitTriangles = false) {
     // Write a scratch TOML with the free-stream state.
     const std::string path = "test_dg_scratch.toml";
     std::FILE *f           = std::fopen(path.c_str(), "w");
@@ -129,8 +116,7 @@ static Config makeConfig(int order = 2, int nq = 4, int nx = 4, int ny = 4,
 // 1. Constant (uniform-flow) solution preservation
 // ---------------------------------------------------------------------------
 
-static bool testConstantSolution()
-{
+static bool testConstantSolution() {
     std::cout << "Test 1: uniform-flow solution preservation\n";
     const Config cfg = makeConfig();
     const Real gamma = cfg.gamma();
@@ -158,8 +144,7 @@ static bool testConstantSolution()
         std::max(std::abs(q0[0] * cfg.flowU()), std::abs(q0[0] * cfg.flowV())) +
         Real(1);
     Real maxAbs = Real(0);
-    for (Real r : res)
-    {
+    for (Real r : res) {
         maxAbs = std::max(maxAbs, std::abs(r));
     }
     std::cout << "  max |res| = " << maxAbs << " (scale " << scale << ")\n";
@@ -170,8 +155,7 @@ static bool testConstantSolution()
 // 2. Linear density advection: residual matches -u * d(rho)/dx
 // ---------------------------------------------------------------------------
 
-static bool testLinearAdvection()
-{
+static bool testLinearAdvection() {
     std::cout << "Test 2: linear density advection (analytic residual)\n";
     // Large grid so that interior rows are far from the free-stream boundary;
     // the boundary LLF dissipation would otherwise dominate the residual.
@@ -197,16 +181,14 @@ static bool testLinearAdvection()
     const auto &e8 =
         field.geometry().vertices(); // N_elem x 8: [x1,y1,...,x4,y4]
     const MatrixX2r &qp = field.basis().quadraturePoints();
-    for (int e = 0; e < N_elem; ++e)
-    {
+    for (int e = 0; e < N_elem; ++e) {
         // Physical coordinates of the quadrature points of element e via the
         // bilinear map.
         const Real x1 = e8(e, 0), y1 = e8(e, 1);
         const Real x2 = e8(e, 2), y2 = e8(e, 3);
         const Real x3 = e8(e, 4), y3 = e8(e, 5);
         const Real x4 = e8(e, 6), y4 = e8(e, 7);
-        for (int q = 0; q < Nq2; ++q)
-        {
+        for (int q = 0; q < Nq2; ++q) {
             const Real r = qp(q, 0), s = qp(q, 1);
             const Real phi1 = (Real(1) - r) * (Real(1) - s) / Real(4);
             const Real phi2 = (Real(1) + r) * (Real(1) - s) / Real(4);
@@ -249,10 +231,8 @@ static bool testLinearAdvection()
     // first and last rows, which touch the free-stream boundary).
     Real sum = Real(0);
     int cnt  = 0;
-    for (int row = 1; row < ny - 1; ++row)
-    {
-        for (int col = 1; col < nx - 1; ++col)
-        {
+    for (int row = 1; row < ny - 1; ++row) {
+        for (int col = 1; col < nx - 1; ++col) {
             const int e = row * nx + col;
             sum += res[(e * N_vars + 0) * N_modes + 0];
             ++cnt;
@@ -268,8 +248,7 @@ static bool testLinearAdvection()
 // 3. Initial-condition projection of a constant state
 // ---------------------------------------------------------------------------
 
-static bool testInitialConditionProjection()
-{
+static bool testInitialConditionProjection() {
     std::cout << "Test 3: constant initial-condition projection\n";
     const Config cfg = makeConfig();
     const auto q0    = freeStateFrom(cfg);
@@ -295,24 +274,19 @@ static bool testInitialConditionProjection()
     // coefficient of the constant state is 2 * q0.
     const Real proj = Real(2);
     bool ok         = true;
-    for (int e = 0; e < N_elem; ++e)
-    {
-        for (int var = 0; var < N_vars; ++var)
-        {
+    for (int e = 0; e < N_elem; ++e) {
+        for (int var = 0; var < N_vars; ++var) {
             const int base = (e * N_vars + var) * N_modes;
             if (std::abs(u[base + 0] - proj * q0[var]) >
-                tol * std::max(std::abs(proj * q0[var]), RealEpsilon))
-            {
+                tol * std::max(std::abs(proj * q0[var]), RealEpsilon)) {
                 std::cout << "  FAIL mode0 var " << var << " elem " << e
                           << ": value=" << u[base + 0]
                           << " ref=" << proj * q0[var] << "\n";
                 ok = false;
             }
-            for (int m = 1; m < N_modes; ++m)
-            {
+            for (int m = 1; m < N_modes; ++m) {
                 if (std::abs(u[base + m]) >
-                    tol * std::max(std::abs(proj * q0[var]), RealEpsilon))
-                {
+                    tol * std::max(std::abs(proj * q0[var]), RealEpsilon)) {
                     std::cout << "  FAIL mode" << m << " var " << var
                               << " elem " << e << ": value=" << u[base + m]
                               << "\n";
@@ -328,8 +302,7 @@ static bool testInitialConditionProjection()
 // 4. Conservation: surface residual sums to zero on a uniform state
 // ---------------------------------------------------------------------------
 
-static bool testConservation()
-{
+static bool testConservation() {
     std::cout << "Test 4: discrete conservation (surface flux sums to zero)\n";
     const Config cfg = makeConfig();
 
@@ -355,10 +328,8 @@ static bool testConservation()
 
     // Every face must have been written (no NaN).
     bool ok = true;
-    for (Real v : flux)
-    {
-        if (std::isnan(v))
-        {
+    for (Real v : flux) {
+        if (std::isnan(v)) {
             ok = false;
             break;
         }
@@ -380,8 +351,7 @@ static bool testConservation()
 // right element's own local face number (faceFR). With a wrong map the
 // upper triangles' surface integrals do not cancel their volume integrals
 // and the uniform-flow residual is non-zero.
-static bool testTriangleUniformFlow()
-{
+static bool testTriangleUniformFlow() {
     std::cout << "Test 5: uniform-flow preservation on split triangles\n";
     const Config cfg = makeConfig(2, 4, 4, 4, /*splitTriangles=*/true);
     const auto q0    = freeStateFrom(cfg);
@@ -404,8 +374,7 @@ static bool testTriangleUniformFlow()
         std::max(std::abs(q0[0] * cfg.flowU()), std::abs(q0[0] * cfg.flowV())) +
         Real(1);
     Real maxAbs = Real(0);
-    for (Real r : res)
-    {
+    for (Real r : res) {
         maxAbs = std::max(maxAbs, std::abs(r));
     }
     std::cout << "  max |res| = " << maxAbs << " (scale " << scale << ")\n";
@@ -416,10 +385,8 @@ static bool testTriangleUniformFlow()
 // Device backend sweep
 // ---------------------------------------------------------------------------
 
-static bool runOnBackend(const std::string &mode, occa::json props)
-{
-    if (props.isNull())
-    {
+static bool runOnBackend(const std::string &mode, occa::json props) {
+    if (props.isNull()) {
         return true;
     }
     std::cout << "\n===== DG field backend [" << mode << "] =====" << std::endl;
@@ -427,12 +394,9 @@ static bool runOnBackend(const std::string &mode, occa::json props)
     occa::device device(props);
     DeviceMemoryManager mem(device);
     DgField field(cfg, device, mem);
-    try
-    {
+    try {
         field.setup();
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception &e) {
         std::cout << "  (skip " << mode << ": setup failed — " << e.what()
                   << ")\n";
         return true;
@@ -447,8 +411,7 @@ static bool runOnBackend(const std::string &mode, occa::json props)
     std::vector<Real> res(nEvm);
     readResult(mem, field.o_res(), res.data(), nEvm, res.data());
     Real maxAbs = Real(0);
-    for (Real r : res)
-    {
+    for (Real r : res) {
         maxAbs = std::max(maxAbs, std::abs(r));
     }
     const auto q0 = freeStateFrom(cfg);
@@ -459,8 +422,7 @@ static bool runOnBackend(const std::string &mode, occa::json props)
     return maxAbs <= tol * scale;
 }
 
-int main()
-{
+int main() {
     bool ok = true;
     ok &= testConstantSolution();
     ok &= testLinearAdvection();

@@ -6,8 +6,7 @@
 // (rkStageCombine / rkWeightedSum / rkFinalUpdate).
 //
 // All kernels are one-DOF-per-thread over the flattened ODE vector
-// $u \in R^{N_{dof}}$ (for the DG field: $N_{elem} \cdot N_{vars} \cdot
-// N_{modes}$ modal coefficients). Reads and writes of the same index happen
+// $u \in R^{N_{dof}}$ (for the DG field: $N_{elem} \cdot N_{vars} \cdot N_{modes}$ modal coefficients). Reads and writes of the same index happen
 // within one thread iteration, so in-place aliases (u_out == u_in) are safe.
 //
 // Butcher coefficients (A, B, E) are passed as device arrays and read at
@@ -16,26 +15,21 @@
 // --- Simple explicit updates -------------------------------------------------
 
 // u_np1 = u_n + dt * res_n   (Forward Euler update / RK stage increment).
-@kernel void explicitEulerUpdate(const int N_dof,
-                                 const Real dt,
-                                 const Real *u_n,
-                                 const Real *res_n,
+@kernel void explicitEulerUpdate(const int N_dof, const Real dt,
+                                 const Real *u_n, const Real *res_n,
                                  Real *u_np1) {
-  for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
-    u_np1[d] = u_n[d] + dt * res_n[d];
-  }
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        u_np1[d] = u_n[d] + dt * res_n[d];
+    }
 }
 
 // u_new = alpha * u_n + beta * u_temp   (SSP convex combination).
-@kernel void sspConvexCombine(const int N_dof,
-                              const Real alpha,
-                              const Real beta,
-                              const Real *u_n,
-                              const Real *u_temp,
-                              Real *u_new) {
-  for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
-    u_new[d] = alpha * u_n[d] + beta * u_temp[d];
-  }
+@kernel void sspConvexCombine(const int N_dof, const Real alpha,
+                              const Real beta, const Real *u_n,
+                              const Real *u_temp, Real *u_new) {
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        u_new[d] = alpha * u_n[d] + beta * u_temp[d];
+    }
 }
 
 // --- Generic Butcher tableau kernels ------------------------------------------
@@ -43,98 +37,77 @@
 // u_stage = u + dt * sum_{j < stage} A[stage][j] * K[j]
 // (stage derivative buffer K has (n_stages + 1) rows of N_dof; the FSAL row
 // n_stages is not used by this kernel).
-@kernel void rkStageCombine(const int N_dof,
-                            const Real dt,
-                            const int stage,
-                            const int n_stages,
-                            const Real *A,
-                            const Real *u,
-                            const Real *K,
-                            Real *u_stage) {
-  for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
-    Real acc = 0.0;
-    for (int j = 0; j < stage; ++j) {
-      acc += A[stage * n_stages + j] * K[j * N_dof + d];
+@kernel void rkStageCombine(const int N_dof, const Real dt, const int stage,
+                            const int n_stages, const Real *A, const Real *u,
+                            const Real *K, Real *u_stage) {
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        Real acc = 0.0;
+        for (int j = 0; j < stage; ++j) {
+            acc += A[stage * n_stages + j] * K[j * N_dof + d];
+        }
+        u_stage[d] = u[d] + dt * acc;
     }
-    u_stage[d] = u[d] + dt * acc;
-  }
 }
 
 // out = dt * sum_{j < n_terms} W[j] * K[j]
 // (used for the embedded error vector err = dt * sum E_j K_j over the
 // n_stages + 1 rows of K including the FSAL row).
-@kernel void rkWeightedSum(const int N_dof,
-                           const Real dt,
-                           const int n_terms,
-                           const Real *W,
-                           const Real *K,
-                           Real *out) {
-  for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
-    Real acc = 0.0;
-    for (int j = 0; j < n_terms; ++j) {
-      acc += W[j] * K[j * N_dof + d];
+@kernel void rkWeightedSum(const int N_dof, const Real dt, const int n_terms,
+                           const Real *W, const Real *K, Real *out) {
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        Real acc = 0.0;
+        for (int j = 0; j < n_terms; ++j) {
+            acc += W[j] * K[j * N_dof + d];
+        }
+        out[d] = dt * acc;
     }
-    out[d] = dt * acc;
-  }
 }
 
 // u_new = u + dt * sum_{j < n_stages} B[j] * K[j]   (solution weights).
-@kernel void rkFinalUpdate(const int N_dof,
-                           const Real dt,
-                           const int n_stages,
-                           const Real *B,
-                           const Real *u,
-                           const Real *K,
+@kernel void rkFinalUpdate(const int N_dof, const Real dt, const int n_stages,
+                           const Real *B, const Real *u, const Real *K,
                            Real *u_new) {
-  for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
-    Real acc = 0.0;
-    for (int j = 0; j < n_stages; ++j) {
-      acc += B[j] * K[j * N_dof + d];
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        Real acc = 0.0;
+        for (int j = 0; j < n_stages; ++j) {
+            acc += B[j] * K[j * N_dof + d];
+        }
+        u_new[d] = u[d] + dt * acc;
     }
-    u_new[d] = u[d] + dt * acc;
-  }
 }
 
 // --- Generic linear combination (implicit temporal residuals) -----------------
 
 // out = c0*x0 + c1*x1 + c2*x2 + c3*x3   (terms with zero coefficient may
 // alias any valid buffer).
-@kernel void vecCombine4(const int N_dof,
-                         const Real c0, const Real *x0,
-                         const Real c1, const Real *x1,
-                         const Real c2, const Real *x2,
-                         const Real c3, const Real *x3,
+@kernel void vecCombine4(const int N_dof, const Real c0, const Real *x0,
+                         const Real c1, const Real *x1, const Real c2,
+                         const Real *x2, const Real c3, const Real *x3,
                          Real *out) {
-  for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
-    out[d] = c0 * x0[d] + c1 * x1[d] + c2 * x2[d] + c3 * x3[d];
-  }
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        out[d] = c0 * x0[d] + c1 * x1[d] + c2 * x2[d] + c3 * x3[d];
+    }
 }
 
 // out = c0*x0 + c1*x1 + c2*x2 + c3*x3 + c4*x4
-@kernel void vecCombine5(const int N_dof,
-                         const Real c0, const Real *x0,
-                         const Real c1, const Real *x1,
-                         const Real c2, const Real *x2,
-                         const Real c3, const Real *x3,
-                         const Real c4, const Real *x4,
-                         Real *out) {
-  for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
-    out[d] = c0 * x0[d] + c1 * x1[d] + c2 * x2[d] + c3 * x3[d] + c4 * x4[d];
-  }
+@kernel void vecCombine5(const int N_dof, const Real c0, const Real *x0,
+                         const Real c1, const Real *x1, const Real c2,
+                         const Real *x2, const Real c3, const Real *x3,
+                         const Real c4, const Real *x4, Real *out) {
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        out[d] = c0 * x0[d] + c1 * x1[d] + c2 * x2[d] + c3 * x3[d] + c4 * x4[d];
+    }
 }
 
 // out = c0*x0 + c1*x1 + c2*x2 + c3*x3 + c4*x4 + c5*x5 + c6*x6
-@kernel void vecCombine7(const int N_dof,
-                         const Real c0, const Real *x0,
-                         const Real c1, const Real *x1,
-                         const Real c2, const Real *x2,
-                         const Real c3, const Real *x3,
-                         const Real c4, const Real *x4,
-                         const Real c5, const Real *x5,
-                         const Real c6, const Real *x6,
+@kernel void vecCombine7(const int N_dof, const Real c0, const Real *x0,
+                         const Real c1, const Real *x1, const Real c2,
+                         const Real *x2, const Real c3, const Real *x3,
+                         const Real c4, const Real *x4, const Real c5,
+                         const Real *x5, const Real c6, const Real *x6,
                          Real *out) {
-  for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
-    out[d] = c0 * x0[d] + c1 * x1[d] + c2 * x2[d] + c3 * x3[d] + c4 * x4[d] +
-             c5 * x5[d] + c6 * x6[d];
-  }
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        out[d] = c0 * x0[d] + c1 * x1[d] + c2 * x2[d] + c3 * x3[d] +
+                 c4 * x4[d] + c5 * x5[d] + c6 * x6[d];
+    }
 }

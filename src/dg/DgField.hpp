@@ -8,9 +8,7 @@
 /// The module holds the mesh, geometry and basis pre-computation, the
 /// device-resident field arrays and the OCCA kernels that assemble
 ///
-/// $$
-///   \mathcal{R}(u_f) = M^{-1}\big(R_{\text{vol}} - R_{\text{surf}}\big),
-/// $$
+/// $$ \mathcal{R}(u_f) = M^{-1}\big(R_{\text{vol}} - R_{\text{surf}}\big), $$
 ///
 /// where $R_{\text{vol}}$ is the volume integral of the convective flux
 /// and $R_{\text{surf}}$ the surface integral of the numerical flux
@@ -45,8 +43,7 @@ class Mesh;
 class MeshGeometry;
 
 /// @brief Discontinuous Galerkin field for the 2D inviscid Euler equations.
-class DgField
-{
+class DgField {
 public:
     /// @brief Construct the field module.
     /// @param cfg     Configuration (basis order, mesh, flux, gas).
@@ -66,8 +63,7 @@ public:
     // ---- Sizes ----
 
     int numElements() const noexcept;
-    int numVars() const noexcept
-    {
+    int numVars() const noexcept {
         return kNumVars2D;
     }
     int numModes() const noexcept;
@@ -83,41 +79,35 @@ public:
     // ---- Device memory ----
 
     /// @brief Field (modal coefficients), $N_e \cdot N_v \cdot N_m$.
-    occa::memory o_u() const
-    {
+    occa::memory o_u() const {
         return o_u_;
     }
 
     /// @brief Residual, $N_e \cdot N_v \cdot N_m$.
-    occa::memory o_res() const
-    {
+    occa::memory o_res() const {
         return o_res_;
     }
 
     /// @brief Per-face accumulated modal flux,
     ///        $N_f \cdot N_v \cdot 2 \cdot N_m$ (side 0 = left, 1 = right).
-    occa::memory o_faceFlux() const
-    {
+    occa::memory o_faceFlux() const {
         return o_faceFlux_;
     }
 
     /// @brief Face Vandermonde matrices,
     ///        $2 \cdot 4 \cdot N_q \cdot N_m$ (side, local face, face point,
     ///        mode).
-    occa::memory o_faceVandermonde() const
-    {
+    occa::memory o_faceVandermonde() const {
         return o_faceVandermonde_;
     }
 
     /// @brief Face quadrature weights, size $N_q$.
-    occa::memory o_faceWeights() const
-    {
+    occa::memory o_faceWeights() const {
         return o_faceWeights_;
     }
 
     /// @brief Reserved gradient array (viscous path), unused in this stage.
-    occa::memory o_gradU() const
-    {
+    occa::memory o_gradU() const {
         return o_gradU_;
     }
 
@@ -143,9 +133,8 @@ public:
     /// @brief Compute the semi-discrete right-hand side.
     ///
     /// Full pipeline: volume integral -> face flux -> gather -> assemble:
-    /// $$
-    ///   \mathrm{res} = M^{-1}\big(R_{\text{vol}} - R_{\text{surf}}\big)
-    /// $$
+    ///
+    /// $$ \mathrm{res} = M^{-1}\big(R_{\text{vol}} - R_{\text{surf}}\big) $$
     ///
     /// @param o_u    Input modal coefficients.
     /// @param o_res  Output residual (may alias a distinct buffer).

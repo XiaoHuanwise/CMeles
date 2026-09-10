@@ -21,8 +21,7 @@
 inline constexpr int kMaxRkStages = 6;
 
 /// @brief Butcher tableau of an embedded RK pair.
-struct ButcherTable
-{
+struct ButcherTable {
     const char *name;        ///< Canonical method name.
     int nStages;             ///< Number of stages $s$.
     int order;               ///< Order of the solution weights B.
@@ -136,10 +135,8 @@ inline constexpr ButcherTable kSspRk432{
 
 /// @brief Map an embedded-RK \p TimeMethod to its tableau (nullptr for
 ///        non-embedded methods).
-inline constexpr const ButcherTable *butcherTableForMethod(TimeMethod m)
-{
-    switch (m)
-    {
+inline constexpr const ButcherTable *butcherTableForMethod(TimeMethod m) {
+    switch (m) {
         case TimeMethod::Rk32:
             return &kRk32;
         case TimeMethod::Rk54:

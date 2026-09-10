@@ -15,163 +15,171 @@
 
 // x^T y — per-block partial sum
 @kernel void dot(const int n, const Real *x, const Real *y, Real *partial) {
-  for (int group = 0; group < ((n + TILE_SIZE - 1) / TILE_SIZE); ++group; @outer) {
-    @shared Real s_sum[TILE_SIZE];
+    for (int group = 0; group < ((n + TILE_SIZE - 1) / TILE_SIZE); ++group;
+         @outer) {
+        @shared Real s_sum[TILE_SIZE];
 
-    // ① Load — out-of-bounds elements contribute 0.0
-    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-      const int i = group * TILE_SIZE + item;
-      s_sum[item] = (i < n) ? x[i] * y[i] : 0.0;
-    }
-
-    // ② Tree reduction (log2(TILE_SIZE) rounds, full-width @inner + guard)
-    for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
-      for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-        if (item < alive) {
-          s_sum[item] += s_sum[item + alive];
+        // ① Load — out-of-bounds elements contribute 0.0
+        for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+            const int i = group * TILE_SIZE + item;
+            s_sum[item] = (i < n) ? x[i] * y[i] : 0.0;
         }
-      }
-    }
 
-    // ③ Write-back — thread 0 only
-    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-      if (item == 0) {
-        partial[group] = s_sum[0];
-      }
+        // ② Tree reduction (log2(TILE_SIZE) rounds, full-width @inner + guard)
+        for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
+            for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+                if (item < alive) {
+                    s_sum[item] += s_sum[item + alive];
+                }
+            }
+        }
+
+        // ③ Write-back — thread 0 only
+        for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+            if (item == 0) {
+                partial[group] = s_sum[0];
+            }
+        }
     }
-  }
 }
 
 // ||x||_2 — per-block partial sum of squares (sqrt on host)
 @kernel void nrm2(const int n, const Real *x, Real *partial) {
-  for (int group = 0; group < ((n + TILE_SIZE - 1) / TILE_SIZE); ++group; @outer) {
-    @shared Real s_sum[TILE_SIZE];
+    for (int group = 0; group < ((n + TILE_SIZE - 1) / TILE_SIZE); ++group;
+         @outer) {
+        @shared Real s_sum[TILE_SIZE];
 
-    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-      const int i = group * TILE_SIZE + item;
-      s_sum[item] = (i < n) ? x[i] * x[i] : 0.0;
-    }
-
-    for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
-      for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-        if (item < alive) {
-          s_sum[item] += s_sum[item + alive];
+        for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+            const int i = group * TILE_SIZE + item;
+            s_sum[item] = (i < n) ? x[i] * x[i] : 0.0;
         }
-      }
-    }
 
-    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-      if (item == 0) {
-        partial[group] = s_sum[0];
-      }
+        for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
+            for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+                if (item < alive) {
+                    s_sum[item] += s_sum[item + alive];
+                }
+            }
+        }
+
+        for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+            if (item == 0) {
+                partial[group] = s_sum[0];
+            }
+        }
     }
-  }
 }
 
 // ||x||_1 — per-block partial sum of absolute values
 @kernel void asum(const int n, const Real *x, Real *partial) {
-  for (int group = 0; group < ((n + TILE_SIZE - 1) / TILE_SIZE); ++group; @outer) {
-    @shared Real s_sum[TILE_SIZE];
+    for (int group = 0; group < ((n + TILE_SIZE - 1) / TILE_SIZE); ++group;
+         @outer) {
+        @shared Real s_sum[TILE_SIZE];
 
-    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-      const int i = group * TILE_SIZE + item;
-      s_sum[item] = (i < n) ? (x[i] >= 0 ? x[i] : -x[i]) : 0.0;
-    }
-
-    for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
-      for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-        if (item < alive) {
-          s_sum[item] += s_sum[item + alive];
+        for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+            const int i = group * TILE_SIZE + item;
+            s_sum[item] = (i < n) ? (x[i] >= 0 ? x[i] : -x[i]) : 0.0;
         }
-      }
-    }
 
-    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-      if (item == 0) {
-        partial[group] = s_sum[0];
-      }
+        for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
+            for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+                if (item < alive) {
+                    s_sum[item] += s_sum[item + alive];
+                }
+            }
+        }
+
+        for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+            if (item == 0) {
+                partial[group] = s_sum[0];
+            }
+        }
     }
-  }
 }
 
 // Generic sum-reduction — used by the multi-level reduction pipeline.
 // Reduces `count` elements to ceil(count / TILE_SIZE) partials.
 @kernel void sumReduce(const int count, const Real *v, Real *partial) {
-  for (int group = 0; group < ((count + TILE_SIZE - 1) / TILE_SIZE); ++group; @outer) {
-    @shared Real s_sum[TILE_SIZE];
+    for (int group = 0; group < ((count + TILE_SIZE - 1) / TILE_SIZE); ++group;
+         @outer) {
+        @shared Real s_sum[TILE_SIZE];
 
-    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-      const int i = group * TILE_SIZE + item;
-      s_sum[item] = (i < count) ? v[i] : 0.0;
-    }
-
-    for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
-      for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-        if (item < alive) {
-          s_sum[item] += s_sum[item + alive];
+        for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+            const int i = group * TILE_SIZE + item;
+            s_sum[item] = (i < count) ? v[i] : 0.0;
         }
-      }
-    }
 
-    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-      if (item == 0) {
-        partial[group] = s_sum[0];
-      }
+        for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
+            for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+                if (item < alive) {
+                    s_sum[item] += s_sum[item + alive];
+                }
+            }
+        }
+
+        for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+            if (item == 0) {
+                partial[group] = s_sum[0];
+            }
+        }
     }
-  }
 }
 
 // max|x| — per-block partial maximum (0.0 is the identity for absolute
 // values, so out-of-bounds lanes and padding are exact)
 @kernel void amax(const int n, const Real *x, Real *partial) {
-  for (int group = 0; group < ((n + TILE_SIZE - 1) / TILE_SIZE); ++group; @outer) {
-    @shared Real s_max[TILE_SIZE];
+    for (int group = 0; group < ((n + TILE_SIZE - 1) / TILE_SIZE); ++group;
+         @outer) {
+        @shared Real s_max[TILE_SIZE];
 
-    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-      const int i = group * TILE_SIZE + item;
-      s_max[item] = (i < n) ? (x[i] >= 0 ? x[i] : -x[i]) : 0.0;
-    }
-
-    for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
-      for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-        if (item < alive) {
-          s_max[item] =
-              s_max[item] > s_max[item + alive] ? s_max[item] : s_max[item + alive];
+        for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+            const int i = group * TILE_SIZE + item;
+            s_max[item] = (i < n) ? (x[i] >= 0 ? x[i] : -x[i]) : 0.0;
         }
-      }
-    }
 
-    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-      if (item == 0) {
-        partial[group] = s_max[0];
-      }
+        for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
+            for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+                if (item < alive) {
+                    s_max[item] = s_max[item] > s_max[item + alive]
+                                      ? s_max[item]
+                                      : s_max[item + alive];
+                }
+            }
+        }
+
+        for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+            if (item == 0) {
+                partial[group] = s_max[0];
+            }
+        }
     }
-  }
 }
 
 // Generic max-reduction — multi-level pipeline counterpart of sumReduce.
 @kernel void maxReduce(const int count, const Real *v, Real *partial) {
-  for (int group = 0; group < ((count + TILE_SIZE - 1) / TILE_SIZE); ++group; @outer) {
-    @shared Real s_max[TILE_SIZE];
+    for (int group = 0; group < ((count + TILE_SIZE - 1) / TILE_SIZE); ++group;
+         @outer) {
+        @shared Real s_max[TILE_SIZE];
 
-    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-      const int i = group * TILE_SIZE + item;
-      s_max[item] = (i < count) ? v[i] : 0.0;
-    }
-
-    for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
-      for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-        if (item < alive) {
-          s_max[item] =
-              s_max[item] > s_max[item + alive] ? s_max[item] : s_max[item + alive];
+        for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+            const int i = group * TILE_SIZE + item;
+            s_max[item] = (i < count) ? v[i] : 0.0;
         }
-      }
-    }
 
-    for (int item = 0; item < TILE_SIZE; ++item; @inner) {
-      if (item == 0) {
-        partial[group] = s_max[0];
-      }
+        for (int alive = TILE_SIZE / 2; alive > 0; alive /= 2) {
+            for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+                if (item < alive) {
+                    s_max[item] = s_max[item] > s_max[item + alive]
+                                      ? s_max[item]
+                                      : s_max[item + alive];
+                }
+            }
+        }
+
+        for (int item = 0; item < TILE_SIZE; ++item; @inner) {
+            if (item == 0) {
+                partial[group] = s_max[0];
+            }
+        }
     }
-  }
 }

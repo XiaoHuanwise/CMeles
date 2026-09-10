@@ -23,8 +23,7 @@ class DeviceMemoryManager;
 /// All 2D matrices use row-major storage to match OCCA's memory layout,
 /// so that `wrapMemory` directly exposes data to OCCA kernels without
 /// transposition.
-class BasisFunctions1D
-{
+class BasisFunctions1D {
 public:
     /// @brief Construct from polynomial order $N$ and number of quadrature
     /// points $N_q$.
@@ -35,76 +34,57 @@ public:
     // ---- Accessors ----
 
     /// @brief Maximum polynomial order.
-    int order() const noexcept
-    {
+    int order() const noexcept {
         return N_;
     }
 
     /// @brief Number of Gauss-Legendre quadrature points.
-    int numPoints() const noexcept
-    {
+    int numPoints() const noexcept {
         return Nq_;
     }
 
     /// @brief Gauss-Legendre quadrature nodes on $[-1, 1]$, size $N_q$.
-    const VectorXr &points() const noexcept
-    {
+    const VectorXr &points() const noexcept {
         return points_;
     }
 
     /// @brief Gauss-Legendre quadrature weights, size $N_q$.
-    const VectorXr &weights() const noexcept
-    {
+    const VectorXr &weights() const noexcept {
         return weights_;
     }
 
     /// @brief Vandermonde matrix $V$ of size $N_q \times (N+1)$.
     ///        $V(i, j) = \tilde{P}_j(\xi_i)$, where $\xi_i$ is the $i$-th
     ///        quadrature point.
-    const MatrixXr &
-    vandermonde() const noexcept
-    {
+    const MatrixXr &vandermonde() const noexcept {
         return V_;
     }
 
     /// @brief Vandermonde derivative matrix $dV$ of size $N_q \times (N+1)$.
     ///        $dV(i, j) = \tilde{P}'_j(\xi_i)$, derivative w.r.t. the reference
     ///        coordinate.
-    const MatrixXr &
-    vandermondeDerivative() const noexcept
-    {
+    const MatrixXr &vandermondeDerivative() const noexcept {
         return dV_;
     }
 
     // ---- Static utilities (reusable, no instance needed) ----
 
-    /// @brief Evaluate normalized Legendre polynomials $\tilde{P}_0 \dots
-    /// \tilde{P}_N$
+    /// @brief Evaluate normalized Legendre polynomials $\tilde{P}_0 \dots \tilde{P}_N$
     ///        and their derivatives $\tilde{P}'_0 \dots \tilde{P}'_N$ at a
     ///        single point $x$.
     ///
     /// Uses the normalized three-term recurrence (Section 1.1 of
     /// basis_functions.md).
     ///
-    /// $$
-    ///   \tilde{P}_{n+1}(x) = \frac{\sqrt{(2n+1)(2n+3)} \cdot x \,
-    ///   \tilde{P}_n(x)
-    ///                         - n \sqrt{\frac{2n+3}{2n-1}} \cdot
-    ///                         \tilde{P}_{n-1}(x)}{n+1}
-    /// $$
+    /// $$ \tilde{P}_{n+1}(x) = \frac{\sqrt{(2n+1)(2n+3)} \cdot x \, \tilde{P}_n(x) - n \sqrt{\frac{2n+3}{2n-1}} \cdot \tilde{P}_{n-1}(x)}{n+1} $$
     ///
-    /// $$
-    ///   \tilde{P}'_{n+1}(x) = \sqrt{(2n+1)(2n+3)} \cdot \tilde{P}_n(x)
-    ///                         + \sqrt{\frac{2n+3}{2n-1}} \cdot
-    ///                         \tilde{P}'_{n-1}(x)
-    /// $$
+    /// $$ \tilde{P}'_{n+1}(x) = \sqrt{(2n+1)(2n+3)} \cdot \tilde{P}_n(x) + \sqrt{\frac{2n+3}{2n-1}} \cdot \tilde{P}'_{n-1}(x) $$
     ///
     /// @param x   Evaluation point in $[-1, 1]$.
     /// @param N   Maximum polynomial order (inclusive), $N \ge 0$.
     /// @param[out] P   Values $\tilde{P}_n(x)$, size $N+1$.
     /// @param[out] dP  Derivatives $\tilde{P}'_n(x)$, size $N+1$.
-    static void evalPolynomials(Real x, int N, VectorXr &P,
-                                VectorXr &dP);
+    static void evalPolynomials(Real x, int N, VectorXr &P, VectorXr &dP);
 
     /// @brief Compute $N_q$-point Gauss-Legendre quadrature via Newton
     /// iteration.
@@ -136,26 +116,22 @@ public:
     void allocateDeviceMemory(DeviceMemoryManager &mgr);
 
     /// @brief Device memory handle for quadrature nodes.
-    occa::memory o_points() const
-    {
+    occa::memory o_points() const {
         return o_points_;
     }
 
     /// @brief Device memory handle for quadrature weights.
-    occa::memory o_weights() const
-    {
+    occa::memory o_weights() const {
         return o_weights_;
     }
 
     /// @brief Device memory handle for Vandermonde matrix $V$.
-    occa::memory o_V() const
-    {
+    occa::memory o_V() const {
         return o_V_;
     }
 
     /// @brief Device memory handle for Vandermonde derivative matrix $dV$.
-    occa::memory o_dV() const
-    {
+    occa::memory o_dV() const {
         return o_dV_;
     }
 

@@ -8,8 +8,7 @@
 
 #include <cmath>
 
-EulerState primitiveFromConserved(const Real q[4], Real gamma)
-{
+EulerState primitiveFromConserved(const Real q[4], Real gamma) {
     const Real rho = q[0];
     const Real u   = q[1] / rho;
     const Real v   = q[2] / rho;
@@ -19,8 +18,7 @@ EulerState primitiveFromConserved(const Real q[4], Real gamma)
     return {rho, u, v, p, a};
 }
 
-void computePhysicalFlux(const Real q[4], Real gamma, Real f[4])
-{
+void computePhysicalFlux(const Real q[4], Real gamma, Real f[4]) {
     const EulerState st = primitiveFromConserved(q, gamma);
     const Real rho      = st.rho;
     const Real u        = st.u;
@@ -33,8 +31,7 @@ void computePhysicalFlux(const Real q[4], Real gamma, Real f[4])
     f[3] = u * (q[3] + p);
 }
 
-void rotateState(const Real q[4], Real n_unit_x, Real n_unit_y, Real q_rot[4])
-{
+void rotateState(const Real q[4], Real n_unit_x, Real n_unit_y, Real q_rot[4]) {
     const Real rho = q[0];
     const Real u   = q[1] / rho;
     const Real v   = q[2] / rho;
@@ -49,8 +46,7 @@ void rotateState(const Real q[4], Real n_unit_x, Real n_unit_y, Real q_rot[4])
 }
 
 void rotateFluxBack(const Real flux_rot[4], Real n_unit_x, Real n_unit_y,
-                    Real flux[4])
-{
+                    Real flux[4]) {
     const Real frhoU = flux_rot[1];
     const Real frhoV = flux_rot[2];
 
@@ -61,8 +57,7 @@ void rotateFluxBack(const Real flux_rot[4], Real n_unit_x, Real n_unit_y,
 }
 
 void computeLLFFlux(const Real qL[4], const Real qR[4], Real gamma,
-                    Real flux[4])
-{
+                    Real flux[4]) {
     // Physical fluxes of both sides.
     Real fL[4], fR[4];
     computePhysicalFlux(qL, gamma, fL);
@@ -74,16 +69,14 @@ void computeLLFFlux(const Real qL[4], const Real qR[4], Real gamma,
     const Real alpha =
         std::max(std::abs(stL.u) + stL.a, std::abs(stR.u) + stR.a);
 
-    for (int k = 0; k < kNumVars2D; ++k)
-    {
+    for (int k = 0; k < kNumVars2D; ++k) {
         flux[k] =
             Real(0.5) * (fL[k] + fR[k]) - Real(0.5) * alpha * (qR[k] - qL[k]);
     }
 }
 
 void computeFaceFlux(const Real qL[4], const Real qR[4], Real n_unit_x,
-                     Real n_unit_y, Real gamma, Real flux[4])
-{
+                     Real n_unit_y, Real gamma, Real flux[4]) {
     // Rotate both states into the local normal-tangent frame.
     Real qL_rot[4], qR_rot[4];
     rotateState(qL, n_unit_x, n_unit_y, qL_rot);

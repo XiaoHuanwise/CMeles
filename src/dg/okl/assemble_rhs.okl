@@ -24,59 +24,61 @@
 // 16 (N_modes <= 16; see the cap table in docs/tech_docs/occa.md).
 // See docs/tech_docs/governed_equations_and_DG_field.md, Section (四).
 
-@kernel void assembleRHS(const int N_elem,
-                         const int N_vars, const int N_modes,
-                         const Real *R_vol,
-                         const Real *faceFlux,
-                         const int *elemFaces,
-                         const int *faceKL, const int *faceKR,
-                         const Real *Minv,
-                         Real *res) {
-  for (int elem = 0; elem < N_elem; ++elem; @tile(TILE_SIZE, @outer, @inner)) {
-    const int eBase = elem * N_vars * N_modes;
-    const int mBase = elem * N_modes * N_modes;
+@kernel void assembleRHS(const int N_elem, const int N_vars, const int N_modes,
+                         const Real *R_vol, const Real *faceFlux,
+                         const int *elemFaces, const int *faceKL,
+                         const int *faceKR, const Real *Minv, Real *res) {
+    for (int elem = 0; elem < N_elem; ++elem;
+         @tile(TILE_SIZE, @outer, @inner)) {
+        const int eBase = elem * N_vars * N_modes;
+        const int mBase = elem * N_modes * N_modes;
 
-    // In-place surface gather (thread-local, fixed stride 16).
-    Real g[4 * 16];
-    for (int var = 0; var < N_vars; ++var) {
-      for (int l = 0; l < N_modes; ++l) {
-        g[var * 16 + l] = 0.0;
-      }
-    }
-    for (int f = 0; f < 4; ++f) {
-      const int F = elemFaces[elem * 4 + f];
-      if (F >= 0) {
-        const int KL = faceKL[F];
-        if (elem == KL) {
-          // This element is the left element: + side 0.
-          for (int var = 0; var < N_vars; ++var) {
+        // In-place surface gather (thread-local, fixed stride 16).
+        Real g[4 * 16];
+        for (int var = 0; var < N_vars; ++var) {
             for (int l = 0; l < N_modes; ++l) {
-              g[var * 16 + l] +=
-                  faceFlux[((F * N_vars + var) * 2 + 0) * N_modes + l];
+                g[var * 16 + l] = 0.0;
             }
-          }
-        } else {
-          // This element is the right element: - side 1.
-          for (int var = 0; var < N_vars; ++var) {
-            for (int l = 0; l < N_modes; ++l) {
-              g[var * 16 + l] -=
-                  faceFlux[((F * N_vars + var) * 2 + 1) * N_modes + l];
-            }
-          }
         }
-      }
-    }
+        for (int f = 0; f < 4; ++f) {
+            const int F = elemFaces[elem * 4 + f];
+            if (F >= 0) {
+                const int KL = faceKL[F];
+                if (elem == KL) {
+                    // This element is the left element: + side 0.
+                    for (int var = 0; var < N_vars; ++var) {
+                        for (int l = 0; l < N_modes; ++l) {
+                            g[var * 16 + l] +=
+                                faceFlux[((F * N_vars + var) * 2 + 0) *
+                                             N_modes +
+                                         l];
+                        }
+                    }
+                } else {
+                    // This element is the right element: - side 1.
+                    for (int var = 0; var < N_vars; ++var) {
+                        for (int l = 0; l < N_modes; ++l) {
+                            g[var * 16 + l] -=
+                                faceFlux[((F * N_vars + var) * 2 + 1) *
+                                             N_modes +
+                                         l];
+                        }
+                    }
+                }
+            }
+        }
 
-    // Mass inversion of the volume minus surface contribution.
-    for (int var = 0; var < N_vars; ++var) {
-      for (int l = 0; l < N_modes; ++l) {
-        Real acc = 0.0;
-        for (int mp = 0; mp < N_modes; ++mp) {
-          acc += Minv[mBase + l * N_modes + mp] *
-                 (R_vol[eBase + var * N_modes + mp] - g[var * 16 + mp]);
+        // Mass inversion of the volume minus surface contribution.
+        for (int var = 0; var < N_vars; ++var) {
+            for (int l = 0; l < N_modes; ++l) {
+                Real acc = 0.0;
+                for (int mp = 0; mp < N_modes; ++mp) {
+                    acc +=
+                        Minv[mBase + l * N_modes + mp] *
+                        (R_vol[eBase + var * N_modes + mp] - g[var * 16 + mp]);
+                }
+                res[eBase + var * N_modes + l] = acc;
+            }
         }
-        res[eBase + var * N_modes + l] = acc;
-      }
     }
-  }
 }

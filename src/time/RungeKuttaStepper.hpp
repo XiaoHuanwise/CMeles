@@ -21,12 +21,10 @@
 #include "ButcherTable.hpp"
 #include "StepperBase.hpp"
 
-class RungeKuttaStepper : public StepperBase
-{
+class RungeKuttaStepper : public StepperBase {
 public:
     /// @brief Tolerances and step bounds.
-    struct Params
-    {
+    struct Params {
         Real rtol    = Real(1e-6);
         Real atol    = Real(1e-6);
         Real minStep = Real(10) * RealEpsilon;
@@ -44,8 +42,7 @@ public:
                       const ButcherTable &table,
                       const std::string &oklDir = OCCA_OKL_DIR)
         : RungeKuttaStepper(device, mem, std::move(rhs), nDof, table, Params(),
-                            oklDir)
-    {
+                            oklDir) {
     }
 
     // ---- StepperBase interface ----
@@ -55,12 +52,10 @@ public:
     ///        accepted step.
     Real advance(occa::memory o_u, Real t, Real dtMax) override;
 
-    int order() const override
-    {
+    int order() const override {
         return table_.order;
     }
-    const char *name() const override
-    {
+    const char *name() const override {
         return table_.name;
     }
 
@@ -84,23 +79,19 @@ public:
     void stepFixed(Real dt);
 
     /// @brief Current internal state $u$ (pseudo stepping).
-    const occa::memory &state() const
-    {
+    const occa::memory &state() const {
         return o_u_;
     }
     /// @brief Current right-hand-side evaluation $f = R(u)$.
-    const occa::memory &f() const
-    {
+    const occa::memory &f() const {
         return o_f_;
     }
     /// @brief Current (controlled) step size.
-    Real dt() const noexcept
-    {
+    Real dt() const noexcept {
         return dt_;
     }
     /// @brief Last accepted error norm.
-    Real errorNorm() const noexcept
-    {
+    Real errorNorm() const noexcept {
         return errorNormPrev_;
     }
 
@@ -128,10 +119,8 @@ private:
     void updateDt(Real sigma, bool accepted, bool wasRejected);
 
     /// @brief Lazily compile the Butcher kernels (idempotent).
-    void ensureRkKernels()
-    {
-        if (rkKernelsBuilt_)
-        {
+    void ensureRkKernels() {
+        if (rkKernelsBuilt_) {
             return;
         }
         rkStageCombine_ = buildTimeKernel("rkStageCombine");

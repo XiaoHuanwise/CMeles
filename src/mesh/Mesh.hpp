@@ -23,17 +23,11 @@
 ///
 /// The constructor builds the face list from the raw element-vertex
 /// connectivity by matching shared edges (see buildFaces).
-class Mesh
-{
+class Mesh {
 public:
     /// @brief Face type. The periodic type marks boundary faces that have
     ///        been paired by applyPeriodicPairing.
-    enum class FaceType : int
-    {
-        Interior = 0,
-        Boundary = 1,
-        Periodic = 2
-    };
+    enum class FaceType : int { Interior = 0, Boundary = 1, Periodic = 2 };
 
     /// @brief Construct from raw topology and build the face list.
     /// @param vertices         Global vertex coordinates, shape
@@ -52,16 +46,13 @@ public:
 
     // ---- Sizes ----
 
-    int numVertices() const noexcept
-    {
+    int numVertices() const noexcept {
         return N_vert_;
     }
-    int numElements() const noexcept
-    {
+    int numElements() const noexcept {
         return N_elem_;
     }
-    int numFaces() const noexcept
-    {
+    int numFaces() const noexcept {
         return N_face_;
     }
 
@@ -69,16 +60,14 @@ public:
 
     /// @brief Global vertex coordinates, shape $N_{\text{vert}} \times 2$,
     ///        row-major.
-    const MatrixX2r &vertices() const noexcept
-    {
+    const MatrixX2r &vertices() const noexcept {
         return vertices_;
     }
 
     /// @brief Element-vertex connectivity, shape $N_{\text{elem}} \times 4$,
     ///        row-major. Triangles satisfy `(e,2) == (e,3)`.
     const Eigen::Matrix<int, Eigen::Dynamic, 4, Eigen::RowMajor> &elementVertices()
-        const noexcept
-    {
+        const noexcept {
         return elem_verts_;
     }
 
@@ -86,8 +75,7 @@ public:
     ///        $N_{\text{elem}} \times 4$. The collapsed face of a triangle
     ///        (local face 3) holds $-1$.
     const Eigen::Matrix<int, Eigen::Dynamic, 4, Eigen::RowMajor> &elementFaces()
-        const noexcept
-    {
+        const noexcept {
         return elem_faces_;
     }
 
@@ -99,23 +87,20 @@ public:
     /// arrays (faceKL/faceFL/faceKR/faceFR), so column-major storage lets
     /// MeshGeometry wrap them directly without a per-column copy.
     const Eigen::Matrix<int, Eigen::Dynamic, 4, Eigen::ColMajor> &faceElements()
-        const noexcept
-    {
+        const noexcept {
         return face_elements_;
     }
 
     /// @brief Per-face type (underlying int of FaceType), size
     /// $N_{\text{face}}$.
-    const Eigen::VectorXi &faceTypes() const noexcept
-    {
+    const Eigen::VectorXi &faceTypes() const noexcept {
         return face_types_;
     }
 
     // ---- Queries ----
 
     /// @brief Whether element \p elem is a triangle ($P_3 = P_4$).
-    bool isTriangle(int elem) const noexcept
-    {
+    bool isTriangle(int elem) const noexcept {
         return elem_verts_(elem, 2) == elem_verts_(elem, 3);
     }
 
@@ -123,14 +108,12 @@ public:
     ///
     /// Periodic faces are not boundary faces: after applyPeriodicPairing
     /// their $K_R$ slot holds the partner element.
-    bool isBoundaryFace(int face) const noexcept
-    {
+    bool isBoundaryFace(int face) const noexcept {
         return face_elements_(face, 2) == -1;
     }
 
     /// @brief Whether face \p face has been paired periodically.
-    bool isPeriodicFace(int face) const noexcept
-    {
+    bool isPeriodicFace(int face) const noexcept {
         return face_types_(face) == int(FaceType::Periodic);
     }
 
@@ -156,8 +139,7 @@ public:
     /// $\hat F_2 = -\hat F_1$.
     ///
     /// Matching condition for a pair $(F_1, F_2)$ with directed endpoints
-    /// $(A_1, B_1)$, $(A_2, B_2)$ and translation $T \in \{(L_x, 0),
-    /// (-L_x, 0), (0, L_y), (0, -L_y)\}$ (the reversed traversal guarantees
+    /// $(A_1, B_1)$, $(A_2, B_2)$ and translation $T \in \{(L_x, 0), (-L_x, 0), (0, L_y), (0, -L_y)\}$ (the reversed traversal guarantees
     /// $t_2 = -t_1$):
     ///   $A_1 + T = B_2$ and $B_1 + T = A_2$.
     ///

@@ -13,37 +13,35 @@
 //
 // See docs/tech_docs/governed_equations_and_DG_field.md, Section (一).
 
-@kernel void initModeCoeffs(const int N_elem,
-                            const int N_vars, const int N_modes, const int Nq2,
-                            const Real *freeState,
-                            const Real *lambdaWJ,
-                            const Real *V2D,
-                            const Real *Minv,
-                            Real *u) {
-  for (int elem = 0; elem < N_elem; ++elem; @tile(TILE_SIZE, @outer, @inner)) {
-    const int eOff = elem * Nq2;
-    const int uOff = elem * N_vars * N_modes;
-    const int mBase = elem * N_modes * N_modes;
+@kernel void initModeCoeffs(const int N_elem, const int N_vars,
+                            const int N_modes, const int Nq2,
+                            const Real *freeState, const Real *lambdaWJ,
+                            const Real *V2D, const Real *Minv, Real *u) {
+    for (int elem = 0; elem < N_elem; ++elem;
+         @tile(TILE_SIZE, @outer, @inner)) {
+        const int eOff  = elem * Nq2;
+        const int uOff  = elem * N_vars * N_modes;
+        const int mBase = elem * N_modes * N_modes;
 
-    for (int var = 0; var < N_vars; ++var) {
-      // b[m] = sum_q lambdaWJ[q] * V2D[q][m] * freeState[var]
-      Real b[64];
-      for (int m = 0; m < N_modes; ++m) {
-        Real acc = 0.0;
-        for (int q = 0; q < Nq2; ++q) {
-          acc += lambdaWJ[eOff + q] * V2D[q * N_modes + m];
-        }
-        b[m] = acc * freeState[var];
-      }
+        for (int var = 0; var < N_vars; ++var) {
+            // b[m] = sum_q lambdaWJ[q] * V2D[q][m] * freeState[var]
+            Real b[64];
+            for (int m = 0; m < N_modes; ++m) {
+                Real acc = 0.0;
+                for (int q = 0; q < Nq2; ++q) {
+                    acc += lambdaWJ[eOff + q] * V2D[q * N_modes + m];
+                }
+                b[m] = acc * freeState[var];
+            }
 
-      // u[var][m'] = sum_m Minv[e][m'][m] * b[m]
-      for (int mp = 0; mp < N_modes; ++mp) {
-        Real acc = 0.0;
-        for (int m = 0; m < N_modes; ++m) {
-          acc += Minv[mBase + mp * N_modes + m] * b[m];
+            // u[var][m'] = sum_m Minv[e][m'][m] * b[m]
+            for (int mp = 0; mp < N_modes; ++mp) {
+                Real acc = 0.0;
+                for (int m = 0; m < N_modes; ++m) {
+                    acc += Minv[mBase + mp * N_modes + m] * b[m];
+                }
+                u[uOff + var * N_modes + mp] = acc;
+            }
         }
-        u[uOff + var * N_modes + mp] = acc;
-      }
     }
-  }
 }

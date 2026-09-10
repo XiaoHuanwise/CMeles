@@ -39,8 +39,7 @@
 ///     state in place by one step and return the physical dt consumed
 ///     (fixed-dt schemes: dt itself; adaptive schemes: the accepted step),
 ///   - `int order() const` and `const char *name() const`.
-class StepperBase
-{
+class StepperBase {
 public:
     virtual ~StepperBase() = default;
 
@@ -64,14 +63,12 @@ protected:
     StepperBase(occa::device &device, DeviceMemoryManager &mem, RhsFunction rhs,
                 occa::dim_t nDof, const std::string &oklDir = OCCA_OKL_DIR)
         : device_(device), mem_(mem), rhs_(std::move(rhs)), nDof_(nDof),
-          oklDir_(oklDir), blas_(device, mem, oklDir)
-    {
+          oklDir_(oklDir), blas_(device, mem, oklDir) {
     }
 
     /// @brief Build a kernel from time_update.okl with the standard JIT
     ///        props (Real / TILE_SIZE defines).
-    occa::kernel buildTimeKernel(const std::string &name) const
-    {
+    occa::kernel buildTimeKernel(const std::string &name) const {
         occa::json props;
 #ifdef USE_FLOAT_PRECISION
         props["defines/Real"] = "float";
@@ -86,10 +83,8 @@ protected:
     /// @brief u_np1 = u_n + dt * res_n (per-DOF aliasing is safe); shared
     ///        by the explicit steppers and the RK initial-step heuristic.
     void eulerUpdate(occa::memory &o_un, Real dt, occa::memory &o_res,
-                     occa::memory &o_unp1)
-    {
-        if (!explicitEulerUpdate_.isInitialized())
-        {
+                     occa::memory &o_unp1) {
+        if (!explicitEulerUpdate_.isInitialized()) {
             explicitEulerUpdate_ = buildTimeKernel("explicitEulerUpdate");
         }
         explicitEulerUpdate_(static_cast<int>(nDof_), dt, o_un, o_res, o_unp1);

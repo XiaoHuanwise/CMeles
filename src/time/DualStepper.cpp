@@ -18,10 +18,8 @@ DualStepper::DualStepper(occa::device &device, DeviceMemoryManager &mem,
       // Coupled: the pseudo state is the stacked implicit state; decoupled:
       // each stage is advanced independently (N entries per stepper).
       pseudo_(device, mem, nullptr, params_.decoupled ? nDof : nDof * nStages_,
-              pseudoTable, params_.rkParams, oklDir)
-{
-    if (params_.decoupled && nStages_ != 2)
-    {
+              pseudoTable, params_.rkParams, oklDir) {
+    if (params_.decoupled && nStages_ != 2) {
         throw std::invalid_argument(
             "DualStepper: decoupled mode requires a DITR residual");
     }
@@ -32,63 +30,49 @@ DualStepper::DualStepper(occa::device &device, DeviceMemoryManager &mem,
     // two-stage residuals; o_uPrev_ is needed by U3R1 only — the U2/BE
     // residuals read the u-prev operand at zero coefficient, so advance()
     // aliases a live buffer into it instead.
-    if (nStages_ == 2)
-    {
+    if (nStages_ == 2) {
         o_Rn_ = mem.wrapOrMalloc(nDof);
     }
-    if (residual_->needsPrev())
-    {
+    if (residual_->needsPrev()) {
         o_uPrev_ = mem.wrapOrMalloc(nDof);
     }
-    if (params_.decoupled)
-    {
+    if (params_.decoupled) {
         pseudoC2_ = std::make_unique<RungeKuttaStepper>(
             device, mem, nullptr, nDof, pseudoTable, params_.rkParams, oklDir);
         o_uNc2_  = mem.wrapOrMalloc(nDof);
         o_uN1_   = mem.wrapOrMalloc(nDof);
         o_Rnew0_ = mem.wrapOrMalloc(nDof);
         o_Rnew1_ = mem.wrapOrMalloc(nDof);
-    }
-    else
-    {
+    } else {
         o_uNew_ = mem.wrapOrMalloc(nDof * nStages_);
     }
 }
 
-void DualStepper::pseudoStep(RungeKuttaStepper &ps)
-{
-    if (params_.pseudoFixedDt > Real(0))
-    {
+void DualStepper::pseudoStep(RungeKuttaStepper &ps) {
+    if (params_.pseudoFixedDt > Real(0)) {
         ps.stepFixed(params_.pseudoFixedDt);
-    }
-    else
-    {
+    } else {
         ps.stepPseudo(params_.allowReject);
     }
 }
 
-bool DualStepper::notConverged(Real fNorm, Real f0Norm) const
-{
+bool DualStepper::notConverged(Real fNorm, Real f0Norm) const {
     return (fNorm / f0Norm > params_.rtol) && (fNorm > params_.atol);
 }
 
-Real DualStepper::residualNorm(const RungeKuttaStepper &ps, occa::dim_t n)
-{
+Real DualStepper::residualNorm(const RungeKuttaStepper &ps, occa::dim_t n) {
     occa::memory f = ps.f();
     return blas_.amax(n, f);
 }
 
-Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt)
-{
+Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
     // U3R1 needs u^{n-1} (kept from the previous step) and theta.
-    if (residual_->needsPrev())
-    {
+    if (residual_->needsPrev()) {
         residual_->setTheta(dtPrev_ > Real(0) ? dtPrev_ / dt : Real(1));
     }
 
     // R(u^n) is required by the two-stage residuals.
-    if (nStages_ == 2)
-    {
+    if (nStages_ == 2) {
         rhs_(o_u, o_Rn_);
     }
 
@@ -96,8 +80,7 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt)
     Real fNorm  = Real(0);
     int cnt     = 0;
 
-    if (params_.decoupled)
-    {
+    if (params_.decoupled) {
         // ---- Decoupled DITR: two per-stage pseudo steppers ----------------
         blas_.copy(nDof_, o_u, o_uNc2_);
         blas_.copy(nDof_, o_u, o_uN1_);
@@ -125,8 +108,7 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt)
 
         f0Norm = residualNorm(pseudo_, nDof_);
         fNorm  = f0Norm;
-        while (notConverged(fNorm, f0Norm) && cnt < params_.maxPseudoSteps)
-        {
+        while (notConverged(fNorm, f0Norm) && cnt < params_.maxPseudoSteps) {
             pseudoStep(*pseudoC2_);
             occa::memory sC2 = pseudoC2_->state();
             blas_.copy(nDof_, sC2, o_uNc2_);
@@ -137,22 +119,16 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt)
             rhs_(o_uN1_, o_Rnew1_);
             ++cnt;
             fNorm = residualNorm(pseudo_, nDof_);
-            if (cnt <= kRefStep)
-            {
+            if (cnt <= kRefStep) {
                 f0Norm = std::max(f0Norm, fNorm);
             }
         }
-    }
-    else
-    {
+    } else {
         // ---- Coupled: one pseudo stepper on the stacked state -------------
         const auto stackedN = nDof_ * nStages_;
-        if (nStages_ == 1)
-        {
+        if (nStages_ == 1) {
             blas_.copy(nDof_, o_u, o_uNew_);
-        }
-        else
-        {
+        } else {
             occa::memory stage0 = o_uNew_.slice(0, nDof_);
             occa::memory stage1 = o_uNew_.slice(nDof_, nDof_);
             blas_.copy(nDof_, o_u, stage0);
@@ -173,20 +149,17 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt)
 
         f0Norm = residualNorm(pseudo_, stackedN);
         fNorm  = f0Norm;
-        while (notConverged(fNorm, f0Norm) && cnt < params_.maxPseudoSteps)
-        {
+        while (notConverged(fNorm, f0Norm) && cnt < params_.maxPseudoSteps) {
             pseudoStep(pseudo_);
             ++cnt;
             fNorm = residualNorm(pseudo_, stackedN);
-            if (cnt <= kRefStep)
-            {
+            if (cnt <= kRefStep) {
                 f0Norm = std::max(f0Norm, fNorm);
             }
         }
     }
 
-    if (notConverged(fNorm, f0Norm) && cnt >= params_.maxPseudoSteps)
-    {
+    if (notConverged(fNorm, f0Norm) && cnt >= params_.maxPseudoSteps) {
         std::cout << "DualStepper[" << name()
                   << "]: pseudo stepper hit max steps (|F|_inf = " << fNorm
                   << ")\n";
@@ -197,18 +170,14 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt)
     // the guess in), so the result must be read back from them: the coupled
     // state is the stacked [u^{n+c_2}, u^{n+1}] (publish the last stage),
     // the decoupled stage-n+1 stepper holds u^{n+1} directly.
-    if (residual_->needsPrev())
-    {
+    if (residual_->needsPrev()) {
         blas_.copy(nDof_, o_u, o_uPrev_);
         dtPrev_ = dt;
     }
     occa::memory pseudoState = pseudo_.state();
-    if (params_.decoupled || nStages_ == 1)
-    {
+    if (params_.decoupled || nStages_ == 1) {
         blas_.copy(nDof_, pseudoState, o_u);
-    }
-    else
-    {
+    } else {
         occa::memory stage1 = pseudoState.slice(nDof_, nDof_);
         blas_.copy(nDof_, stage1, o_u);
     }

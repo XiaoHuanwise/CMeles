@@ -23,8 +23,7 @@
 class Config;
 class DgField;
 
-namespace solver_detail
-{
+namespace solver_detail {
 /// @brief Evaluate the configured [initial_condition] expressions and
 ///        project them onto the field (Config-aware entry point).
 void applyExprICFromConfig(DgField &field, const Config &cfg);

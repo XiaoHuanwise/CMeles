@@ -15,8 +15,7 @@ TemporalResidual::TemporalResidual(occa::device &device,
                                    DeviceMemoryManager &mem, RhsFunction rhs,
                                    occa::dim_t nDof, const std::string &oklDir)
     : device_(device), mem_(mem), rhs_(std::move(rhs)), nDof_(nDof),
-      oklDir_(oklDir), blas_(device, mem, oklDir)
-{
+      oklDir_(oklDir), blas_(device, mem, oklDir) {
     occa::json props;
 #ifdef USE_FLOAT_PRECISION
     props["defines/Real"] = "float";
@@ -36,8 +35,7 @@ TemporalResidual::TemporalResidual(occa::device &device,
 void TemporalResidual::combine4(Real c0, occa::memory &o_x0, Real c1,
                                 occa::memory &o_x1, Real c2, occa::memory &o_x2,
                                 Real c3, occa::memory &o_x3,
-                                occa::memory &o_out)
-{
+                                occa::memory &o_out) {
     vecCombine4_(static_cast<int>(nDof_), c0, o_x0, c1, o_x1, c2, o_x2, c3,
                  o_x3, o_out);
 }
@@ -45,8 +43,7 @@ void TemporalResidual::combine4(Real c0, occa::memory &o_x0, Real c1,
 void TemporalResidual::combine5(Real c0, occa::memory &o_x0, Real c1,
                                 occa::memory &o_x1, Real c2, occa::memory &o_x2,
                                 Real c3, occa::memory &o_x3, Real c4,
-                                occa::memory &o_x4, occa::memory &o_out)
-{
+                                occa::memory &o_x4, occa::memory &o_out) {
     vecCombine5_(static_cast<int>(nDof_), c0, o_x0, c1, o_x1, c2, o_x2, c3,
                  o_x3, c4, o_x4, o_out);
 }
@@ -56,8 +53,7 @@ void TemporalResidual::combine7(Real c0, occa::memory &o_x0, Real c1,
                                 Real c3, occa::memory &o_x3, Real c4,
                                 occa::memory &o_x4, Real c5, occa::memory &o_x5,
                                 Real c6, occa::memory &o_x6,
-                                occa::memory &o_out)
-{
+                                occa::memory &o_out) {
     vecCombine7_(static_cast<int>(nDof_), c0, o_x0, c1, o_x1, c2, o_x2, c3,
                  o_x3, c4, o_x4, c5, o_x5, c6, o_x6, o_out);
 }
@@ -70,8 +66,7 @@ BackwardEulerResidual::BackwardEulerResidual(occa::device &device,
                                              DeviceMemoryManager &mem,
                                              RhsFunction rhs, occa::dim_t nDof,
                                              const std::string &oklDir)
-    : TemporalResidual(device, mem, std::move(rhs), nDof, oklDir)
-{
+    : TemporalResidual(device, mem, std::move(rhs), nDof, oklDir) {
     o_R_ = mem_.wrapOrMalloc(nDof_);
 }
 
@@ -79,8 +74,7 @@ void BackwardEulerResidual::temporalResidual(occa::memory &o_uNew,
                                              occa::memory &o_u,
                                              occa::memory & /*o_Rn*/,
                                              occa::memory & /*o_uPrev*/,
-                                             Real dt, occa::memory &o_F)
-{
+                                             Real dt, occa::memory &o_F) {
     // F = (u_n - u_new)/dt + R(u_new).
     rhs_(o_uNew, o_R_);
     combine4(Real(1) / dt, o_u, -Real(1) / dt, o_uNew, Real(1), o_R_, Real(0),
@@ -95,8 +89,7 @@ DitrResidual::DitrResidual(occa::device &device, DeviceMemoryManager &mem,
                            RhsFunction rhs, occa::dim_t nDof, Variant variant,
                            Real c2, Real beta, const std::string &oklDir)
     : TemporalResidual(device, mem, std::move(rhs), nDof, oklDir),
-      variant_(variant), c2_(c2), beta_(beta)
-{
+      variant_(variant), c2_(c2), beta_(beta) {
     // Quadrature weights b = [0, b1, b2, b3].
     b_[0] = Real(0);
     b_[1] = Real(0.5) - Real(1) / (Real(6) * c2);
@@ -108,11 +101,9 @@ DitrResidual::DitrResidual(occa::device &device, DeviceMemoryManager &mem,
     o_Rn1_  = mem_.wrapOrMalloc(nDof_);
 }
 
-void DitrResidual::rebuildCoefficients()
-{
+void DitrResidual::rebuildCoefficients() {
     const Real c2 = c2_, c22 = c2 * c2, c23 = c22 * c2;
-    switch (variant_)
-    {
+    switch (variant_) {
         case Variant::U2R2:
             a_[0] = Real(0);
             a_[1] = Real(1) - (Real(3) * c22 - Real(2) * c23);
@@ -129,8 +120,7 @@ void DitrResidual::rebuildCoefficients()
             d_[1] = Real(0);
             d_[2] = c22 - c2;
             break;
-        case Variant::U3R1:
-        {
+        case Variant::U3R1: {
             const Real th = theta_, th2 = th * th;
             const Real tp1 = th + Real(1), tp12 = tp1 * tp1;
             const Real c2m1 = c2 - Real(1), c2m12 = c2m1 * c2m1;
@@ -148,16 +138,14 @@ void DitrResidual::rebuildCoefficients()
     }
 }
 
-void DitrResidual::setTheta(Real theta)
-{
+void DitrResidual::setTheta(Real theta) {
     theta_ = theta;
     rebuildCoefficients();
 }
 
 void DitrResidual::temporalResidual(occa::memory &o_uNew2N, occa::memory &o_u,
                                     occa::memory &o_Rn, occa::memory &o_uPrev,
-                                    Real dt, occa::memory &o_F2N)
-{
+                                    Real dt, occa::memory &o_F2N) {
     const auto nDof     = nDof_;
     occa::memory o_uNc2 = o_uNew2N.slice(0, nDof);
     occa::memory o_uN1  = o_uNew2N.slice(nDof, nDof);
@@ -182,8 +170,7 @@ void DitrResidual::temporalResidual(occa::memory &o_uNew2N, occa::memory &o_u,
 void DitrResidual::temporalResidualStageC2(
     occa::memory &o_uNc2, occa::memory &o_uN1, occa::memory &o_Rn1,
     occa::memory &o_u, occa::memory &o_Rn, occa::memory &o_uPrev, Real dt,
-    occa::memory &o_F0)
-{
+    occa::memory &o_F0) {
     rhs_(o_uNc2, o_Rnc2_);
 
     // F0 = ((a1 + beta) u_n + (a2 - beta) u_n1 - u_nc2)/dt + a0 u_prev/dt
@@ -200,8 +187,7 @@ void DitrResidual::temporalResidualStageN1(occa::memory &o_uN1,
                                            occa::memory &o_Rnc2,
                                            occa::memory &o_u,
                                            occa::memory &o_Rn, Real dt,
-                                           occa::memory &o_F1)
-{
+                                           occa::memory &o_F1) {
     rhs_(o_uN1, o_Rn1_);
 
     // F1 = (u_n - u_n1)/dt + b1 R_n + b2 R_nc2 + b3 R_n1.

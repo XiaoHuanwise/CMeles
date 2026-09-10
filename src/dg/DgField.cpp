@@ -23,14 +23,12 @@
 
 DgField::DgField(const Config &cfg, occa::device &device,
                  DeviceMemoryManager &mem, const std::string &oklDir)
-    : cfg_(cfg), device_(device), mem_(mem), oklDir_(oklDir)
-{
+    : cfg_(cfg), device_(device), mem_(mem), oklDir_(oklDir) {
 }
 
 DgField::~DgField() = default;
 
-void DgField::setup()
-{
+void DgField::setup() {
     // Reference data (pre-computation on the host).
     basis1D_ = std::make_unique<BasisFunctions1D>(cfg_.polynomialOrder(),
                                                   cfg_.quadratureOrder());
@@ -45,8 +43,7 @@ void DgField::setup()
     // Periodic boundaries: pair the boundary faces into pseudo-interior
     // faces before the geometry is built, so the K_R/f_R adjacency columns
     // uploaded by MeshGeometry carry the partner elements.
-    if (cfg_.bcType() == BcType::Periodic)
-    {
+    if (cfg_.bcType() == BcType::Periodic) {
         mesh_->applyPeriodicPairing(cfg_.meshNx() * cfg_.meshDx(),
                                     cfg_.meshNy() * cfg_.meshDy());
     }
@@ -70,33 +67,26 @@ void DgField::setup()
 // Sizes / accessors
 // ============================================================================
 
-int DgField::numElements() const noexcept
-{
+int DgField::numElements() const noexcept {
     return geo_ ? geo_->numElements() : 0;
 }
-int DgField::numModes() const noexcept
-{
+int DgField::numModes() const noexcept {
     return N_modes_;
 }
-int DgField::numQuadPoints() const noexcept
-{
+int DgField::numQuadPoints() const noexcept {
     return N_q2_;
 }
-int DgField::numPoints1D() const noexcept
-{
+int DgField::numPoints1D() const noexcept {
     return N_q_;
 }
 
-const Mesh &DgField::mesh() const noexcept
-{
+const Mesh &DgField::mesh() const noexcept {
     return *mesh_;
 }
-const MeshGeometry &DgField::geometry() const noexcept
-{
+const MeshGeometry &DgField::geometry() const noexcept {
     return *geo_;
 }
-const BasisFunctions2D &DgField::basis() const noexcept
-{
+const BasisFunctions2D &DgField::basis() const noexcept {
     return *basis2D_;
 }
 
@@ -104,8 +94,7 @@ const BasisFunctions2D &DgField::basis() const noexcept
 // Face quadrature data
 // ============================================================================
 
-void DgField::buildFaceQuadratureData()
-{
+void DgField::buildFaceQuadratureData() {
     // Face Vandermonde: Vface[side][f][i][mode] = phi_mode(r(t_i), s(t_i))
     // with (r, s) from faceRefMapLeft(f) for side 0 (keyed by the left
     // element's own face number fL) and faceRefMapRight(f) for side 1
@@ -124,8 +113,7 @@ void DgField::buildFaceQuadratureData()
     // Normalised Legendre boundary values: Ptilde_k(1) = sqrt((2k+1)/2),
     // Ptilde_k(-1) = (-1)^k * Ptilde_k(1).
     VectorXr P1(N + 1), Pm1(N + 1);
-    for (int k = 0; k <= N; ++k)
-    {
+    for (int k = 0; k <= N; ++k) {
         P1(k)  = std::sqrt((Real(2) * k + Real(1)) / Real(2));
         Pm1(k) = (k % 2 == 0) ? P1(k) : -P1(k);
     }
@@ -133,24 +121,19 @@ void DgField::buildFaceQuadratureData()
     // Evaluate the k-th normalised Legendre polynomial at a candidate
     // argument x: x == t_i (V1D row), x == -t_i (parity), x == 1, x == -1.
     auto evalP = [&](Real x, int k) -> Real {
-        if (x == Real(1))
-        {
+        if (x == Real(1)) {
             return P1(k);
         }
-        if (x == Real(-1))
-        {
+        if (x == Real(-1)) {
             return Pm1(k);
         }
         // x is one of the Gauss points (or its negation): find the row.
         const VectorXr &pts = basis1D_->points();
-        for (int i = 0; i < Nq; ++i)
-        {
-            if (std::abs(x - pts(i)) < Real(1e-12) * (Real(1) + std::abs(x)))
-            {
+        for (int i = 0; i < Nq; ++i) {
+            if (std::abs(x - pts(i)) < Real(1e-12) * (Real(1) + std::abs(x))) {
                 return V1D(i, k);
             }
-            if (std::abs(x + pts(i)) < Real(1e-12) * (Real(1) + std::abs(x)))
-            {
+            if (std::abs(x + pts(i)) < Real(1e-12) * (Real(1) + std::abs(x))) {
                 // Ptilde_k(-t_i) = (-1)^k Ptilde_k(t_i)
                 return (k % 2 == 0) ? V1D(i, k) : -V1D(i, k);
             }
@@ -164,19 +147,15 @@ void DgField::buildFaceQuadratureData()
                              Real(0));
     const auto &ij = basis2D_->indexMap();
 
-    for (int side = 0; side < 2; ++side)
-    {
-        for (int f = 0; f < 4; ++f)
-        {
+    for (int side = 0; side < 2; ++side) {
+        for (int f = 0; f < 4; ++f) {
             const FaceRefMap &map =
                 (side == 0) ? faceRefMapLeft(f) : faceRefMapRight(f);
-            for (int i = 0; i < Nq; ++i)
-            {
+            for (int i = 0; i < Nq; ++i) {
                 const Real t = basis1D_->points()(i);
                 const Real r = map.cr * t + map.dr;
                 const Real s = map.cs * t + map.ds;
-                for (int l = 0; l < N_modes; ++l)
-                {
+                for (int l = 0; l < N_modes; ++l) {
                     const Real Pr = evalP(r, ij(l, 0));
                     const Real Ps = evalP(s, ij(l, 1));
                     face_vandermonde_[((side * 4 + f) * Nq + i) * N_modes + l] =
@@ -192,8 +171,7 @@ void DgField::buildFaceQuadratureData()
     // host pointer).
     const VectorXr &w1d = basis1D_->weights();
     face_weights_.assign(Nq, Real(0));
-    for (int i = 0; i < Nq; ++i)
-    {
+    for (int i = 0; i < Nq; ++i) {
         face_weights_[i] = w1d(i);
     }
 
@@ -207,8 +185,7 @@ void DgField::buildFaceQuadratureData()
 // Device memory
 // ============================================================================
 
-void DgField::allocateDeviceMemory()
-{
+void DgField::allocateDeviceMemory() {
     const occa::dim_t nEvm =
         static_cast<occa::dim_t>(geo_->numElements()) * N_vars_ * N_modes_;
     const occa::dim_t nFaceEvm =
@@ -238,8 +215,7 @@ void DgField::allocateDeviceMemory()
 // ============================================================================
 
 occa::kernel DgField::buildKernel(const std::string &file,
-                                  const std::string &name)
-{
+                                  const std::string &name) {
     occa::json props;
 #ifdef USE_FLOAT_PRECISION
     props["defines/Real"] = "float";
@@ -264,8 +240,7 @@ occa::kernel DgField::buildKernel(const std::string &file,
     return device_.buildKernel(oklDir_ + "/" + file, name, props);
 }
 
-void DgField::buildKernels()
-{
+void DgField::buildKernels() {
     initModeCoeffs_  = buildKernel("init.okl", "initModeCoeffs");
     volumeIntegral_  = buildKernel("volume_integral.okl", "volumeIntegral");
     computeFaceFlux_ = buildKernel("surface_integral.okl", "computeFaceFlux");
@@ -279,8 +254,7 @@ void DgField::buildKernels()
 // Viscous path (reserved skeleton)
 // ============================================================================
 
-void DgField::computeGradient(occa::memory o_u, occa::memory o_grad)
-{
+void DgField::computeGradient(occa::memory o_u, occa::memory o_grad) {
     // Reserved skeleton for the viscous path. The inviscid residual does
     // not need gradients, so this is not implemented in the current stage.
     (void)o_u;
@@ -293,24 +267,19 @@ void DgField::computeGradient(occa::memory o_u, occa::memory o_grad)
 // Kernel accessors
 // ============================================================================
 
-occa::kernel DgField::kernelInitModeCoeffs() const
-{
+occa::kernel DgField::kernelInitModeCoeffs() const {
     return initModeCoeffs_;
 }
-occa::kernel DgField::kernelVolumeIntegral() const
-{
+occa::kernel DgField::kernelVolumeIntegral() const {
     return volumeIntegral_;
 }
-occa::kernel DgField::kernelComputeFaceFlux() const
-{
+occa::kernel DgField::kernelComputeFaceFlux() const {
     return computeFaceFlux_;
 }
-occa::kernel DgField::kernelAssembleRHS() const
-{
+occa::kernel DgField::kernelAssembleRHS() const {
     return assembleRHS_;
 }
-occa::kernel DgField::kernelEstimateDt() const
-{
+occa::kernel DgField::kernelEstimateDt() const {
     return estimateDt_;
 }
 
@@ -318,8 +287,7 @@ occa::kernel DgField::kernelEstimateDt() const
 // Initial conditions
 // ============================================================================
 
-void DgField::applyFreeStreamInitialCondition(occa::memory o_u)
-{
+void DgField::applyFreeStreamInitialCondition(occa::memory o_u) {
     // Free-stream conserved state from the configuration. Stored in a
     // member so that the wrapped handle stays valid on unified memory
     // backends (zero-copy) and on asynchronous GPU backends.
@@ -337,16 +305,15 @@ void DgField::applyFreeStreamInitialCondition(occa::memory o_u)
                     geo_->o_minv(), o_u);
 }
 
-void DgField::setInitialConditionNodal(occa::memory o_u, const VectorXr &nodal)
-{
+void DgField::setInitialConditionNodal(occa::memory o_u,
+                                       const VectorXr &nodal) {
     // Host-side L2 projection per element:
     //   u_hat = Minv * (V^T * diag(Lambda) * q_nodal)
     // per element and per conserved variable.
     const int N_elem  = geo_->numElements();
     const int Nq2     = N_q2_;
     const int N_modes = N_modes_;
-    if (nodal.size() != N_elem * N_vars_ * Nq2)
-    {
+    if (nodal.size() != N_elem * N_vars_ * Nq2) {
         throw std::invalid_argument(
             "DgField::setInitialConditionNodal: wrong nodal size");
     }
@@ -354,8 +321,7 @@ void DgField::setInitialConditionNodal(occa::memory o_u, const VectorXr &nodal)
     const MatrixXr &V = basis2D_->vandermonde();
     VectorXr uhat(N_elem * N_vars_ * N_modes);
 
-    for (int e = 0; e < N_elem; ++e)
-    {
+    for (int e = 0; e < N_elem; ++e) {
         const Eigen::Map<const MatrixXr> minv(geo_->massMatrixInverse().data() +
                                                   static_cast<size_t>(e) *
                                                       N_modes * N_modes,
@@ -363,8 +329,7 @@ void DgField::setInitialConditionNodal(occa::memory o_u, const VectorXr &nodal)
         Eigen::Map<const VectorXr> lam(
             geo_->lambdaWJ().data() + static_cast<size_t>(e) * Nq2, Nq2);
 
-        for (int var = 0; var < N_vars_; ++var)
-        {
+        for (int var = 0; var < N_vars_; ++var) {
             Eigen::Map<const VectorXr> qn(
                 nodal.data() + (static_cast<size_t>(e) * N_vars_ + var) * Nq2,
                 Nq2);
@@ -388,8 +353,7 @@ void DgField::setInitialConditionNodal(occa::memory o_u, const VectorXr &nodal)
 // Residual pipeline
 // ============================================================================
 
-void DgField::computeRHS(occa::memory o_u, occa::memory o_res)
-{
+void DgField::computeRHS(occa::memory o_u, occa::memory o_res) {
     const int N_elem = geo_->numElements();
     const int N_face = geo_->numFaces();
 
@@ -426,8 +390,7 @@ void DgField::computeRHS(occa::memory o_u, occa::memory o_res)
                  geo_->o_minv(), o_res);
 }
 
-Real DgField::estimateDt(occa::memory o_u, Real cfl)
-{
+Real DgField::estimateDt(occa::memory o_u, Real cfl) {
     const int N_elem = geo_->numElements();
     estimateDt_(N_elem, N_vars_, N_modes_, N_q2_, cfg_.polynomialOrder(),
                 cfg_.gamma(), cfl, o_u, basis2D_->o_V2D(), geo_->o_vertices(),
@@ -435,14 +398,12 @@ Real DgField::estimateDt(occa::memory o_u, Real cfl)
 
     // Host min-reduction (the estimate synchronises the loop anyway). On
     // unified backends o_dtElem_ aliases dt_elem_ directly.
-    if (mem_.hasSeparateMemorySpace())
-    {
+    if (mem_.hasSeparateMemorySpace()) {
         occa::memory o = o_dtElem_;
         mem_.copyToHost(o, dt_elem_.data(), N_elem);
     }
     Real dt = std::numeric_limits<Real>::max();
-    for (Real d : dt_elem_)
-    {
+    for (Real d : dt_elem_) {
         dt = std::min(dt, d);
     }
     return dt;

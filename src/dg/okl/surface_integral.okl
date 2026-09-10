@@ -39,141 +39,140 @@
 // face Vandermonde matrices, the numerical flux is computed (rotate ->
 // flux -> rotate back), and the weighted flux is accumulated.
 
-@kernel void computeFaceFlux(const int N_face,
-                             const int N_vars, const int N_modes, const int N_q,
-                             const Real *u,
-                             const Real *Vface,
-                             const Real *faceW,
+@kernel void computeFaceFlux(const int N_face, const int N_vars,
+                             const int N_modes, const int N_q, const Real *u,
+                             const Real *Vface, const Real *faceW,
                              const int *faceKL, const int *faceFL,
                              const int *faceKR, const int *faceFR,
-                             const Real *faceN,
-                             const Real *faceJ,
-                             const Real *freeState,
-                             const Real gamma,
+                             const Real *faceN, const Real *faceJ,
+                             const Real *freeState, const Real gamma,
                              Real *faceFlux) {
-  for (int F = 0; F < N_face; ++F; @tile(TILE_SIZE, @outer, @inner)) {
-    const int KL = faceKL[F];
-    const int fL = faceFL[F];
-    const int KR = faceKR[F];
-    const int fR = faceFR[F];
+    for (int F = 0; F < N_face; ++F; @tile(TILE_SIZE, @outer, @inner)) {
+        const int KL = faceKL[F];
+        const int fL = faceFL[F];
+        const int KR = faceKR[F];
+        const int fR = faceFR[F];
 
-    // Collapsed (triangle) face: nothing to integrate (zero the slots and
-    // skip the flux work).
-    if (fL >= 0) {
-      // Unit normal from the un-normalised face normal and face Jacobian:
-      //   |J_f| = |e| / 2 and |n_hat| = |e|, hence n_unit = n_hat / (2 |J_f|).
-      const Real nUx = faceN[F * 2 + 0] / ((Real)2 * faceJ[F]);
-      const Real nUy = faceN[F * 2 + 1] / ((Real)2 * faceJ[F]);
+        // Collapsed (triangle) face: nothing to integrate (zero the slots and
+        // skip the flux work).
+        if (fL >= 0) {
+            // Unit normal from the un-normalised face normal and face Jacobian:
+            //   |J_f| = |e| / 2 and |n_hat| = |e|, hence n_unit = n_hat / (2 |J_f|).
+            const Real nUx = faceN[F * 2 + 0] / ((Real)2 * faceJ[F]);
+            const Real nUy = faceN[F * 2 + 1] / ((Real)2 * faceJ[F]);
 
-      // Pass 1: physical flux at every face quadrature point, stored
-      // locally (N_q x 4; the buffer is sized for N_q <= 16).
-      Real fp[16 * 4];
-      for (int i = 0; i < N_q; ++i) {
-        // Interpolate left state at face point t_i.
-        Real qL[4];
-        for (int var = 0; var < 4; ++var) {
-          Real acc = 0.0;
-          const int vBase = (0 * 4 + fL) * (N_q * N_modes) + i * N_modes;
-          const int uBase = KL * N_vars * N_modes + var * N_modes;
-          for (int m = 0; m < N_modes; ++m) {
-            acc += Vface[vBase + m] * u[uBase + m];
-          }
-          qL[var] = acc;
-        }
+            // Pass 1: physical flux at every face quadrature point, stored
+            // locally (N_q x 4; the buffer is sized for N_q <= 16).
+            Real fp[16 * 4];
+            for (int i = 0; i < N_q; ++i) {
+                // Interpolate left state at face point t_i.
+                Real qL[4];
+                for (int var = 0; var < 4; ++var) {
+                    Real acc = 0.0;
+                    const int vBase =
+                        (0 * 4 + fL) * (N_q * N_modes) + i * N_modes;
+                    const int uBase = KL * N_vars * N_modes + var * N_modes;
+                    for (int m = 0; m < N_modes; ++m) {
+                        acc += Vface[vBase + m] * u[uBase + m];
+                    }
+                    qL[var] = acc;
+                }
 
-        // Interpolate right state; boundary faces use the free-stream state.
-        Real qR[4];
-        if (KR >= 0) {
-          for (int var = 0; var < 4; ++var) {
-            Real acc = 0.0;
-            // Right state interpolated with Vface[side=1][fR]:
-            // faceRefMapRight is keyed by the *right* element's own
-            // local face number (see the NOTE below).
-            const int vBase = (1 * 4 + fR) * (N_q * N_modes) + i * N_modes;
-            const int uBase = KR * N_vars * N_modes + var * N_modes;
-            for (int m = 0; m < N_modes; ++m) {
-              acc += Vface[vBase + m] * u[uBase + m];
-            }
-            qR[var] = acc;
-          }
-        } else {
-          for (int var = 0; var < 4; ++var) {
-            qR[var] = freeState[var];
-          }
-        }
+                // Interpolate right state; boundary faces use the free-stream state.
+                Real qR[4];
+                if (KR >= 0) {
+                    for (int var = 0; var < 4; ++var) {
+                        Real acc = 0.0;
+                        // Right state interpolated with Vface[side=1][fR]:
+                        // faceRefMapRight is keyed by the *right* element's own
+                        // local face number (see the NOTE below).
+                        const int vBase =
+                            (1 * 4 + fR) * (N_q * N_modes) + i * N_modes;
+                        const int uBase = KR * N_vars * N_modes + var * N_modes;
+                        for (int m = 0; m < N_modes; ++m) {
+                            acc += Vface[vBase + m] * u[uBase + m];
+                        }
+                        qR[var] = acc;
+                    }
+                } else {
+                    for (int var = 0; var < 4; ++var) {
+                        qR[var] = freeState[var];
+                    }
+                }
 
-        // Numerical flux in physical space (rotate -> 1-D flux -> rotate
-        // back). The flux family is selected at compile time via FLUX_TYPE.
-        Real fluxPhys[4];
-        Real qLr[4], qRr[4], fluxLoc[4];
-        rotate_state(qL, nUx, nUy, qLr);
-        rotate_state(qR, nUx, nUy, qRr);
+                // Numerical flux in physical space (rotate -> 1-D flux -> rotate
+                // back). The flux family is selected at compile time via FLUX_TYPE.
+                Real fluxPhys[4];
+                Real qLr[4], qRr[4], fluxLoc[4];
+                rotate_state(qL, nUx, nUy, qLr);
+                rotate_state(qR, nUx, nUy, qRr);
 
 #if FLUX_TYPE == FLUX_LLF
-        llf_flux(qLr, qRr, gamma, fluxLoc);
+                llf_flux(qLr, qRr, gamma, fluxLoc);
 #elif FLUX_TYPE == FLUX_ROE
-        // Reserved: roe_flux(qLr, qRr, gamma, fluxLoc);
-        llf_flux(qLr, qRr, gamma, fluxLoc);
+                // Reserved: roe_flux(qLr, qRr, gamma, fluxLoc);
+                llf_flux(qLr, qRr, gamma, fluxLoc);
 #elif FLUX_TYPE == FLUX_ROEE
-        // Reserved: roe_flux with entropy fix.
-        llf_flux(qLr, qRr, gamma, fluxLoc);
+                // Reserved: roe_flux with entropy fix.
+                llf_flux(qLr, qRr, gamma, fluxLoc);
 #elif FLUX_TYPE == FLUX_STEGERWARMING
-        // Reserved: steger_warming_flux.
-        llf_flux(qLr, qRr, gamma, fluxLoc);
+                // Reserved: steger_warming_flux.
+                llf_flux(qLr, qRr, gamma, fluxLoc);
 #elif FLUX_TYPE == FLUX_VANLEER
-        // Reserved: van_leer_flux.
-        llf_flux(qLr, qRr, gamma, fluxLoc);
+                // Reserved: van_leer_flux.
+                llf_flux(qLr, qRr, gamma, fluxLoc);
 #else
-        llf_flux(qLr, qRr, gamma, fluxLoc);
+                llf_flux(qLr, qRr, gamma, fluxLoc);
 #endif
 
-        rotate_flux_back(fluxLoc, nUx, nUy, fluxPhys);
+                rotate_flux_back(fluxLoc, nUx, nUy, fluxPhys);
 
-        for (int var = 0; var < 4; ++var) {
-          fp[i * 4 + var] = fluxPhys[var];
-        }
-      }
+                for (int var = 0; var < 4; ++var) {
+                    fp[i * 4 + var] = fluxPhys[var];
+                }
+            }
 
-      // Pass 2: single write-out per (var, l). Each slot is accumulated in
-      // registers across the quadrature points instead of suffering a
-      // read-modify-write per point (the 2*N_vars*N_modes accumulators
-      // exceed the CPU AVX register file and depress GPU occupancy when
-      // spilled to the faceFlux array). The per-point product and the
-      // summation order match the original += form exactly, so the stored
-      // values are bit-for-bit identical.
-      for (int var = 0; var < N_vars; ++var) {
-        for (int l = 0; l < N_modes; ++l) {
-          // NOTE: the right side uses the *right* element's own local face
-          // index fR for the Vface lookup. faceRefMapRight(fR) is the map
-          // of that face in the right element with the traversal reversed
-          // (clockwise w.r.t. its own counter-clockwise convention). Keying
-          // by fR instead of fL stays correct on triangle meshes, where
-          // the quad-only pairing f_R = (f_L + 2) % 4 does not hold (e.g.
-          // split-diagonal faces have (fL, fR) = (0, 1)).
-          const int vBaseL = (0 * 4 + fL) * (N_q * N_modes) + l;
-          const int vBaseR = (1 * 4 + fR) * (N_q * N_modes) + l;
-          Real accL = 0.0;
-          Real accR = 0.0;
-          for (int i = 0; i < N_q; ++i) {
-            const Real wJ = faceW[i] * faceJ[F];
-            const Real fv = fp[i * 4 + var];
-            accL += wJ * fv * Vface[vBaseL + i * N_modes];
-            accR += wJ * fv * Vface[vBaseR + i * N_modes];
-          }
-          faceFlux[((F * N_vars + var) * 2 + 0) * N_modes + l] = accL;
-          faceFlux[((F * N_vars + var) * 2 + 1) * N_modes + l] =
-              (KR >= 0) ? accR : 0.0;
+            // Pass 2: single write-out per (var, l). Each slot is accumulated in
+            // registers across the quadrature points instead of suffering a
+            // read-modify-write per point (the 2*N_vars*N_modes accumulators
+            // exceed the CPU AVX register file and depress GPU occupancy when
+            // spilled to the faceFlux array). The per-point product and the
+            // summation order match the original += form exactly, so the stored
+            // values are bit-for-bit identical.
+            for (int var = 0; var < N_vars; ++var) {
+                for (int l = 0; l < N_modes; ++l) {
+                    // NOTE: the right side uses the *right* element's own local face
+                    // index fR for the Vface lookup. faceRefMapRight(fR) is the map
+                    // of that face in the right element with the traversal reversed
+                    // (clockwise w.r.t. its own counter-clockwise convention). Keying
+                    // by fR instead of fL stays correct on triangle meshes, where
+                    // the quad-only pairing f_R = (f_L + 2) % 4 does not hold (e.g.
+                    // split-diagonal faces have (fL, fR) = (0, 1)).
+                    const int vBaseL = (0 * 4 + fL) * (N_q * N_modes) + l;
+                    const int vBaseR = (1 * 4 + fR) * (N_q * N_modes) + l;
+                    Real accL        = 0.0;
+                    Real accR        = 0.0;
+                    for (int i = 0; i < N_q; ++i) {
+                        const Real wJ = faceW[i] * faceJ[F];
+                        const Real fv = fp[i * 4 + var];
+                        accL += wJ * fv * Vface[vBaseL + i * N_modes];
+                        accR += wJ * fv * Vface[vBaseR + i * N_modes];
+                    }
+                    faceFlux[((F * N_vars + var) * 2 + 0) * N_modes + l] = accL;
+                    faceFlux[((F * N_vars + var) * 2 + 1) * N_modes + l] =
+                        (KR >= 0) ? accR : 0.0;
+                }
+            }
+        } else {
+            // Degenerate face: still define the allocated slots.
+            for (int var = 0; var < N_vars; ++var) {
+                for (int side = 0; side < 2; ++side) {
+                    for (int l = 0; l < N_modes; ++l) {
+                        faceFlux[((F * N_vars + var) * 2 + side) * N_modes +
+                                 l] = 0.0;
+                    }
+                }
+            }
         }
-      }
-    } else {
-      // Degenerate face: still define the allocated slots.
-      for (int var = 0; var < N_vars; ++var) {
-        for (int side = 0; side < 2; ++side) {
-          for (int l = 0; l < N_modes; ++l) {
-            faceFlux[((F * N_vars + var) * 2 + side) * N_modes + l] = 0.0;
-          }
-        }
-      }
     }
-  }
 }

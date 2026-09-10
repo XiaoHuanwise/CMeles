@@ -29,15 +29,13 @@
 
 #include "VortexCommon.hpp"
 
-namespace
-{
+namespace {
 
 constexpr bool kSinglePrecision = std::is_same<Real, float>::value;
 
 /// @brief Run one vortex computation for a method by name (the stepper is
 ///        selected by makeStepperFactory from the configuration).
-vortex::Errors runMethod(const vortex::Options &opt)
-{
+vortex::Errors runMethod(const vortex::Options &opt) {
     const std::string scratch = "test_vortex_methods_scratch.toml";
     const Config cfg          = vortex::makeConfig(opt, scratch);
     return vortex::runAndMeasure(cfg);
@@ -53,11 +51,9 @@ vortex::Errors runMethod(const vortex::Options &opt)
 /// @return The order measured between the first and last dt.
 Real temporalOrder(const std::string &method, int nx,
                    const std::vector<Real> &dts, Real rtol, Real atol,
-                   int maxPseudoSteps, Real tFinal, Real pseudoRtol = Real(0))
-{
+                   int maxPseudoSteps, Real tFinal, Real pseudoRtol = Real(0)) {
     std::vector<Real> errors(dts.size());
-    for (std::size_t k = 0; k < dts.size(); ++k)
-    {
+    for (std::size_t k = 0; k < dts.size(); ++k) {
         vortex::Options opt;
         opt.nx                   = nx;
         opt.method               = method;
@@ -80,12 +76,10 @@ Real temporalOrder(const std::string &method, int nx,
 /// @brief Spatial order (mesh refinement) of an adaptive method at tight
 ///        tolerances.
 Real meshOrder(const std::string &method, int nx1, int nx2,
-               std::vector<Real> *errorsOut)
-{
+               std::vector<Real> *errorsOut) {
     std::vector<Real> errors(2);
     std::vector<int> nx{nx1, nx2};
-    for (int k = 0; k < 2; ++k)
-    {
+    for (int k = 0; k < 2; ++k) {
         vortex::Options opt;
         opt.nx     = nx[static_cast<std::size_t>(k)];
         opt.method = method;
@@ -101,8 +95,7 @@ Real meshOrder(const std::string &method, int nx1, int nx2,
                   << " (steps " << err.steps << ", drift " << err.massDrift
                   << ")\n";
     }
-    if (errorsOut != nullptr)
-    {
+    if (errorsOut != nullptr) {
         *errorsOut = errors;
     }
     return std::log(errors[0] / errors[1]) / std::log(Real(nx2) / Real(nx1));
@@ -110,8 +103,7 @@ Real meshOrder(const std::string &method, int nx1, int nx2,
 
 } // namespace
 
-int main()
-{
+int main() {
     bool ok = true;
 
     // Dual-time tolerances: above the single-precision residual floor.
@@ -126,8 +118,7 @@ int main()
     {
         const char *methods[] = {"rk32",     "rk54",     "ssprk221",
                                  "ssprk321", "ssprk332", "ssprk432"};
-        for (const char *m : methods)
-        {
+        for (const char *m : methods) {
             std::cout << "  [" << m << "]\n";
             std::vector<Real> errs;
             const Real order = meshOrder(m, 16, 32, &errs);

@@ -17,12 +17,9 @@
 #include "ExprInitialCondition.hpp"
 #include "time/StepperFactory.hpp"
 
-namespace solver_detail
-{
-void applyOmpThreads(int threads)
-{
-    if (threads <= 0)
-    {
+namespace solver_detail {
+void applyOmpThreads(int threads) {
+    if (threads <= 0) {
         return;
     }
 #ifdef _OPENMP
@@ -40,8 +37,7 @@ void applyOmpThreads(int threads)
 }
 } // namespace solver_detail
 
-int runCompressibleFlowSolver(const Config &cfg)
-{
+int runCompressibleFlowSolver(const Config &cfg) {
     CompressibleFlowSolver solver(cfg);
     return solver.run();
 }
@@ -51,12 +47,10 @@ int runCompressibleFlowSolver(const Config &cfg)
 // ----------------------------------------------------------------------------
 
 CompressibleFlowSolver::CompressibleFlowSolver(Config cfg)
-    : cfg_(std::move(cfg))
-{
+    : cfg_(std::move(cfg)) {
 }
 
-CompressibleFlowSolver::~CompressibleFlowSolver()
-{
+CompressibleFlowSolver::~CompressibleFlowSolver() {
     stepper_.reset();
     field_.reset();
     blas_.reset();
@@ -64,10 +58,8 @@ CompressibleFlowSolver::~CompressibleFlowSolver()
     device_.free();
 }
 
-void CompressibleFlowSolver::applyInitialCondition()
-{
-    switch (cfg_.icType())
-    {
+void CompressibleFlowSolver::applyInitialCondition() {
+    switch (cfg_.icType()) {
         case IcType::Uniform:
             field_->applyFreeStreamInitialCondition(field_->o_u());
             break;
@@ -77,8 +69,7 @@ void CompressibleFlowSolver::applyInitialCondition()
     }
 }
 
-Real CompressibleFlowSolver::computeDt(Real t)
-{
+Real CompressibleFlowSolver::computeDt(Real t) {
     const Real remaining = cfg_.timeFinal() - t;
     Real dt = (cfg_.timeDt() > Real(0))
                   ? cfg_.timeDt()
@@ -86,8 +77,7 @@ Real CompressibleFlowSolver::computeDt(Real t)
     return std::min(dt, remaining);
 }
 
-int CompressibleFlowSolver::run()
-{
+int CompressibleFlowSolver::run() {
     // OCCA's OpenMP backend emits `#pragma omp parallel for` with no
     // num_threads clause, so the runtime ICV governs every kernel; set it
     // before the first parallel region (no-op for the non-OpenMP backends).
@@ -121,20 +111,17 @@ int CompressibleFlowSolver::run()
 
     time_  = Real(0);
     steps_ = 0;
-    while (time_ < cfg_.timeFinal() - Real(1e-12) * cfg_.timeFinal())
-    {
+    while (time_ < cfg_.timeFinal() - Real(1e-12) * cfg_.timeFinal()) {
         const Real dt    = computeDt(time_);
         const Real taken = stepper_->advance(field_->o_u(), time_, dt);
         time_ += taken;
         ++steps_;
 
-        if (steps_ % printInterval_ == 0)
-        {
+        if (steps_ % printInterval_ == 0) {
             occa::memory ou = field_->o_u(), ores = field_->o_res();
             rhs(ou, ores);
             const Real resNorm = blas_->nrm2(nDof, ores);
-            if (!std::isfinite(resNorm))
-            {
+            if (!std::isfinite(resNorm)) {
                 std::cout << "CMeles: residual is not finite at step " << steps_
                           << ", t = " << time_ << " — aborting\n";
                 return 1;
@@ -143,8 +130,7 @@ int CompressibleFlowSolver::run()
                       << ", dt = " << taken << ", |res|_2 = " << resNorm
                       << "\n";
         }
-        if (taken <= Real(0))
-        {
+        if (taken <= Real(0)) {
             std::cout << "CMeles: zero time step at t = " << time_
                       << " — aborting\n";
             return 1;
@@ -154,8 +140,7 @@ int CompressibleFlowSolver::run()
     occa::memory ou = field_->o_u(), ores = field_->o_res();
     rhs(ou, ores);
     const Real resNorm = blas_->nrm2(nDof, ores);
-    if (!std::isfinite(resNorm))
-    {
+    if (!std::isfinite(resNorm)) {
         std::cout << "CMeles: final residual is not finite after " << steps_
                   << " steps — aborting\n";
         return 1;

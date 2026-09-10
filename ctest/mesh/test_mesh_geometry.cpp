@@ -14,15 +14,12 @@
 #include "mesh/MeshGeometry.hpp"
 #include "mesh/StructuredMeshGenerator.hpp"
 
-namespace
-{
+namespace {
 const Real tol = Real(1e3) * RealEpsilon;
 
-bool checkRelative(Real value, Real reference, const char *what)
-{
+bool checkRelative(Real value, Real reference, const char *what) {
     const Real denom = std::max(std::abs(reference), RealEpsilon);
-    if (std::abs(value - reference) > tol * denom)
-    {
+    if (std::abs(value - reference) > tol * denom) {
         std::cout << "  FAIL " << what << ": value=" << value
                   << " ref=" << reference << "\n";
         return false;
@@ -31,16 +28,13 @@ bool checkRelative(Real value, Real reference, const char *what)
 }
 
 /// Relative error of vector \p v w.r.t. reference \p ref (max norm).
-Real relErr(const VectorXr &v, const VectorXr &ref)
-{
+Real relErr(const VectorXr &v, const VectorXr &ref) {
     return (v - ref).template lpNorm<Eigen::Infinity>() /
            std::max(ref.template lpNorm<Eigen::Infinity>(), RealEpsilon);
 }
 
-bool checkVector(const VectorXr &v, const VectorXr &ref, const char *what)
-{
-    if (relErr(v, ref) > tol)
-    {
+bool checkVector(const VectorXr &v, const VectorXr &ref, const char *what) {
+    if (relErr(v, ref) > tol) {
         std::cout << "  FAIL " << what << ": relErr=" << relErr(v, ref) << "\n";
         return false;
     }
@@ -48,8 +42,7 @@ bool checkVector(const VectorXr &v, const VectorXr &ref, const char *what)
 }
 
 /// Build the 2D basis used throughout the tests.
-BasisFunctions2D makeBasis(int order, int nq)
-{
+BasisFunctions2D makeBasis(int order, int nq) {
     static BasisFunctions1D basis1D(order, nq); // shared 1D basis
     return BasisFunctions2D(basis1D, order);
 }
@@ -59,8 +52,7 @@ BasisFunctions2D makeBasis(int order, int nq)
 // 1. Structured generator: rectangular domain
 // ---------------------------------------------------------------------------
 
-static bool testGeneratorRectangular()
-{
+static bool testGeneratorRectangular() {
     std::cout << "Test 1: structured generator (rectangular)\n";
     bool ok = true;
 
@@ -75,8 +67,7 @@ static bool testGeneratorRectangular()
     const int nInterior = nx * (ny - 1) + (nx - 1) * ny;
     const int nBoundary = 2 * nx + 2 * ny;
     ok &= mesh.numFaces() == nInterior + nBoundary;
-    if (!ok)
-    {
+    if (!ok) {
         std::cout << "  FAIL sizes: verts=" << mesh.numVertices()
                   << " elems=" << mesh.numElements()
                   << " faces=" << mesh.numFaces() << "\n";
@@ -84,10 +75,8 @@ static bool testGeneratorRectangular()
     }
 
     // Vertex coordinates.
-    for (int j = 0; j <= ny; ++j)
-    {
-        for (int i = 0; i <= nx; ++i)
-        {
+    for (int j = 0; j <= ny; ++j) {
+        for (int i = 0; i <= nx; ++i) {
             const int v = j * (nx + 1) + i;
             ok &= checkRelative(mesh.vertices()(v, 0), Real(i) * dx, "x");
             ok &= checkRelative(mesh.vertices()(v, 1), Real(j) * dy, "y");
@@ -95,10 +84,8 @@ static bool testGeneratorRectangular()
     }
 
     // Element vertex connectivity: (v00, v10, v11, v01).
-    for (int j = 0; j < ny; ++j)
-    {
-        for (int i = 0; i < nx; ++i)
-        {
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
             const int e    = j * nx + i;
             const int v00  = j * (nx + 1) + i;
             const auto &ev = mesh.elementVertices();
@@ -111,14 +98,12 @@ static bool testGeneratorRectangular()
 
     // Face type counts.
     int nInt = 0, nBnd = 0;
-    for (int F = 0; F < mesh.numFaces(); ++F)
-    {
+    for (int F = 0; F < mesh.numFaces(); ++F) {
         mesh.faceTypes()(F) == int(Mesh::FaceType::Interior) ? ++nInt : ++nBnd;
     }
     ok &= nInt == nInterior;
     ok &= nBnd == nBoundary;
-    if (!ok)
-    {
+    if (!ok) {
         std::cout << "  FAIL face types: interior=" << nInt << " (expect "
                   << nInterior << ") boundary=" << nBnd << " (expect "
                   << nBoundary << ")\n";
@@ -130,8 +115,7 @@ static bool testGeneratorRectangular()
 // 2. Face construction: bidirectional mapping and orientation
 // ---------------------------------------------------------------------------
 
-static bool testFaceConstruction()
-{
+static bool testFaceConstruction() {
     std::cout << "Test 2: face construction (2x2 square grid)\n";
     bool ok = true;
 
@@ -139,25 +123,21 @@ static bool testFaceConstruction()
         StructuredMeshGenerator::generate(StructuredMeshGenerator::Params{
             2, 2, Real(0), Real(0), Real(1), Real(1)});
 
-    for (int F = 0; F < mesh.numFaces(); ++F)
-    {
+    for (int F = 0; F < mesh.numFaces(); ++F) {
         const auto &fe = mesh.faceElements();
         const int KL = fe(F, 0), fL = fe(F, 1);
         const int KR = fe(F, 2), fR = fe(F, 3);
 
         // Bidirectional mapping: elemFaces(KL, fL) == F (and KR if interior).
         ok &= mesh.elementFaces()(KL, fL) == F;
-        if (KR != -1)
-        {
+        if (KR != -1) {
             ok &= mesh.elementFaces()(KR, fR) == F;
             // Orientation: the right element traverses the same edge in the
             // opposite direction.
             const auto [lA, lB] = mesh.faceVertices(KL, fL);
             const auto [rA, rB] = mesh.faceVertices(KR, fR);
             ok &= lA == rB && lB == rA;
-        }
-        else
-        {
+        } else {
             ok &= mesh.faceTypes()(F) == int(Mesh::FaceType::Boundary);
         }
     }
@@ -165,10 +145,8 @@ static bool testFaceConstruction()
     // A 2x2 grid has 2 vertical + 2 horizontal shared edges = 4 interior
     // faces; each is claimed by exactly two elements.
     int shared = 0;
-    for (int F = 0; F < mesh.numFaces(); ++F)
-    {
-        if (mesh.faceElements()(F, 2) != -1)
-        {
+    for (int F = 0; F < mesh.numFaces(); ++F) {
+        if (mesh.faceElements()(F, 2) != -1) {
             ++shared;
         }
     }
@@ -180,8 +158,7 @@ static bool testFaceConstruction()
 // 3. Face normals: analytic values and direction
 // ---------------------------------------------------------------------------
 
-static bool testFaceNormals()
-{
+static bool testFaceNormals() {
     std::cout << "Test 3: face normals\n";
     bool ok = true;
 
@@ -192,26 +169,20 @@ static bool testFaceNormals()
 
     // Boundary faces of element 0 (bottom-left quad): left face n=(-h,0),
     // bottom face n=(0,-h).
-    for (int F = 0; F < mesh.numFaces(); ++F)
-    {
+    for (int F = 0; F < mesh.numFaces(); ++F) {
         const int KL = mesh.faceElements()(F, 0);
         const int fL = mesh.faceElements()(F, 1);
-        if (KL != 0)
-        {
+        if (KL != 0) {
             continue;
         }
-        if (mesh.faceElements()(F, 2) != -1)
-        {
+        if (mesh.faceElements()(F, 2) != -1) {
             continue; // interior face of element 0: checked below
         }
         // Boundary faces of element 0: fL == 0 (left) or fL == 1 (bottom).
-        if (fL == 0)
-        {
+        if (fL == 0) {
             ok &= checkRelative(geo.faceNormals()(F, 0), Real(-h), "n_x left");
             ok &= checkRelative(geo.faceNormals()(F, 1), Real(0), "n_y left");
-        }
-        else if (fL == 1)
-        {
+        } else if (fL == 1) {
             ok &= checkRelative(geo.faceNormals()(F, 0), Real(0), "n_x bottom");
             ok &=
                 checkRelative(geo.faceNormals()(F, 1), Real(-h), "n_y bottom");
@@ -220,20 +191,17 @@ static bool testFaceNormals()
 
     // Interior faces: n points from K_L to K_R (same direction as the
     // segment joining the two element centres).
-    for (int F = 0; F < mesh.numFaces(); ++F)
-    {
+    for (int F = 0; F < mesh.numFaces(); ++F) {
         const int KL = mesh.faceElements()(F, 0);
         const int KR = mesh.faceElements()(F, 2);
-        if (KR == -1)
-        {
+        if (KR == -1) {
             continue;
         }
         // Element centres via their vertex coordinates.
         auto centre = [&](int e) -> std::pair<Real, Real> {
             const auto &v = mesh.elementVertices();
             Real cx = Real(0), cy = Real(0);
-            for (int k = 0; k < 4; ++k)
-            {
+            for (int k = 0; k < 4; ++k) {
                 cx += mesh.vertices()(v(e, k), 0);
                 cy += mesh.vertices()(v(e, k), 1);
             }
@@ -249,16 +217,14 @@ static bool testFaceNormals()
     }
 
     // |n| == edge length h for all faces.
-    for (int F = 0; F < mesh.numFaces(); ++F)
-    {
+    for (int F = 0; F < mesh.numFaces(); ++F) {
         const Real nx = geo.faceNormals()(F, 0);
         const Real ny = geo.faceNormals()(F, 1);
         ok &= checkRelative(std::sqrt(nx * nx + ny * ny), h, "|n|");
     }
 
     // Face Jacobian |J_f| == h/2.
-    for (int F = 0; F < mesh.numFaces(); ++F)
-    {
+    for (int F = 0; F < mesh.numFaces(); ++F) {
         ok &= checkRelative(geo.faceJacobians()(F), h / Real(2), "|J_f|");
     }
     return ok;
@@ -268,8 +234,7 @@ static bool testFaceNormals()
 // 4. Square element geometry
 // ---------------------------------------------------------------------------
 
-static bool testSquareGeometry()
-{
+static bool testSquareGeometry() {
     std::cout << "Test 4: square element geometry\n";
     bool ok = true;
 
@@ -281,8 +246,7 @@ static bool testSquareGeometry()
     const int Nq2 = geo.numPointsPerElement();
 
     // |J| = h^2/4 constant; J^-1 = (2/h) I; sum Lambda = h^2.
-    for (int q = 0; q < Nq2; ++q)
-    {
+    for (int q = 0; q < Nq2; ++q) {
         ok &= checkRelative(geo.absJacobian()(q), h * h / Real(4), "|J|");
         ok &= checkRelative(geo.Jinv11()(q), Real(2) / h, "Jinv11");
         ok &= checkRelative(geo.Jinv12()(q), Real(0), "Jinv12");
@@ -290,8 +254,7 @@ static bool testSquareGeometry()
         ok &= checkRelative(geo.Jinv22()(q), Real(2) / h, "Jinv22");
     }
     Real sumLambda = Real(0);
-    for (int q = 0; q < Nq2; ++q)
-    {
+    for (int q = 0; q < Nq2; ++q) {
         sumLambda += geo.lambdaWJ()(q);
     }
     ok &= checkRelative(sumLambda, h * h, "sum Lambda_wJ");
@@ -313,8 +276,7 @@ static bool testSquareGeometry()
 // ---------------------------------------------------------------------------
 
 /// Trapezoid: P1=(0,0), P2=(2,0), P3=(1.5,2), P4=(0,1). Not a parallelogram.
-static Mesh makeTrapezoidMesh()
-{
+static Mesh makeTrapezoidMesh() {
     MatrixX2r verts(4, 2);
     verts << Real(0), Real(0), Real(2), Real(0), Real(1.5), Real(2), Real(0),
         Real(1);
@@ -323,8 +285,7 @@ static Mesh makeTrapezoidMesh()
     return Mesh(verts, ev);
 }
 
-static bool testWarpedQuad()
-{
+static bool testWarpedQuad() {
     std::cout << "Test 5: warped quadrilateral (trapezoid)\n";
     bool ok = true;
 
@@ -344,8 +305,7 @@ static bool testWarpedQuad()
     const Real b2 = (-y1 - y2 + y3 + y4) / Real(4);
     const Real b3 = (y1 - y2 + y3 - y4) / Real(4);
 
-    for (int q = 0; q < Nq2; ++q)
-    {
+    for (int q = 0; q < Nq2; ++q) {
         const Real r = qp(q, 0), s = qp(q, 1);
         const Real dxdr = a1 + a3 * s, dxds = a2 + a3 * r;
         const Real dydr = b1 + b3 * s, dyds = b2 + b3 * r;
@@ -361,13 +321,11 @@ static bool testWarpedQuad()
         const Real id21 = j21 * dxdr + j22 * dydr;
         const Real id22 = j21 * dxds + j22 * dyds;
         ok &= checkRelative(id11, Real(1), "(Jinv J)_11");
-        if (std::abs(id12) > tol)
-        {
+        if (std::abs(id12) > tol) {
             std::cout << "  FAIL (Jinv J)_12: value=" << id12 << "\n";
             ok = false;
         }
-        if (std::abs(id21) > tol)
-        {
+        if (std::abs(id21) > tol) {
             std::cout << "  FAIL (Jinv J)_21: value=" << id21 << "\n";
             ok = false;
         }
@@ -403,8 +361,7 @@ static bool testWarpedQuad()
 // 6. Triangle collapse (single degenerate quad)
 // ---------------------------------------------------------------------------
 
-static bool testTriangleCollapse()
-{
+static bool testTriangleCollapse() {
     std::cout << "Test 6: triangle collapse\n";
     bool ok = true;
 
@@ -430,8 +387,7 @@ static bool testTriangleCollapse()
     //   dx/dr = h(1-s)/4,  dx/ds = -h(1+r)/4,  dy/dr = 0,  dy/ds = h/2
     //   |J| = dxdr*dyds - dxds*dydr = h^2(1-s)/8.
     // For h=2: |J| = (1-s)/2; integral over [-1,1]^2 gives area h^2/2.
-    for (int q = 0; q < Nq2; ++q)
-    {
+    for (int q = 0; q < Nq2; ++q) {
         const Real s = qp(q, 1);
         ok &= checkRelative(geo.absJacobian()(q),
                             h * h * (Real(1) - s) / Real(8), "|J| triangle");
@@ -456,8 +412,7 @@ static bool testTriangleCollapse()
 // 7. Triangle-split structured mesh
 // ---------------------------------------------------------------------------
 
-static bool testTriangleSplit()
-{
+static bool testTriangleSplit() {
     std::cout << "Test 7: triangle-split structured mesh\n";
     bool ok = true;
 
@@ -470,8 +425,7 @@ static bool testTriangleSplit()
     ok &= mesh.numElements() == 2 * nx * ny;
     // Faces: 3*nx*ny + nx + ny (each triangle contributes 3 edges).
     ok &= mesh.numFaces() == 3 * nx * ny + nx + ny;
-    for (int e = 0; e < mesh.numElements(); ++e)
-    {
+    for (int e = 0; e < mesh.numElements(); ++e) {
         ok &= mesh.isTriangle(e);
         ok &= mesh.elementFaces()(e, 3) == -1;
     }
@@ -487,8 +441,7 @@ static bool testTriangleSplit()
 // 8. Area conservation across mesh types
 // ---------------------------------------------------------------------------
 
-static bool testAreaConservation()
-{
+static bool testAreaConservation() {
     std::cout << "Test 8: area conservation\n";
     bool ok = true;
 
@@ -524,8 +477,7 @@ static bool testAreaConservation()
 // 9. Orthogonal (constant-Jacobian) detection
 // ---------------------------------------------------------------------------
 
-static bool testOrthogonalDetection()
-{
+static bool testOrthogonalDetection() {
     std::cout << "Test 9: orthogonal detection\n";
     bool ok = true;
 
@@ -536,8 +488,7 @@ static bool testOrthogonalDetection()
                 2, 2, Real(0), Real(0), Real(2), Real(3)});
         MeshGeometry geo(mesh, makeBasis(2, 3));
         ok &= geo.isOrthogonal();
-        for (int e = 0; e < geo.numElements(); ++e)
-        {
+        for (int e = 0; e < geo.numElements(); ++e) {
             ok &= checkRelative(geo.jacobianConstant()(e),
                                 Real(2) * Real(3) / Real(4), "|J| const");
             ok &= checkRelative(geo.massMatrixInverseDiagonal()(e),
@@ -562,10 +513,8 @@ static bool testOrthogonalDetection()
         // |J| varies across quadrature points.
         const int Nq2 = geo.numPointsPerElement();
         bool varies   = false;
-        for (int q = 1; q < Nq2; ++q)
-        {
-            if (std::abs(geo.absJacobian()(q) - geo.absJacobian()(0)) > tol)
-            {
+        for (int q = 1; q < Nq2; ++q) {
+            if (std::abs(geo.absJacobian()(q) - geo.absJacobian()(0)) > tol) {
                 varies = true;
             }
         }
@@ -584,10 +533,8 @@ static bool testOrthogonalDetection()
         // |J| varies with s across quadrature points.
         const int Nq2 = geo.numPointsPerElement();
         bool varies   = false;
-        for (int q = 1; q < Nq2; ++q)
-        {
-            if (std::abs(geo.absJacobian()(q) - geo.absJacobian()(0)) > tol)
-            {
+        for (int q = 1; q < Nq2; ++q) {
+            if (std::abs(geo.absJacobian()(q) - geo.absJacobian()(0)) > tol) {
                 varies = true;
             }
         }
@@ -600,8 +547,7 @@ static bool testOrthogonalDetection()
 // 10. Orientation regression: all generated meshes have |J| > 0
 // ---------------------------------------------------------------------------
 
-static bool testPositiveJacobian()
-{
+static bool testPositiveJacobian() {
     std::cout << "Test 10: positive Jacobian regression\n";
     bool ok = true;
 
@@ -612,12 +558,10 @@ static bool testPositiveJacobian()
         {4, 1, Real(0), Real(0), Real(2), Real(1), Real(1), true},
     };
     int idx = 0;
-    for (const auto &p : cases)
-    {
+    for (const auto &p : cases) {
         auto mesh = StructuredMeshGenerator::generate(p);
         MeshGeometry geo(mesh, makeBasis(2, 3));
-        if (geo.absJacobian().minCoeff() <= Real(0))
-        {
+        if (geo.absJacobian().minCoeff() <= Real(0)) {
             std::cout << "  FAIL case " << idx << ": min |J| <= 0\n";
             ok = false;
         }
@@ -626,11 +570,9 @@ static bool testPositiveJacobian()
     return ok;
 }
 
-int main()
-{
+int main() {
     bool ok = true;
-    struct Case
-    {
+    struct Case {
         const char *name;
         bool (*fn)();
     };
@@ -646,8 +588,7 @@ int main()
         {"testOrthogonalDetection", testOrthogonalDetection},
         {"testPositiveJacobian", testPositiveJacobian},
     };
-    for (const auto &c : cases)
-    {
+    for (const auto &c : cases) {
         const bool r = c.fn();
         std::cout << "  [" << (r ? "PASS" : "FAIL") << "] " << c.name << "\n";
         ok &= r;

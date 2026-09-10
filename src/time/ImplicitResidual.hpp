@@ -9,24 +9,25 @@
 /// multi-stage arguments).
 ///
 /// Backward Euler:
+///
 /// $$ \mathcal{F} = \frac{u^n - u^{n+1}}{\Delta t} + \mathcal{R}(u^{n+1}) $$
 ///
 /// DITR (deferred-implicit time reconstruction, see
 /// docs/tech_docs/time_marching/implicit_time_marching.md) reconstructs the
 /// stage values $u^{n+c_2}$ and $u^{n+1}$ with the reconstruction
 /// coefficients $a$ and $d$:
-/// $$
-/// \begin{aligned}
-///   F_0 &= \frac{a_0 u^{n-1} + a_1 u^n + a_2 u^{n+1} - u^{n+c_2}}{\Delta t}
-///               + d_1 R^n + d_2 R^{n+1} \\
-///   F_1 &= \frac{u^n - u^{n+1}}{\Delta t}
-///          + b_1 R^n + b_2 R^{n+c_2} + b_3 R^{n+1}
-/// \end{aligned}
-/// $$
-/// with the quadrature weights $$b = [0, \frac12 - \frac{1}{6 c_2},
-/// \frac{1}{6 c_2 (1 - c_2)}, \frac12 - \frac{1}{6 (1 - c_2)}]$$ and the
-/// coupling preconditioner $F_0 \mathrel{+}= \beta F_1$ ($$\mathbf{P} =
-/// \begin{bmatrix} I & \beta I \\ 0 & I \end{bmatrix}$, $\beta = 1$).
+///
+/// $$ \begin{aligned} F_0 &= \frac{a_0 u^{n-1} + a_1 u^n + a_2 u^{n+1} - u^{n+c_2}}{\Delta t} + d_1 R^n + d_2 R^{n+1} \\ F_1 &= \frac{u^n - u^{n+1}}{\Delta t} + b_1 R^n + b_2 R^{n+c_2} + b_3 R^{n+1} \end{aligned} $$
+///
+/// with the quadrature weights
+///
+/// $$b = [0, \frac12 - \frac{1}{6 c_2}, \frac{1}{6 c_2 (1 - c_2)}, \frac12 - \frac{1}{6 (1 - c_2)}]$$
+///
+/// and the coupling preconditioner $F_0 \mathrel{+}= \beta F_1$
+///
+/// $$\mathbf{P} = \begin{bmatrix} I & \beta I \\ 0 & I \end{bmatrix}$$
+///
+/// ($\beta = 1$).
 /// The U2R2/U2R1/U3R1 variants differ only in the coefficient values
 /// ($a_0 = 0$ and $d_1 = 0$ except where noted; U3R1 additionally uses
 /// $\theta = \Delta t^{n-1} / \Delta t^n$ and $u^{n-1}$).
@@ -56,8 +57,7 @@
 /// \p o_uPrev; DITR (\p nStages == 2) consumes them. The decoupled
 /// stage residuals only exist for two-stage schemes and default to an
 /// error on single-stage ones.
-class TemporalResidual
-{
+class TemporalResidual {
 public:
     virtual ~TemporalResidual() = default;
 
@@ -69,8 +69,7 @@ public:
 
     /// @brief Set $\theta = \Delta t^{n-1} / \Delta t^n$; no-op except DITR
     ///        U3R1 (rebuilds the reconstruction coefficients).
-    virtual void setTheta(Real /*theta*/)
-    {
+    virtual void setTheta(Real /*theta*/) {
     }
 
     /// @brief Coupled residual of the stacked implicit state.
@@ -93,8 +92,7 @@ public:
                                          occa::memory & /*o_u*/,
                                          occa::memory & /*o_Rn*/,
                                          occa::memory & /*o_uPrev*/,
-                                         Real /*dt*/, occa::memory & /*o_F0*/)
-    {
+                                         Real /*dt*/, occa::memory & /*o_F0*/) {
         throw std::logic_error(
             "temporalResidualStageC2: requires a two-stage residual (DITR)");
     }
@@ -104,8 +102,7 @@ public:
                                          occa::memory & /*o_Rnc2*/,
                                          occa::memory & /*o_u*/,
                                          occa::memory & /*o_Rn*/, Real /*dt*/,
-                                         occa::memory & /*o_F1*/)
-    {
+                                         occa::memory & /*o_F1*/) {
         throw std::logic_error(
             "temporalResidualStageN1: requires a two-stage residual (DITR)");
     }
@@ -151,8 +148,7 @@ private:
 };
 
 /// @brief Backward Euler temporal residual.
-class BackwardEulerResidual : public TemporalResidual
-{
+class BackwardEulerResidual : public TemporalResidual {
 public:
     BackwardEulerResidual(occa::device &device, DeviceMemoryManager &mem,
                           RhsFunction rhs, occa::dim_t nDof,
@@ -165,13 +161,11 @@ public:
                           occa::memory &o_F) override;
 
     /// @brief Number of stacked implicit stages (size of the pseudo state).
-    int nStages() const override
-    {
+    int nStages() const override {
         return 1;
     }
     /// @brief Whether $u^{n-1}$ is required (DITR U3R1 only).
-    bool needsPrev() const override
-    {
+    bool needsPrev() const override {
         return false;
     }
 
@@ -180,14 +174,12 @@ private:
 };
 
 /// @brief DITR temporal residual (U2R2 / U2R1 / U3R1).
-class DitrResidual : public TemporalResidual
-{
+class DitrResidual : public TemporalResidual {
 public:
     /// @brief DITR reconstruction variant. U = number of solution values in
     ///        the reconstruction stencil, R = number of residual values (the
     ///        quadrature weights themselves are shared by all variants).
-    enum class Variant
-    {
+    enum class Variant {
         U2R2 = 0, ///< 2 u-values + 2 residuals: cubic Hermite reconstruction.
         U2R1 = 1, ///< 2 u-values + 1 residual.
         U3R1 = 2  ///< 3 u-values (incl. u_prev) + 1 residual.
@@ -227,16 +219,13 @@ public:
                                  occa::memory &o_u, occa::memory &o_Rn, Real dt,
                                  occa::memory &o_F1) override;
 
-    int nStages() const override
-    {
+    int nStages() const override {
         return 2;
     }
-    bool needsPrev() const override
-    {
+    bool needsPrev() const override {
         return variant_ == Variant::U3R1;
     }
-    Variant variant() const
-    {
+    Variant variant() const {
         return variant_;
     }
 

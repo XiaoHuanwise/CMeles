@@ -12,8 +12,7 @@ RungeKuttaStepper::RungeKuttaStepper(occa::device &device,
                                      const ButcherTable &table, Params params,
                                      const std::string &oklDir)
     : StepperBase(device, mem, std::move(rhs), nDof, oklDir), table_(table),
-      params_(params)
-{
+      params_(params) {
     errorExponent_ = Real(1) / Real(table_.errorEstimatorOrder + 1);
 
     const int s       = table_.nStages;
@@ -23,10 +22,8 @@ RungeKuttaStepper::RungeKuttaStepper(occa::device &device,
     aFlat_.resize(static_cast<std::size_t>(s) * static_cast<std::size_t>(s));
     bFlat_.resize(static_cast<std::size_t>(s));
     eFlat_.resize(static_cast<std::size_t>(s) + 1);
-    for (int i = 0; i < s; ++i)
-    {
-        for (int j = 0; j < s; ++j)
-        {
+    for (int i = 0; i < s; ++i) {
+        for (int j = 0; j < s; ++j) {
             aFlat_[static_cast<std::size_t>(i * s + j)] =
                 table_.A[static_cast<std::size_t>(i)]
                         [static_cast<std::size_t>(j)];
@@ -53,14 +50,12 @@ RungeKuttaStepper::RungeKuttaStepper(occa::device &device,
     o_scratch_ = mem_.wrapOrMalloc(nDof_);
 }
 
-void RungeKuttaStepper::setRhs(RhsFunction rhs)
-{
+void RungeKuttaStepper::setRhs(RhsFunction rhs) {
     rhs_ = std::move(rhs);
 }
 
 void RungeKuttaStepper::rkStep(occa::memory &o_u, occa::memory &o_uNew,
-                               occa::memory &o_fNew)
-{
+                               occa::memory &o_fNew) {
     ensureRkKernels();
     const int n    = static_cast<int>(nDof_);
     const int s    = table_.nStages;
@@ -70,8 +65,7 @@ void RungeKuttaStepper::rkStep(occa::memory &o_u, occa::memory &o_uNew,
     occa::memory k0 = o_K_.slice(0, nDof_);
     blas_.copy(nDof_, o_f_, k0);
 
-    for (int stage = 1; stage < s; ++stage)
-    {
+    for (int stage = 1; stage < s; ++stage) {
         rkStageCombine_(n, dt_, stage, s, o_A_, o_u, o_K_, o_uStage_);
         occa::memory kS =
             o_K_.slice(nSz * static_cast<std::size_t>(stage), nSz);
@@ -86,8 +80,7 @@ void RungeKuttaStepper::rkStep(occa::memory &o_u, occa::memory &o_uNew,
     blas_.copy(nDof_, o_fNew_, kLast);
 }
 
-Real RungeKuttaStepper::computeErrorNorm(Real rmsU, Real rmsUnew)
-{
+Real RungeKuttaStepper::computeErrorNorm(Real rmsU, Real rmsUnew) {
     ensureRkKernels();
     const int n = static_cast<int>(nDof_);
     rkWeightedSum_(n, dt_, table_.nStages + 1, o_E_, o_K_, o_err_);
@@ -99,20 +92,15 @@ Real RungeKuttaStepper::computeErrorNorm(Real rmsU, Real rmsUnew)
     return std::max(sigma, Real(1e-14));
 }
 
-void RungeKuttaStepper::updateDt(Real sigma, bool accepted, bool wasRejected)
-{
+void RungeKuttaStepper::updateDt(Real sigma, bool accepted, bool wasRejected) {
     Real factor = kSafety * std::pow(sigma, -kAlpha * errorExponent_) *
                   std::pow(errorNormPrev_, kBeta * errorExponent_);
-    if (accepted)
-    {
+    if (accepted) {
         factor = (sigma == Real(0)) ? kMaxFactor : std::min(kMaxFactor, factor);
-        if (wasRejected)
-        {
+        if (wasRejected) {
             factor = std::min(factor, Real(1));
         }
-    }
-    else
-    {
+    } else {
         factor = std::max(kMinFactor, factor);
     }
 
@@ -122,8 +110,7 @@ void RungeKuttaStepper::updateDt(Real sigma, bool accepted, bool wasRejected)
     dt_ = std::min(dt_, maxStep_);
 }
 
-Real RungeKuttaStepper::selectInitialStep(occa::memory &o_u)
-{
+Real RungeKuttaStepper::selectInitialStep(occa::memory &o_u) {
     // Hairer's heuristic (prototype _select_initial_step_sdt).
     const Real rmsU  = blas_.nrm2(nDof_, o_u) / std::sqrt(Real(nDof_));
     const Real rmsF  = blas_.nrm2(nDof_, o_f_) / std::sqrt(Real(nDof_));
@@ -151,10 +138,8 @@ Real RungeKuttaStepper::selectInitialStep(occa::memory &o_u)
     return std::min(std::min(Real(100) * h0, h1), maxStep_);
 }
 
-Real RungeKuttaStepper::advance(occa::memory o_u, Real /*t*/, Real dtMax)
-{
-    if (!stateValid_)
-    {
+Real RungeKuttaStepper::advance(occa::memory o_u, Real /*t*/, Real dtMax) {
+    if (!stateValid_) {
         rhs_(o_u, o_f_);
         maxStep_    = dtMax;
         dt_         = std::min(selectInitialStep(o_u), dtMax);
@@ -167,15 +152,13 @@ Real RungeKuttaStepper::advance(occa::memory o_u, Real /*t*/, Real dtMax)
     bool wasRejected = false;
     Real sigma       = Real(1);
     Real taken       = dt_;
-    for (;;)
-    {
+    for (;;) {
         taken           = dt_;
         const Real rmsU = blas_.nrm2(nDof_, o_u) / std::sqrt(Real(nDof_));
         rkStep(o_u, o_uNew_, o_fNew_);
         sigma = computeErrorNorm(rmsU, blas_.nrm2(nDof_, o_uNew_) /
                                            std::sqrt(Real(nDof_)));
-        if (sigma < Real(1))
-        {
+        if (sigma < Real(1)) {
             updateDt(sigma, /*accepted=*/true, wasRejected);
             break;
         }
@@ -184,8 +167,7 @@ Real RungeKuttaStepper::advance(occa::memory o_u, Real /*t*/, Real dtMax)
         // so commit it as-is — the smallest-error option among the steps the
         // controller would otherwise force through, and retrying would repeat
         // the identical attempt forever.
-        if (dt_ <= params_.minStep)
-        {
+        if (dt_ <= params_.minStep) {
             break;
         }
         updateDt(sigma, /*accepted=*/false, wasRejected);
@@ -198,8 +180,7 @@ Real RungeKuttaStepper::advance(occa::memory o_u, Real /*t*/, Real dtMax)
     return taken;
 }
 
-void RungeKuttaStepper::setState(occa::memory &o_u0, Real phyDtCap)
-{
+void RungeKuttaStepper::setState(occa::memory &o_u0, Real phyDtCap) {
     blas_.copy(nDof_, o_u0, o_u_);
     rhs_(o_u_, o_f_);
     maxStep_       = phyDtCap;
@@ -209,26 +190,22 @@ void RungeKuttaStepper::setState(occa::memory &o_u0, Real phyDtCap)
     stateValid_    = true;
 }
 
-void RungeKuttaStepper::stepPseudo(bool allowReject)
-{
+void RungeKuttaStepper::stepPseudo(bool allowReject) {
     bool wasRejected = false;
     Real sigma       = Real(1);
-    for (;;)
-    {
+    for (;;) {
         const Real rmsU = blas_.nrm2(nDof_, o_u_) / std::sqrt(Real(nDof_));
         rkStep(o_u_, o_uNew_, o_fNew_);
         sigma = computeErrorNorm(rmsU, blas_.nrm2(nDof_, o_uNew_) /
                                            std::sqrt(Real(nDof_)));
-        if (sigma < Real(1))
-        {
+        if (sigma < Real(1)) {
             updateDt(sigma, /*accepted=*/true, wasRejected);
             break;
         }
         // Single-attempt mode (prototype step(reject=False)): the attempt is
         // unconditionally accepted, but the controller still adapts dt for
         // the next pseudo step.
-        if (!allowReject)
-        {
+        if (!allowReject) {
             updateDt(sigma, /*accepted=*/false, wasRejected);
             break;
         }
@@ -236,8 +213,7 @@ void RungeKuttaStepper::stepPseudo(bool allowReject)
         // minStep: the attempt just made already ran at the floor step size,
         // so commit it as-is (retrying would repeat the identical attempt
         // forever).
-        if (dt_ <= params_.minStep)
-        {
+        if (dt_ <= params_.minStep) {
             break;
         }
         updateDt(sigma, /*accepted=*/false, wasRejected);
@@ -249,8 +225,7 @@ void RungeKuttaStepper::stepPseudo(bool allowReject)
     errorNormPrev_ = sigma;
 }
 
-void RungeKuttaStepper::stepFixed(Real dt)
-{
+void RungeKuttaStepper::stepFixed(Real dt) {
     dt_ = dt;
     rkStep(o_u_, o_uNew_, o_fNew_);
     blas_.copy(nDof_, o_uNew_, o_u_);

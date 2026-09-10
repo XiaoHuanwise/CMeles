@@ -19,22 +19,17 @@
 
 #include <occa.hpp>
 
-namespace cmeles
-{
+namespace cmeles {
 
 /// @brief Apply the JIT settings shared by all CMeles device kernels.
 /// @param props  Kernel properties under construction (modified in place).
 /// @param device Target device (its mode selects the CPU/GPU handling).
-inline void finaliseKernelProps(occa::json &props, occa::device &device)
-{
+inline void finaliseKernelProps(occa::json &props, occa::device &device) {
     props["serial/include_std"] = true;
     const std::string mode      = device.mode();
-    if (mode == "Serial" || mode == "OpenMP")
-    {
+    if (mode == "Serial" || mode == "OpenMP") {
         props["compiler_flags"] += " -O3 -march=native";
-    }
-    else if (mode == "OpenCL")
-    {
+    } else if (mode == "OpenCL") {
         // Passed to clBuildProgram; accepted by the clang-based OpenCL
         // stacks (AMD/Intel/POCL) as an implementation-defined option.
         // AMD's default is already full optimisation, so this mainly

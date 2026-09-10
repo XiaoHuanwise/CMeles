@@ -27,12 +27,10 @@
 #include "solver/CompressibleFlowSolver.hpp"
 #include "solver/ExprInitialCondition.hpp"
 
-namespace vortex
-{
+namespace vortex {
 
 /// @brief Options of one vortex run.
-struct Options
-{
+struct Options {
     int nx             = 16;         ///< Mesh resolution (nx x nx).
     std::string method = "ssprk3";   ///< Time-marching method.
     Real dt            = Real(0);    ///< Fixed dt; <= 0 uses the CFL estimate.
@@ -49,8 +47,7 @@ struct Options
 
 /// @brief Density of the analytic isentropic vortex at time \p t.
 inline Real vortexRho(Real x, Real y, Real t, Real gamma, Real beta, Real x0,
-                      Real y0, Real uInf, Real vInf)
-{
+                      Real y0, Real uInf, Real vInf) {
     const Real xc = x0 + uInf * t;
     const Real yc = y0 + vInf * t;
     const Real r2 = (x - xc) * (x - xc) + (y - yc) * (y - yc);
@@ -61,8 +58,7 @@ inline Real vortexRho(Real x, Real y, Real t, Real gamma, Real beta, Real x0,
 }
 
 /// @brief Write the vortex configuration and parse it.
-inline Config makeConfig(const Options &opt, const std::string &path)
-{
+inline Config makeConfig(const Options &opt, const std::string &path) {
     const Real dx = Real(10) / Real(opt.nx);
     std::FILE *f  = std::fopen(path.c_str(), "w");
     std::fprintf(f,
@@ -75,12 +71,10 @@ inline Config makeConfig(const Options &opt, const std::string &path)
                  "max_pseudo_steps = %d\n",
                  opt.nx, opt.nx, dx, dx, opt.method.c_str(), opt.cfl, opt.dt,
                  opt.tFinal, opt.rtol, opt.atol, opt.maxPseudoSteps);
-    if (opt.pseudoRtol > Real(0))
-    {
+    if (opt.pseudoRtol > Real(0)) {
         std::fprintf(f, "pseudo_rtol = %.12g\n", opt.pseudoRtol);
     }
-    if (opt.pseudoAtol > Real(0))
-    {
+    if (opt.pseudoAtol > Real(0)) {
         std::fprintf(f, "pseudo_atol = %.12g\n", opt.pseudoAtol);
     }
     std::fprintf(f,
@@ -105,8 +99,7 @@ inline Config makeConfig(const Options &opt, const std::string &path)
 
 /// @brief Density errors (L1, L2, Linf) and relative mass drift of the
 ///        final state against the analytic vortex at tFinal.
-struct Errors
-{
+struct Errors {
     Real l1        = Real(0);
     Real l2        = Real(0);
     Real linf      = Real(0);
@@ -116,12 +109,10 @@ struct Errors
 
 /// @brief Run one configured solver and evaluate the errors. The stepper
 ///        is selected by makeStepperFactory from the configuration.
-inline Errors runAndMeasure(const Config &cfg)
-{
+inline Errors runAndMeasure(const Config &cfg) {
     CompressibleFlowSolver solver(cfg);
     Errors err;
-    if (solver.run() != 0)
-    {
+    if (solver.run() != 0) {
         err.l2 = std::numeric_limits<Real>::max();
         return err;
     }
@@ -137,12 +128,9 @@ inline Errors runAndMeasure(const Config &cfg)
     std::vector<Real> u(static_cast<std::size_t>(nEvm));
     {
         occa::memory ou = field.o_u();
-        if (solver.mem().hasSeparateMemorySpace())
-        {
+        if (solver.mem().hasSeparateMemorySpace()) {
             solver.mem().copyToHost(ou, u.data(), nEvm);
-        }
-        else
-        {
+        } else {
             const Real *src = ou.ptr<Real>();
             std::memcpy(u.data(), src,
                         static_cast<std::size_t>(nEvm) * sizeof(Real));
@@ -158,8 +146,7 @@ inline Errors runAndMeasure(const Config &cfg)
 
     Real e1 = Real(0), e2 = Real(0), einf = Real(0);
     Real massNow = Real(0), mass0 = Real(0);
-    for (int e = 0; e < N_elem; ++e)
-    {
+    for (int e = 0; e < N_elem; ++e) {
         Eigen::Map<const VectorXr> rhot(
             u.data() +
                 (static_cast<std::size_t>(e) * field.numVars() + 0) * N_modes,
@@ -168,8 +155,7 @@ inline Errors runAndMeasure(const Config &cfg)
         Eigen::Map<const VectorXr> lam(
             lamAll.data() + static_cast<std::size_t>(e) * Nq2, Nq2);
 
-        for (int q = 0; q < Nq2; ++q)
-        {
+        for (int q = 0; q < Nq2; ++q) {
             const Eigen::Index row = static_cast<Eigen::Index>(e) * Nq2 + q;
             const Real x = xy(row, 0), y = xy(row, 1);
 

@@ -16,8 +16,7 @@
 #include "dg/DgField.hpp"
 #include "mesh/MeshGeometry.hpp"
 
-namespace
-{
+namespace {
 /// @brief Evaluate the primitive-variable expressions at the quadrature
 ///        points and project them onto the modal coefficients of
 ///        field.o_u().
@@ -29,8 +28,7 @@ void applyExprInitialCondition(DgField &field, Real gamma,
                                const std::string &uExpr,
                                const std::string &vExpr,
                                const std::string &pExpr,
-                               const std::map<std::string, Real> &symbols)
-{
+                               const std::map<std::string, Real> &symbols) {
     // Symbol storage must outlive the expressions (exprtk variables are
     // references into this state).
     Real x = 0, y = 0, t = 0, gam = gamma;
@@ -41,8 +39,7 @@ void applyExprInitialCondition(DgField &field, Real gamma,
     symTab.add_variable("y", y);
     symTab.add_variable("t", t);
     symTab.add_variable("gamma", gam);
-    for (auto &[name, value] : symValues)
-    {
+    for (auto &[name, value] : symValues) {
         symTab.add_variable(name, value);
     }
     symTab.add_constants(); // pi, epsilon, inf
@@ -51,8 +48,7 @@ void applyExprInitialCondition(DgField &field, Real gamma,
         auto expr = std::make_shared<exprtk::expression<Real>>();
         expr->register_symbol_table(symTab);
         exprtk::parser<Real> parser;
-        if (!parser.compile(exprStr, *expr))
-        {
+        if (!parser.compile(exprStr, *expr)) {
             throw std::runtime_error(
                 "applyExprInitialCondition: failed to compile '" + exprStr +
                 "': " + parser.error());
@@ -71,10 +67,8 @@ void applyExprInitialCondition(DgField &field, Real gamma,
 
     const MatrixX2r xy = quadraturePhysicalCoords(field);
     VectorXr nodal(static_cast<Eigen::Index>(N_elem * N_vars * Nq2));
-    for (int e = 0; e < N_elem; ++e)
-    {
-        for (int q = 0; q < Nq2; ++q)
-        {
+    for (int e = 0; e < N_elem; ++e) {
+        for (int q = 0; q < Nq2; ++q) {
             x              = xy(static_cast<Eigen::Index>(e) * Nq2 + q, 0);
             y              = xy(static_cast<Eigen::Index>(e) * Nq2 + q, 1);
             const Real rho = exRho->value();
@@ -96,8 +90,7 @@ void applyExprInitialCondition(DgField &field, Real gamma,
 }
 } // namespace
 
-MatrixX2r quadraturePhysicalCoords(const DgField &field)
-{
+MatrixX2r quadraturePhysicalCoords(const DgField &field) {
     const int N_elem = field.numElements();
     const int Nq2    = field.numQuadPoints();
 
@@ -105,14 +98,12 @@ MatrixX2r quadraturePhysicalCoords(const DgField &field)
     const MatrixX2r &qp = field.basis().quadraturePoints();
 
     MatrixX2r xy(static_cast<Eigen::Index>(N_elem * Nq2), 2);
-    for (int e = 0; e < N_elem; ++e)
-    {
+    for (int e = 0; e < N_elem; ++e) {
         const Real x1 = e8(e, 0), y1 = e8(e, 1);
         const Real x2 = e8(e, 2), y2 = e8(e, 3);
         const Real x3 = e8(e, 4), y3 = e8(e, 5);
         const Real x4 = e8(e, 6), y4 = e8(e, 7);
-        for (int q = 0; q < Nq2; ++q)
-        {
+        for (int q = 0; q < Nq2; ++q) {
             const Real r = qp(q, 0), s = qp(q, 1);
             const Real phi1 = (Real(1) - r) * (Real(1) - s) / Real(4);
             const Real phi2 = (Real(1) + r) * (Real(1) - s) / Real(4);
@@ -127,10 +118,8 @@ MatrixX2r quadraturePhysicalCoords(const DgField &field)
     return xy;
 }
 
-namespace solver_detail
-{
-void applyExprICFromConfig(DgField &field, const Config &cfg)
-{
+namespace solver_detail {
+void applyExprICFromConfig(DgField &field, const Config &cfg) {
     applyExprInitialCondition(field, cfg.gamma(), cfg.icRho(), cfg.icU(),
                               cfg.icV(), cfg.icP(), cfg.icSymbols());
 }

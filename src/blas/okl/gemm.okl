@@ -8,16 +8,15 @@
 // Convention: all matrices are row-major.  Transposed variants are handled by
 // precomputing explicit transposes on the host side.
 
-@kernel void gemm(const int m, const int n, const int k,
-                  const Real alpha, const Real beta,
-                  const Real *A, const Real *B, Real *C) {
-  for (int idx = 0; idx < m * n; ++idx; @tile(TILE_SIZE, @outer, @inner)) {
-    const int i = idx / n;
-    const int j = idx - i * n;  // equivalent to idx % n, avoids modulo
-    Real acc = 0.0;
-    for (int kk = 0; kk < k; ++kk) {
-      acc += A[i * k + kk] * B[kk * n + j];
+@kernel void gemm(const int m, const int n, const int k, const Real alpha,
+                  const Real beta, const Real *A, const Real *B, Real *C) {
+    for (int idx = 0; idx < m * n; ++idx; @tile(TILE_SIZE, @outer, @inner)) {
+        const int i = idx / n;
+        const int j = idx - i * n; // equivalent to idx % n, avoids modulo
+        Real acc    = 0.0;
+        for (int kk = 0; kk < k; ++kk) {
+            acc += A[i * k + kk] * B[kk * n + j];
+        }
+        C[i * n + j] = alpha * acc + beta * C[i * n + j];
     }
-    C[i * n + j] = alpha * acc + beta * C[i * n + j];
-  }
 }

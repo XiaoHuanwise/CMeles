@@ -32,31 +32,25 @@
 #include "time/RungeKuttaStepper.hpp"
 #include "time/SimpleExplicitStepper.hpp"
 
-namespace
-{
+namespace {
 /// @brief High-order convergence checks bottom out at the float rounding
 ///        floor; those assertions degrade to accuracy-level checks.
 constexpr bool kSinglePrecision = std::is_same<Real, float>::value;
 
 /// @brief Read a device Real array back to host (unified vs separate path).
 void readResult(DeviceMemoryManager &mem, const occa::memory &o_data, Real *dst,
-                occa::dim_t entries)
-{
-    if (mem.hasSeparateMemorySpace())
-    {
+                occa::dim_t entries) {
+    if (mem.hasSeparateMemorySpace()) {
         occa::memory o = o_data;
         mem.copyToHost(o, dst, entries);
-    }
-    else
-    {
+    } else {
         const Real *src = o_data.ptr<Real>();
         std::memcpy(dst, src, static_cast<std::size_t>(entries) * sizeof(Real));
     }
 }
 
 /// @brief Manufactured ODE context: u' = lambda u on the device.
-struct DecayOde
-{
+struct DecayOde {
     occa::device &device;
     DeviceMemoryManager &mem;
     Blas blas;
@@ -66,11 +60,9 @@ struct DecayOde
     occa::memory o_u0;
 
     DecayOde(occa::device &dev, DeviceMemoryManager &m, Real lam, int nDof)
-        : device(dev), mem(m), blas(dev, m), lambda(lam), n(nDof)
-    {
+        : device(dev), mem(m), blas(dev, m), lambda(lam), n(nDof) {
         u0Host.resize(static_cast<std::size_t>(nDof));
-        for (int i = 0; i < nDof; ++i)
-        {
+        for (int i = 0; i < nDof; ++i) {
             // Distinct positive values so the norm is non-trivial.
             u0Host[static_cast<std::size_t>(i)] =
                 Real(1) + Real(0.25) * Real(i);
@@ -79,8 +71,7 @@ struct DecayOde
     }
 
     /// res = lambda * u.
-    RhsFunction rhs() const
-    {
+    RhsFunction rhs() const {
         Blas b           = blas;
         Real lam         = lambda;
         occa::dim_t nDof = n;
@@ -91,8 +82,7 @@ struct DecayOde
         };
     }
 
-    Real exactScale() const
-    {
+    Real exactScale() const {
         return std::exp(lambda); // u(1) = e^lambda u0
     }
 };
@@ -103,16 +93,14 @@ struct DecayOde
 ///        interface.
 Real fixedStepError(occa::device &device, DeviceMemoryManager &mem,
                     DecayOde &ode, Real dt,
-                    std::unique_ptr<StepperBase> stepper)
-{
+                    std::unique_ptr<StepperBase> stepper) {
     occa::memory o_u   = mem.wrapOrMalloc(static_cast<occa::dim_t>(ode.n));
     occa::memory o_src = ode.o_u0;
     Blas blas(device, mem);
     blas.copy(ode.n, o_src, o_u);
 
     Real t = Real(0);
-    while (t < Real(1) - Real(0.5) * dt)
-    {
+    while (t < Real(1) - Real(0.5) * dt) {
         const Real taken = stepper->advance(o_u, t, dt);
         t += taken;
     }
@@ -121,8 +109,7 @@ Real fixedStepError(occa::device &device, DeviceMemoryManager &mem,
     readResult(mem, o_u, uh.data(), ode.n);
     const Real scale = ode.exactScale();
     Real err         = Real(0);
-    for (int i = 0; i < ode.n; ++i)
-    {
+    for (int i = 0; i < ode.n; ++i) {
         const Real ex = scale * (Real(1) + Real(0.25) * Real(i));
         err = std::max(err, std::abs(uh[static_cast<std::size_t>(i)] - ex));
     }
@@ -130,8 +117,7 @@ Real fixedStepError(occa::device &device, DeviceMemoryManager &mem,
 }
 
 /// @brief Measured convergence order from three successive dt halvings.
-Real measuredOrder(const Real errors[3])
-{
+Real measuredOrder(const Real errors[3]) {
     return std::log2(errors[0] / errors[2]) / Real(2);
 }
 
@@ -141,8 +127,7 @@ Real measuredOrder(const Real errors[3])
 // 1. Euler / SSPRK3 convergence orders
 // ---------------------------------------------------------------------------
 
-static bool testSimpleExplicit()
-{
+static bool testSimpleExplicit() {
     std::cout << "Test 1: Euler / SSPRK3 convergence orders\n";
     occa::device device({{"mode", "Serial"}});
     DeviceMemoryManager mem(device);
@@ -152,8 +137,7 @@ static bool testSimpleExplicit()
 
     {
         Real errors[3];
-        for (int k = 0; k < 3; ++k)
-        {
+        for (int k = 0; k < 3; ++k) {
             errors[k] = fixedStepError(
                 device, mem, ode, Real(0.1) / std::pow(Real(2), k),
                 std::make_unique<EulerStepper>(device, mem, ode.rhs(), ode.n));
@@ -165,8 +149,7 @@ static bool testSimpleExplicit()
     }
     {
         Real errors[3];
-        for (int k = 0; k < 3; ++k)
-        {
+        for (int k = 0; k < 3; ++k) {
             errors[k] = fixedStepError(
                 device, mem, ode, Real(0.2) / std::pow(Real(2), k),
                 std::make_unique<SspRk3Stepper>(device, mem, ode.rhs(), ode.n));
@@ -185,8 +168,7 @@ static bool testSimpleExplicit()
 
 /// @brief Integrate with a RungeKuttaStepper at fixed dt; max error at T=1.
 Real rkFixedStepError(occa::device &device, DeviceMemoryManager &mem,
-                      DecayOde &ode, const ButcherTable &table, Real dt)
-{
+                      DecayOde &ode, const ButcherTable &table, Real dt) {
     RungeKuttaStepper stepper(device, mem, ode.rhs(), ode.n, table);
     occa::memory o_u  = mem.wrapOrMalloc(static_cast<occa::dim_t>(ode.n));
     occa::memory o_u0 = ode.o_u0;
@@ -195,8 +177,7 @@ Real rkFixedStepError(occa::device &device, DeviceMemoryManager &mem,
     stepper.setState(o_u, Real(1e30));
 
     Real t = Real(0);
-    while (t < Real(1) - Real(0.5) * dt)
-    {
+    while (t < Real(1) - Real(0.5) * dt) {
         stepper.stepFixed(dt);
         t += dt;
     }
@@ -205,16 +186,14 @@ Real rkFixedStepError(occa::device &device, DeviceMemoryManager &mem,
     readResult(mem, stepper.state(), uh.data(), ode.n);
     const Real scale = ode.exactScale();
     Real err         = Real(0);
-    for (int i = 0; i < ode.n; ++i)
-    {
+    for (int i = 0; i < ode.n; ++i) {
         const Real ex = scale * (Real(1) + Real(0.25) * Real(i));
         err = std::max(err, std::abs(uh[static_cast<std::size_t>(i)] - ex));
     }
     return err;
 }
 
-static bool testEmbeddedRkOrders()
-{
+static bool testEmbeddedRkOrders() {
     std::cout << "Test 2: embedded RK fixed-step orders\n";
     occa::device device({{"mode", "Serial"}});
     DeviceMemoryManager mem(device);
@@ -223,11 +202,9 @@ static bool testEmbeddedRkOrders()
     const ButcherTable *tables[] = {&kRk32,     &kRk54,     &kSspRk221,
                                     &kSspRk321, &kSspRk332, &kSspRk432};
     bool ok                      = true;
-    for (const ButcherTable *table : tables)
-    {
+    for (const ButcherTable *table : tables) {
         Real errors[3];
-        for (int k = 0; k < 3; ++k)
-        {
+        for (int k = 0; k < 3; ++k) {
             errors[k] = rkFixedStepError(device, mem, ode, *table,
                                          Real(0.2) / std::pow(Real(2), k));
         }
@@ -235,14 +212,11 @@ static bool testEmbeddedRkOrders()
         std::cout << "  " << table->name << " (expect " << table->order
                   << "): errors " << errors[0] << " -> " << errors[2]
                   << ", order " << p << "\n";
-        if (kSinglePrecision && table->order >= 5)
-        {
+        if (kSinglePrecision && table->order >= 5) {
             // RK54-level errors sit at the float floor: accuracy only
             // (monotonicity is noise at that level).
             ok &= errors[2] < Real(1e-5) && errors[0] < Real(1e-5);
-        }
-        else
-        {
+        } else {
             ok &= errors[2] < errors[0];
             ok &= p > Real(table->order - 0.4) && p < Real(table->order + 0.4);
         }
@@ -254,8 +228,7 @@ static bool testEmbeddedRkOrders()
 // 3. Adaptive mode: advances to tolerance
 // ---------------------------------------------------------------------------
 
-static bool testAdaptiveMode()
-{
+static bool testAdaptiveMode() {
     std::cout << "Test 3: adaptive step control\n";
     occa::device device({{"mode", "Serial"}});
     DeviceMemoryManager mem(device);
@@ -273,8 +246,7 @@ static bool testAdaptiveMode()
 
     Real t    = Real(0);
     int steps = 0;
-    while (t < Real(1) - Real(1e-12))
-    {
+    while (t < Real(1) - Real(1e-12)) {
         const Real taken =
             stepper.advance(o_u, t, std::min(Real(0.5), Real(1) - t));
         t += taken;
@@ -285,8 +257,7 @@ static bool testAdaptiveMode()
     readResult(mem, o_u, uh.data(), ode.n);
     const Real scale = ode.exactScale();
     Real err         = Real(0);
-    for (int i = 0; i < ode.n; ++i)
-    {
+    for (int i = 0; i < ode.n; ++i) {
         const Real ex = scale * (Real(1) + Real(0.25) * Real(i));
         err = std::max(err, std::abs(uh[static_cast<std::size_t>(i)] - ex));
     }
@@ -306,8 +277,7 @@ static bool testAdaptiveMode()
 template <class ResidualFactory>
 Real dualStepError(occa::device &device, DeviceMemoryManager &mem,
                    DecayOde &ode, Real dt, ResidualFactory makeResidual,
-                   DualStepper::Params params)
-{
+                   DualStepper::Params params) {
     DualStepper stepper(device, mem, ode.rhs(), ode.n, kSspRk332, params,
                         makeResidual());
     occa::memory o_u  = mem.wrapOrMalloc(static_cast<occa::dim_t>(ode.n));
@@ -316,8 +286,7 @@ Real dualStepError(occa::device &device, DeviceMemoryManager &mem,
     blas.copy(ode.n, o_u0, o_u);
 
     Real t = Real(0);
-    while (t < Real(1) - Real(0.5) * dt)
-    {
+    while (t < Real(1) - Real(0.5) * dt) {
         stepper.advance(o_u, t, dt);
         t += dt;
     }
@@ -326,16 +295,14 @@ Real dualStepError(occa::device &device, DeviceMemoryManager &mem,
     readResult(mem, o_u, uh.data(), ode.n);
     const Real scale = ode.exactScale();
     Real err         = Real(0);
-    for (int i = 0; i < ode.n; ++i)
-    {
+    for (int i = 0; i < ode.n; ++i) {
         const Real ex = scale * (Real(1) + Real(0.25) * Real(i));
         err = std::max(err, std::abs(uh[static_cast<std::size_t>(i)] - ex));
     }
     return err;
 }
 
-static bool testDualTime()
-{
+static bool testDualTime() {
     std::cout << "Test 4: dual time stepping orders\n";
     occa::device device({{"mode", "Serial"}});
     DeviceMemoryManager mem(device);
@@ -383,8 +350,7 @@ static bool testDualTime()
     bool ok = true;
     {
         Real errors[3];
-        for (int k = 0; k < 3; ++k)
-        {
+        for (int k = 0; k < 3; ++k) {
             errors[k] = dualStepError(device, mem, ode,
                                       Real(0.1) / std::pow(Real(2), k), makeBE,
                                       beParams);
@@ -396,8 +362,7 @@ static bool testDualTime()
     }
     {
         Real errors[3];
-        for (int k = 0; k < 3; ++k)
-        {
+        for (int k = 0; k < 3; ++k) {
             errors[k] = dualStepError(device, mem, ode,
                                       Real(0.1) / std::pow(Real(2), k),
                                       makeU2R2, ditrParams);
@@ -408,13 +373,10 @@ static bool testDualTime()
         // Documented 2nd order; the Simpson-type b weights raise the
         // observed order to ~4 on this linear constant-dt problem. In
         // single precision the errors sit at the rounding floor.
-        if (kSinglePrecision)
-        {
+        if (kSinglePrecision) {
             // Residual-limited accuracy at the scaled dual tolerance.
             ok &= errors[0] < Real(1e-3);
-        }
-        else
-        {
+        } else {
             ok &= p > Real(2.6) && p < Real(4.4);
         }
     }
@@ -440,14 +402,11 @@ static bool testDualTime()
         // to ~1st order by the start-up u^{n-1} = u^0 initialisation
         // (inherent to the method on runs that start at t = 0, matching
         // the prototype); the decoupled U2R2 tracks the coupled one.
-        if (kSinglePrecision)
-        {
+        if (kSinglePrecision) {
             // Residual-limited accuracy at the scaled dual tolerance.
             ok &= e1U2R1 < Real(1e-3) && e1U3R1 < Real(1e-2) &&
                   e1Dec < Real(1e-3);
-        }
-        else
-        {
+        } else {
             ok &= e2U2R1 < Real(0.4) * e1U2R1;
             ok &= e2U3R1 < Real(0.7) * e1U3R1;
             ok &= e2Dec < Real(0.4) * e1Dec;
@@ -456,8 +415,7 @@ static bool testDualTime()
     return ok;
 }
 
-int main()
-{
+int main() {
     bool ok = true;
     ok &= testSimpleExplicit();
     ok &= testEmbeddedRkOrders();

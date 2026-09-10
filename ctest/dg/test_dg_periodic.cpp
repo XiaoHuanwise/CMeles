@@ -38,47 +38,36 @@
 #include "mesh/MeshGeometry.hpp"
 #include "mesh/StructuredMeshGenerator.hpp"
 
-namespace
-{
+namespace {
 const Real tol = Real(1e3) * RealEpsilon;
 
-static occa::json tryMakeDevice(const std::string &mode)
-{
-    try
-    {
+static occa::json tryMakeDevice(const std::string &mode) {
+    try {
         occa::json props;
         props["mode"] = mode;
-        if (mode == "OpenCL")
-        {
+        if (mode == "OpenCL") {
             props["platform_id"] = 0;
             props["device_id"]   = 0;
         }
         occa::device dev(props);
-        if (dev.mode() != mode)
-        {
+        if (dev.mode() != mode) {
             dev.free();
             return occa::json();
         }
         dev.free();
         return props;
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception &e) {
         std::cout << "  (skip " << mode << ": " << e.what() << ")\n";
         return occa::json();
     }
 }
 
 static void readResult(DeviceMemoryManager &mem, const occa::memory &o_data,
-                       Real *dst, occa::dim_t entries)
-{
-    if (mem.hasSeparateMemorySpace())
-    {
+                       Real *dst, occa::dim_t entries) {
+    if (mem.hasSeparateMemorySpace()) {
         occa::memory o = o_data;
         mem.copyToHost(o, dst, entries);
-    }
-    else
-    {
+    } else {
         const Real *src = o_data.ptr<Real>();
         std::memcpy(dst, src, static_cast<std::size_t>(entries) * sizeof(Real));
     }
@@ -86,8 +75,7 @@ static void readResult(DeviceMemoryManager &mem, const occa::memory &o_data,
 
 /// @brief Build a periodic test configuration (nx x ny grid of unit cells).
 static Config makeConfig(int order, int nq, int nx, int ny, bool splitTriangles,
-                         bool periodic)
-{
+                         bool periodic) {
     const std::string path = "test_dg_periodic_scratch.toml";
     std::FILE *f           = std::fopen(path.c_str(), "w");
     std::fprintf(f,
@@ -106,21 +94,18 @@ static Config makeConfig(int order, int nq, int nx, int ny, bool splitTriangles,
     return cfg;
 }
 
-static Real maxAbsResidual(DeviceMemoryManager &mem, DgField &field)
-{
+static Real maxAbsResidual(DeviceMemoryManager &mem, DgField &field) {
     const int nEvm = field.numElements() * field.numVars() * field.numModes();
     std::vector<Real> res(nEvm);
     readResult(mem, field.o_res(), res.data(), nEvm);
     Real maxAbs = Real(0);
-    for (Real r : res)
-    {
+    for (Real r : res) {
         maxAbs = std::max(maxAbs, std::abs(r));
     }
     return maxAbs;
 }
 
-static Real residualScale(const Config &cfg)
-{
+static Real residualScale(const Config &cfg) {
     return std::max(std::abs(cfg.flowRho() * cfg.flowU()),
                     std::abs(cfg.flowRho() * cfg.flowV())) +
            Real(1);
@@ -131,8 +116,7 @@ static Real residualScale(const Config &cfg)
 // 1. Pairing topology
 // ---------------------------------------------------------------------------
 
-static bool testPairingTopology()
-{
+static bool testPairingTopology() {
     std::cout << "Test 1: periodic pairing topology\n";
     const int nx = 4, ny = 5;
     const Mesh mesh = StructuredMeshGenerator::generate(
@@ -140,12 +124,10 @@ static bool testPairingTopology()
 
     // Before pairing: boundary faces per the plain mesh.
     int nBoundaryBefore = 0;
-    for (int F = 0; F < mesh.numFaces(); ++F)
-    {
+    for (int F = 0; F < mesh.numFaces(); ++F) {
         nBoundaryBefore += mesh.isBoundaryFace(F) ? 1 : 0;
     }
-    if (nBoundaryBefore != 2 * (nx + ny))
-    {
+    if (nBoundaryBefore != 2 * (nx + ny)) {
         std::cout << "  FAIL: expected " << 2 * (nx + ny)
                   << " boundary faces, found " << nBoundaryBefore << "\n";
         return false;
@@ -157,15 +139,12 @@ static bool testPairingTopology()
     // Every former boundary face must now be Periodic with a valid partner.
     int nPeriodic = 0, nBoundaryAfter = 0;
     bool ok = true;
-    for (int F = 0; F < paired.numFaces(); ++F)
-    {
-        if (paired.isPeriodicFace(F))
-        {
+    for (int F = 0; F < paired.numFaces(); ++F) {
+        if (paired.isPeriodicFace(F)) {
             ++nPeriodic;
             const int KR = paired.faceElements()(F, 2);
             const int fR = paired.faceElements()(F, 3);
-            if (KR < 0 || fR < 0)
-            {
+            if (KR < 0 || fR < 0) {
                 std::cout << "  FAIL: periodic face " << F
                           << " has invalid partner slots\n";
                 ok = false;
@@ -173,8 +152,7 @@ static bool testPairingTopology()
         }
         nBoundaryAfter += paired.isBoundaryFace(F) ? 1 : 0;
     }
-    if (nPeriodic != 2 * (nx + ny) || nBoundaryAfter != 0)
-    {
+    if (nPeriodic != 2 * (nx + ny) || nBoundaryAfter != 0) {
         std::cout << "  FAIL: periodic = " << nPeriodic << " (expect "
                   << 2 * (nx + ny) << "), boundary = " << nBoundaryAfter
                   << " (expect 0)\n";
@@ -187,10 +165,8 @@ static bool testPairingTopology()
     // t2 = -t1 property behind the pseudo-interior representation.
     const Real Lx = Real(nx), Ly = Real(ny);
     const Real eps = Real(1e-10);
-    for (int F = 0; F < paired.numFaces() && ok; ++F)
-    {
-        if (!paired.isPeriodicFace(F))
-        {
+    for (int F = 0; F < paired.numFaces() && ok; ++F) {
+        if (!paired.isPeriodicFace(F)) {
             continue;
         }
         const int KL = paired.faceElements()(F, 0);
@@ -201,17 +177,14 @@ static bool testPairingTopology()
         // Find the partner face: the face whose left element is KR and
         // whose left local face is fR.
         int P = -1;
-        for (int G = 0; G < paired.numFaces(); ++G)
-        {
+        for (int G = 0; G < paired.numFaces(); ++G) {
             if (paired.isPeriodicFace(G) && paired.faceElements()(G, 0) == KR &&
-                paired.faceElements()(G, 1) == fR)
-            {
+                paired.faceElements()(G, 1) == fR) {
                 P = G;
                 break;
             }
         }
-        if (P < 0)
-        {
+        if (P < 0) {
             std::cout << "  FAIL: no partner face for periodic face " << F
                       << "\n";
             ok = false;
@@ -220,8 +193,7 @@ static bool testPairingTopology()
 
         // Symmetry: the partner's partner must be F itself.
         if (paired.faceElements()(P, 2) != KL ||
-            paired.faceElements()(P, 3) != fL)
-        {
+            paired.faceElements()(P, 3) != fL) {
             std::cout << "  FAIL: pairing not symmetric at face " << F << "\n";
             ok = false;
             break;
@@ -241,17 +213,14 @@ static bool testPairingTopology()
         };
         const Real translations[4][2] = {{Lx, 0}, {-Lx, 0}, {0, Ly}, {0, -Ly}};
         bool matched                  = false;
-        for (const auto &t : translations)
-        {
+        for (const auto &t : translations) {
             if (dist(A1, B2[0] - t[0], B2[1] - t[1]) < eps &&
-                dist(B1, A2[0] - t[0], A2[1] - t[1]) < eps)
-            {
+                dist(B1, A2[0] - t[0], A2[1] - t[1]) < eps) {
                 matched = true;
                 break;
             }
         }
-        if (!matched)
-        {
+        if (!matched) {
             std::cout << "  FAIL: pair (" << F << "," << P
                       << ") does not match under a domain translation\n";
             ok = false;
@@ -267,8 +236,8 @@ static bool testPairingTopology()
 // 2. Uniform-flow solution preservation on a periodic domain
 // ---------------------------------------------------------------------------
 
-static bool testPeriodicUniformFlow(const Config &cfg, const std::string &label)
-{
+static bool testPeriodicUniformFlow(const Config &cfg,
+                                    const std::string &label) {
     occa::device device({{"mode", "Serial"}});
     DeviceMemoryManager mem(device);
     DgField field(cfg, device, mem);
@@ -290,8 +259,7 @@ static bool testPeriodicUniformFlow(const Config &cfg, const std::string &label)
 // 3+4. Trigonometric advection: conservation + analytic source
 // ---------------------------------------------------------------------------
 
-static bool testTrigAdvection()
-{
+static bool testTrigAdvection() {
     std::cout << "Test 3: doubly-periodic trigonometric advection\n";
     const int nx = 8, ny = 8;
     const Config cfg = makeConfig(2, 4, nx, ny, false, true);
@@ -319,14 +287,12 @@ static bool testTrigAdvection()
     const MatrixX2r &qp = field.basis().quadraturePoints();
     std::vector<Real> xs(N_elem * Nq2), ys(N_elem * Nq2);
     VectorXr nodal(N_elem * N_vars * Nq2);
-    for (int e = 0; e < N_elem; ++e)
-    {
+    for (int e = 0; e < N_elem; ++e) {
         const Real x1 = e8(e, 0), y1 = e8(e, 1);
         const Real x2 = e8(e, 2), y2 = e8(e, 3);
         const Real x3 = e8(e, 4), y3 = e8(e, 5);
         const Real x4 = e8(e, 6), y4 = e8(e, 7);
-        for (int q = 0; q < Nq2; ++q)
-        {
+        for (int q = 0; q < Nq2; ++q) {
             const Real r = qp(q, 0), s = qp(q, 1);
             const Real phi1 = (Real(1) - r) * (Real(1) - s) / Real(4);
             const Real phi2 = (Real(1) + r) * (Real(1) - s) / Real(4);
@@ -364,8 +330,7 @@ static bool testTrigAdvection()
     // must vanish to machine precision (all face fluxes cancel pairwise,
     // including the periodic pairs).
     Real massRate = Real(0), massScale = Real(0);
-    for (int e = 0; e < N_elem; ++e)
-    {
+    for (int e = 0; e < N_elem; ++e) {
         Eigen::Map<const VectorXr> lam(lamAll.data() + e * Nq2, Nq2);
         Eigen::Map<const MatrixXr> rhat(res.data() + (e * N_vars + 0) * N_modes,
                                         N_modes, 1);
@@ -383,15 +348,13 @@ static bool testTrigAdvection()
     // the modal space; loose tolerance (LLF dissipation of the
     // non-polynomial field is small but non-zero).
     Real err2 = Real(0), src2 = Real(0);
-    for (int e = 0; e < N_elem; ++e)
-    {
+    for (int e = 0; e < N_elem; ++e) {
         Eigen::Map<const VectorXr> lam(lamAll.data() + e * Nq2, Nq2);
         Eigen::Map<const MatrixXr> minv(
             field.geometry().massMatrixInverse().data() + e * N_modes * N_modes,
             N_modes, N_modes);
         VectorXr srcNodal(Nq2);
-        for (int q = 0; q < Nq2; ++q)
-        {
+        for (int q = 0; q < Nq2; ++q) {
             const Real x = xs[e * Nq2 + q], y = ys[e * Nq2 + q];
             srcNodal(q) = -u0 * Real(0.1) * kx * std::cos(kx * x) +
                           v0 * Real(0.1) * ky * std::sin(ky * y);
@@ -415,8 +378,7 @@ static bool testTrigAdvection()
 // 5. Uniform-flow preservation on a split-triangle periodic mesh
 // ---------------------------------------------------------------------------
 
-static bool testTrianglePeriodic(const Config &cfg, const std::string &label)
-{
+static bool testTrianglePeriodic(const Config &cfg, const std::string &label) {
     return testPeriodicUniformFlow(cfg, label);
 }
 
@@ -424,10 +386,8 @@ static bool testTrianglePeriodic(const Config &cfg, const std::string &label)
 // Device backend sweep
 // ---------------------------------------------------------------------------
 
-static bool runOnBackend(const std::string &mode, occa::json props)
-{
-    if (props.isNull())
-    {
+static bool runOnBackend(const std::string &mode, occa::json props) {
+    if (props.isNull()) {
         return true;
     }
     std::cout << "\n===== DG periodic backend [" << mode
@@ -436,12 +396,9 @@ static bool runOnBackend(const std::string &mode, occa::json props)
     occa::device device(props);
     DeviceMemoryManager mem(device);
     DgField field(cfg, device, mem);
-    try
-    {
+    try {
         field.setup();
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception &e) {
         // tryMakeDevice already confirmed the backend is usable, so a
         // setup failure here is a real defect, not an unavailable device.
         std::cout << "  (FAILED " << mode << ": setup failed — " << e.what()
@@ -460,8 +417,7 @@ static bool runOnBackend(const std::string &mode, occa::json props)
     return maxAbs <= tol * scale;
 }
 
-int main()
-{
+int main() {
     bool ok = true;
     ok &= testPairingTopology();
 

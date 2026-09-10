@@ -12,11 +12,9 @@
 #include "time/RungeKuttaStepper.hpp"
 #include "time/SimpleExplicitStepper.hpp"
 
-namespace
-{
+namespace {
 /// @brief Dual-time parameters shared by the Backward-Euler and DITR arms.
-DualStepper::Params dualParams(const Config &cfg)
-{
+DualStepper::Params dualParams(const Config &cfg) {
     DualStepper::Params params;
     params.atol           = cfg.timeAtol();
     params.rtol           = cfg.timeRtol();
@@ -40,11 +38,9 @@ DualStepper::Params dualParams(const Config &cfg)
 }
 
 /// @brief Butcher tableau of the pseudo stepper (shared by the dual arms).
-const ButcherTable &pseudoTable(const Config &cfg)
-{
+const ButcherTable &pseudoTable(const Config &cfg) {
     const ButcherTable *table = butcherTableForMethod(cfg.timePseudoMethod());
-    if (table == nullptr)
-    {
+    if (table == nullptr) {
         throw std::invalid_argument(
             "makeStepperFactory: pseudo_method must be an embedded RK pair");
     }
@@ -52,10 +48,8 @@ const ButcherTable &pseudoTable(const Config &cfg)
 }
 
 /// @brief DITR variant for the configured method.
-DitrResidual::Variant ditrVariant(const Config &cfg)
-{
-    switch (cfg.timeMethod())
-    {
+DitrResidual::Variant ditrVariant(const Config &cfg) {
+    switch (cfg.timeMethod()) {
         case TimeMethod::DitrU2R1:
             return DitrResidual::Variant::U2R1;
         case TimeMethod::DitrU3R1:
@@ -66,10 +60,8 @@ DitrResidual::Variant ditrVariant(const Config &cfg)
 }
 } // namespace
 
-StepperFactory makeStepperFactory(const Config &cfg)
-{
-    switch (cfg.timeMethod())
-    {
+StepperFactory makeStepperFactory(const Config &cfg) {
+    switch (cfg.timeMethod()) {
         case TimeMethod::Euler:
             return [](occa::device &device, DeviceMemoryManager &mem,
                       const RhsFunction &rhs, occa::dim_t nDof) {
@@ -85,11 +77,9 @@ StepperFactory makeStepperFactory(const Config &cfg)
         case TimeMethod::SspRk221:
         case TimeMethod::SspRk321:
         case TimeMethod::SspRk332:
-        case TimeMethod::SspRk432:
-        {
+        case TimeMethod::SspRk432: {
             const ButcherTable *table = butcherTableForMethod(cfg.timeMethod());
-            if (table == nullptr)
-            {
+            if (table == nullptr) {
                 throw std::invalid_argument(
                     "makeStepperFactory: method is not an embedded RK pair");
             }
@@ -105,13 +95,11 @@ StepperFactory makeStepperFactory(const Config &cfg)
                                                            nDof, tab, params);
             };
         }
-        case TimeMethod::BackwardEuler:
-        {
+        case TimeMethod::BackwardEuler: {
             // Decoupled per-stage pseudo stepping requires a two-stage
             // residual; Backward Euler is single-stage (the stage residuals
             // would otherwise throw at the first pseudo step).
-            if (cfg.timeDualDecoupled())
-            {
+            if (cfg.timeDualDecoupled()) {
                 throw std::invalid_argument(
                     "makeStepperFactory: dual_decoupled requires a DITR "
                     "method");
@@ -129,8 +117,7 @@ StepperFactory makeStepperFactory(const Config &cfg)
         }
         case TimeMethod::DitrU2R2:
         case TimeMethod::DitrU2R1:
-        case TimeMethod::DitrU3R1:
-        {
+        case TimeMethod::DitrU3R1: {
             const ButcherTable &tab             = pseudoTable(cfg);
             const DualStepper::Params params    = dualParams(cfg);
             const DitrResidual::Variant variant = ditrVariant(cfg);

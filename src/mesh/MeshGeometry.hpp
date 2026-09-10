@@ -30,8 +30,7 @@ class BasisFunctions2D;
 class DeviceMemoryManager;
 
 /// @brief Per-element and per-face geometric pre-computation.
-class MeshGeometry
-{
+class MeshGeometry {
 public:
     /// @brief Compute all geometric quantities.
     /// @param mesh  Mesh topology (lifetime must exceed this object).
@@ -42,42 +41,35 @@ public:
 
     // ---- Sizes ----
 
-    int numElements() const noexcept
-    {
+    int numElements() const noexcept {
         return N_elem_;
     }
-    int numFaces() const noexcept
-    {
+    int numFaces() const noexcept {
         return N_face_;
     }
 
     /// @brief Number of quadrature points per element, $N_q^2$.
-    int numPointsPerElement() const noexcept
-    {
+    int numPointsPerElement() const noexcept {
         return Nq2_;
     }
 
     /// @brief Number of 2D basis functions $N_{\text{base}}$.
-    int numBases() const noexcept
-    {
+    int numBases() const noexcept {
         return N_base_;
     }
 
     // ---- Per-element geometry (host side) ----
 
     /// @brief Per-element vertex coordinates, shape
-    ///        $N_{\text{elem}} \times 8$: $[x_1, y_1, x_2, y_2, x_3, y_3,
-    ///        x_4, y_4]$ per row (row-major).
+    /// $N_{\text{elem}} \times 8$: $[x_1, y_1, x_2, y_2, x_3, y_3, x_4, y_4]$ per row (row-major).
     const Eigen::Matrix<Real, Eigen::Dynamic, 8, Eigen::RowMajor> &vertices()
-        const noexcept
-    {
+        const noexcept {
         return elem_vertices_;
     }
 
     /// @brief Jacobian determinant $|J(r_q, s_q)|$, size
     ///        $N_{\text{elem}} \cdot N_q^2$ (element-major).
-    const VectorXr &absJacobian() const noexcept
-    {
+    const VectorXr &absJacobian() const noexcept {
         return absJ_;
     }
 
@@ -95,35 +87,29 @@ public:
     /// $\mathbf{J}^{-1} = \partial(r, s)/\partial(x, y)$ (each row is the
     /// gradient of a reference coordinate w.r.t. the physical ones).
     /// Gradient transformation uses the column convention
-    /// $\begin{bmatrix} u_x \\ u_y \end{bmatrix} =
-    /// \mathbf{J}^{-T} \begin{bmatrix} u_r \\ u_s \end{bmatrix}$ — the
+    /// $\begin{bmatrix} u_x \\ u_y \end{bmatrix} = \mathbf{J}^{-T} \begin{bmatrix} u_r \\ u_s \end{bmatrix}$ — the
     /// cross components swap: read them as (Jinv11, Jinv21, Jinv12, Jinv22)
     /// when multiplying a column of reference derivatives (see
     /// docs/tech_docs/mesh_and_geometry.md, Section 2.4).
     ///
     /// Stored as four separate arrays instead of an interleaved one so
     /// that the per-point loops vectorise cleanly with `-O3 -march=native`.
-    const VectorXr &Jinv11() const noexcept
-    {
+    const VectorXr &Jinv11() const noexcept {
         return Jinv11_;
     }
-    const VectorXr &Jinv12() const noexcept
-    {
+    const VectorXr &Jinv12() const noexcept {
         return Jinv12_;
     }
-    const VectorXr &Jinv21() const noexcept
-    {
+    const VectorXr &Jinv21() const noexcept {
         return Jinv21_;
     }
-    const VectorXr &Jinv22() const noexcept
-    {
+    const VectorXr &Jinv22() const noexcept {
         return Jinv22_;
     }
 
     /// @brief Weighted quadrature weights $\Lambda_{wJ} = w_q \, |J_K|$,
     ///        size $N_{\text{elem}} \cdot N_q^2$ (element-major).
-    const VectorXr &lambdaWJ() const noexcept
-    {
+    const VectorXr &lambdaWJ() const noexcept {
         return lambdaWJ_;
     }
 
@@ -132,10 +118,9 @@ public:
     ///        with the $N_{\text{base}} \times N_{\text{base}}$ block of
     ///        each element in row-major order.
     ///
-    /// $$\mathbf{M} = \mathbf{V}_{2D}^T
-    /// \operatorname{diag}(\Lambda_{wJ}) \, \mathbf{V}_{2D}$$.
-    const VectorXr &massMatrixInverse() const noexcept
-    {
+    /// $$\mathbf{M} = \mathbf{V}_{2D}^T \operatorname{diag}(\Lambda_{wJ}) \, \mathbf{V}_{2D}$$
+    ///
+    const VectorXr &massMatrixInverse() const noexcept {
         return minv_;
     }
 
@@ -145,15 +130,13 @@ public:
     ///        face, shape $N_{\text{face}} \times 2$. $|\hat{n}|$ equals the
     ///        physical edge length; the normal points from the left element
     ///        $K_L$ to the right element $K_R$.
-    const MatrixX2r &faceNormals() const noexcept
-    {
+    const MatrixX2r &faceNormals() const noexcept {
         return face_normals_;
     }
 
     /// @brief Face Jacobian $|J_f| = |\vec{e}| / 2$ (half the physical edge
     ///        length), size $N_{\text{face}}$.
-    const VectorXr &faceJacobians() const noexcept
-    {
+    const VectorXr &faceJacobians() const noexcept {
         return face_jac_;
     }
 
@@ -168,22 +151,19 @@ public:
     /// parallelogram_assumption.md). The per-point arrays are still filled
     /// for data completeness; the constant-quantity accessors below provide
     /// the cheap path.
-    bool isOrthogonal() const noexcept
-    {
+    bool isOrthogonal() const noexcept {
         return is_orthogonal_;
     }
 
     /// @brief Per-element constant Jacobian determinant $|J_e|$ (only valid
     ///        when isOrthogonal()), size $N_{\text{elem}}$.
-    const VectorXr &jacobianConstant() const noexcept
-    {
+    const VectorXr &jacobianConstant() const noexcept {
         return jacobian_constant_;
     }
 
     /// @brief Per-element diagonal inverse mass matrix $1 / |J_e|$ (only
     ///        valid when isOrthogonal()), size $N_{\text{elem}}$.
-    const VectorXr &massMatrixInverseDiagonal() const noexcept
-    {
+    const VectorXr &massMatrixInverseDiagonal() const noexcept {
         return minv_diag_;
     }
 
@@ -198,68 +178,52 @@ public:
 
     /// @name Device handles (see allocateDeviceMemory for sizes).
     /// @{
-    occa::memory o_vertices() const
-    {
+    occa::memory o_vertices() const {
         return o_vertices_;
     }
-    occa::memory o_absJ() const
-    {
+    occa::memory o_absJ() const {
         return o_absJ_;
     }
-    occa::memory o_Jinv11() const
-    {
+    occa::memory o_Jinv11() const {
         return o_Jinv11_;
     }
-    occa::memory o_Jinv12() const
-    {
+    occa::memory o_Jinv12() const {
         return o_Jinv12_;
     }
-    occa::memory o_Jinv21() const
-    {
+    occa::memory o_Jinv21() const {
         return o_Jinv21_;
     }
-    occa::memory o_Jinv22() const
-    {
+    occa::memory o_Jinv22() const {
         return o_Jinv22_;
     }
-    occa::memory o_lambdaWJ() const
-    {
+    occa::memory o_lambdaWJ() const {
         return o_lambdaWJ_;
     }
-    occa::memory o_minv() const
-    {
+    occa::memory o_minv() const {
         return o_minv_;
     }
-    occa::memory o_faceNormals() const
-    {
+    occa::memory o_faceNormals() const {
         return o_faceNormals_;
     }
-    occa::memory o_faceJac() const
-    {
+    occa::memory o_faceJac() const {
         return o_faceJac_;
     }
-    occa::memory o_faceTypes() const
-    {
+    occa::memory o_faceTypes() const {
         return o_faceTypes_;
     }
-    occa::memory o_faceKL() const
-    {
+    occa::memory o_faceKL() const {
         return o_faceKL_;
     }
-    occa::memory o_faceFL() const
-    {
+    occa::memory o_faceFL() const {
         return o_faceFL_;
     }
-    occa::memory o_faceKR() const
-    {
+    occa::memory o_faceKR() const {
         return o_faceKR_;
     }
-    occa::memory o_faceFR() const
-    {
+    occa::memory o_faceFR() const {
         return o_faceFR_;
     }
-    occa::memory o_elemFaces() const
-    {
+    occa::memory o_elemFaces() const {
         return o_elemFaces_;
     }
     /// @}
@@ -309,8 +273,7 @@ private:
 /// vector $A \to B$ (fixed by the left element's counter-clockwise
 /// traversal); see faceRefMapLeft/faceRefMapRight for how each element
 /// queries its own face map.
-struct FaceRefMap
-{
+struct FaceRefMap {
     Real cr, dr; ///< $r = c_r t + d_r$.
     Real cs, ds; ///< $s = c_s t + d_s$.
 };

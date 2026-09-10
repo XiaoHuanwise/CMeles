@@ -29,101 +29,99 @@
 
 // --- Volume integral ---------------------------------------------------------
 
-@kernel void volumeIntegral(const int N_elem,
-                            const int N_vars, const int N_modes, const int Nq2,
-                            const Real *u,
-                            const Real *V2D,
-                            const Real *dV2D_r,
-                            const Real *dV2D_s,
-                            const Real *lambdaWJ,
+@kernel void volumeIntegral(const int N_elem, const int N_vars,
+                            const int N_modes, const int Nq2, const Real *u,
+                            const Real *V2D, const Real *dV2D_r,
+                            const Real *dV2D_s, const Real *lambdaWJ,
                             const Real *Jinv11, const Real *Jinv12,
                             const Real *Jinv21, const Real *Jinv22,
-                            const Real gamma,
-                            Real *R_vol) {
-  for (int elem = 0; elem < N_elem; ++elem; @tile(TILE_SIZE, @outer, @inner)) {
-    // Local arrays: quadrature-point conserved values (max 4 vars), fluxes.
-    Real qval[4][256];
-    Real Hr[4][256];
-    Real Hs[4][256];
+                            const Real gamma, Real *R_vol) {
+    for (int elem = 0; elem < N_elem; ++elem;
+         @tile(TILE_SIZE, @outer, @inner)) {
+        // Local arrays: quadrature-point conserved values (max 4 vars), fluxes.
+        Real qval[4][256];
+        Real Hr[4][256];
+        Real Hs[4][256];
 
-    // --- Step 1: modal -> nodal (quadrature-point values) ---
-    // qval[var][q] = sum_m V2D[q][m] * u[elem][var][m]
-    const int uOff = elem * N_vars * N_modes;
-    for (int var = 0; var < N_vars; ++var) {
-      for (int q = 0; q < Nq2; ++q) {
-        Real acc = 0.0;
-        const int vRow = q * N_modes;
-        const int uBase = uOff + var * N_modes;
-        for (int m = 0; m < N_modes; ++m) {
-          acc += V2D[vRow + m] * u[uBase + m];
+        // --- Step 1: modal -> nodal (quadrature-point values) ---
+        // qval[var][q] = sum_m V2D[q][m] * u[elem][var][m]
+        const int uOff = elem * N_vars * N_modes;
+        for (int var = 0; var < N_vars; ++var) {
+            for (int q = 0; q < Nq2; ++q) {
+                Real acc        = 0.0;
+                const int vRow  = q * N_modes;
+                const int uBase = uOff + var * N_modes;
+                for (int m = 0; m < N_modes; ++m) {
+                    acc += V2D[vRow + m] * u[uBase + m];
+                }
+                qval[var][q] = acc;
+            }
         }
-        qval[var][q] = acc;
-      }
-    }
 
-    // --- Step 2: convective fluxes and weighted physical gradients ---
-    const int gOff = elem * Nq2;
-    for (int q = 0; q < Nq2; ++q) {
-      // NOTE: access qval[var][q] directly by index. `&qval[0][q]` would
-      // point into the first var's row (qval is row-major), so qk[1..]
-      // would read the next quadrature point of var 0, not var 1..3.
-      const Real rho = qval[0][q];
-      const Real uu = qval[1][q] / rho;
-      const Real vv = qval[2][q] / rho;
-      const Real E = qval[3][q];
-      const Real ke = 0.5 * rho * (uu * uu + vv * vv);
-      const Real p = (gamma - 1.0) * (E - ke);
+        // --- Step 2: convective fluxes and weighted physical gradients ---
+        const int gOff = elem * Nq2;
+        for (int q = 0; q < Nq2; ++q) {
+            // NOTE: access qval[var][q] directly by index. `&qval[0][q]` would
+            // point into the first var's row (qval is row-major), so qk[1..]
+            // would read the next quadrature point of var 0, not var 1..3.
+            const Real rho = qval[0][q];
+            const Real uu  = qval[1][q] / rho;
+            const Real vv  = qval[2][q] / rho;
+            const Real E   = qval[3][q];
+            const Real ke  = 0.5 * rho * (uu * uu + vv * vv);
+            const Real p   = (gamma - 1.0) * (E - ke);
 
-      // x-flux: (rho u, rho u^2 + p, rho u v, u (E + p))
-      const Real fc0 = rho * uu;
-      const Real fc1 = rho * uu * uu + p;
-      const Real fc2 = rho * uu * vv;
-      const Real fc3 = uu * (E + p);
-      // y-flux: (rho v, rho u v, rho v^2 + p, v (E + p))
-      const Real gc0 = rho * vv;
-      const Real gc1 = rho * uu * vv;
-      const Real gc2 = rho * vv * vv + p;
-      const Real gc3 = vv * (E + p);
+            // x-flux: (rho u, rho u^2 + p, rho u v, u (E + p))
+            const Real fc0 = rho * uu;
+            const Real fc1 = rho * uu * uu + p;
+            const Real fc2 = rho * uu * vv;
+            const Real fc3 = uu * (E + p);
+            // y-flux: (rho v, rho u v, rho v^2 + p, v (E + p))
+            const Real gc0 = rho * vv;
+            const Real gc1 = rho * uu * vv;
+            const Real gc2 = rho * vv * vv + p;
+            const Real gc3 = vv * (E + p);
 
-      const Real lam = lambdaWJ[gOff + q];
-      const Real j11 = Jinv11[gOff + q];
-      const Real j12 = Jinv12[gOff + q];
-      const Real j21 = Jinv21[gOff + q];
-      const Real j22 = Jinv22[gOff + q];
+            const Real lam = lambdaWJ[gOff + q];
+            const Real j11 = Jinv11[gOff + q];
+            const Real j12 = Jinv12[gOff + q];
+            const Real j21 = Jinv21[gOff + q];
+            const Real j22 = Jinv22[gOff + q];
 
-      Hr[0][q] = lam * (fc0 * j11 + gc0 * j12);
-      Hr[1][q] = lam * (fc1 * j11 + gc1 * j12);
-      Hr[2][q] = lam * (fc2 * j11 + gc2 * j12);
-      Hr[3][q] = lam * (fc3 * j11 + gc3 * j12);
+            Hr[0][q] = lam * (fc0 * j11 + gc0 * j12);
+            Hr[1][q] = lam * (fc1 * j11 + gc1 * j12);
+            Hr[2][q] = lam * (fc2 * j11 + gc2 * j12);
+            Hr[3][q] = lam * (fc3 * j11 + gc3 * j12);
 
-      Hs[0][q] = lam * (fc0 * j21 + gc0 * j22);
-      Hs[1][q] = lam * (fc1 * j21 + gc1 * j22);
-      Hs[2][q] = lam * (fc2 * j21 + gc2 * j22);
-      Hs[3][q] = lam * (fc3 * j21 + gc3 * j22);
-    }
-
-    // --- Step 3: dense contraction per basis mode ---
-    // Loop order q -> var -> l: the l loop is a unit-stride axpy over the
-    // dV2D rows (full cache-line use, auto-vectorizable), and each row
-    // stays hot in L1 across the var loop, so the matrices make a single
-    // pass through the lower cache levels per element. R_vol is zeroed
-    // first and accumulated in place (its rows stay in L1).
-    // dV2D_r/dV2D_s are separable tensor products, so sum factorization
-    // could split this into two 1-D passes (future optimization).
-    const int rOff = uOff; // R_vol has the same [elem][var][mode] layout
-    for (int idx = 0; idx < N_vars * N_modes; ++idx) {
-      R_vol[rOff + idx] = 0.0;
-    }
-    for (int q = 0; q < Nq2; ++q) {
-      const int dRow = q * N_modes;
-      for (int var = 0; var < N_vars; ++var) {
-        const Real hr = Hr[var][q];
-        const Real hs = Hs[var][q];
-        const int rBase = rOff + var * N_modes;
-        for (int l = 0; l < N_modes; ++l) {
-          R_vol[rBase + l] += hr * dV2D_r[dRow + l] + hs * dV2D_s[dRow + l];
+            Hs[0][q] = lam * (fc0 * j21 + gc0 * j22);
+            Hs[1][q] = lam * (fc1 * j21 + gc1 * j22);
+            Hs[2][q] = lam * (fc2 * j21 + gc2 * j22);
+            Hs[3][q] = lam * (fc3 * j21 + gc3 * j22);
         }
-      }
+
+        // --- Step 3: dense contraction per basis mode ---
+        // Loop order q -> var -> l: the l loop is a unit-stride axpy over the
+        // dV2D rows (full cache-line use, auto-vectorizable), and each row
+        // stays hot in L1 across the var loop, so the matrices make a single
+        // pass through the lower cache levels per element. R_vol is zeroed
+        // first and accumulated in place (its rows stay in L1).
+        // dV2D_r/dV2D_s are separable tensor products, so sum factorization
+        // could split this into two 1-D passes (future optimization).
+        const int rOff = uOff; // R_vol has the same [elem][var][mode] layout
+        for (int idx = 0; idx < N_vars * N_modes; ++idx) {
+            R_vol[rOff + idx] = 0.0;
+        }
+        for (int q = 0; q < Nq2; ++q) {
+            const int dRow = q * N_modes;
+            for (int var = 0; var < N_vars; ++var) {
+                const Real hr   = Hr[var][q];
+                const Real hs   = Hs[var][q];
+                const int rBase = rOff + var * N_modes;
+                for (int l = 0; l < N_modes; ++l) {
+                    R_vol[rBase + l] +=
+                        hr * dV2D_r[dRow + l] + hs * dV2D_s[dRow + l];
+                }
+            }
+        }
     }
-  }
 }

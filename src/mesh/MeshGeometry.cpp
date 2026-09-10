@@ -10,8 +10,7 @@
 #include "basis/BasisFunctions2D.hpp"
 #include "core/DeviceMemoryManager.hpp"
 
-namespace
-{
+namespace {
 /// @brief Face-to-element reference coordinate maps.
 ///
 /// Table 2.5 of mesh_and_geometry.md. Each table is keyed by the
@@ -32,8 +31,7 @@ namespace
 /// In an all-quadrilateral mesh $f_R = (f_L + 2) \bmod 4$ (opposite
 /// faces), which is why an earlier version could key the right map by
 /// $f_L$. Triangle (degenerate quadrilateral) meshes break this pairing
-/// — e.g. along a split diagonal the shared edge has $(f_L, f_R) = (0,
-/// 1)$ — so the right map must be keyed by the right element's own
+/// — e.g. along a split diagonal the shared edge has $(f_L, f_R) = (0, 1)$ — so the right map must be keyed by the right element's own
 /// local face number, exactly what face_elements_(F, 3) stores.
 constexpr FaceRefMap kFaceRefLeft[4] = {
     {Real(0), Real(-1), Real(-1), Real(0)}, // f=0: r=-1,   s=-t
@@ -51,8 +49,7 @@ constexpr FaceRefMap kFaceRefRight[4] = {
 } // namespace
 
 MeshGeometry::MeshGeometry(const Mesh &mesh, const BasisFunctions2D &basis)
-    : mesh_(&mesh), basis_(&basis)
-{
+    : mesh_(&mesh), basis_(&basis) {
     N_elem_ = mesh.numElements();
     N_face_ = mesh.numFaces();
     Nq_     = basis.numPoints1D();
@@ -67,8 +64,7 @@ MeshGeometry::MeshGeometry(const Mesh &mesh, const BasisFunctions2D &basis)
 // Per-element geometry
 // ---------------------------------------------------------------------------
 
-void MeshGeometry::buildElementGeometry()
-{
+void MeshGeometry::buildElementGeometry() {
     const MatrixX2r &meshVerts = mesh_->vertices();
     const auto &elemVerts      = mesh_->elementVertices();
     const MatrixX2r &qp        = basis_->quadraturePoints();
@@ -89,12 +85,10 @@ void MeshGeometry::buildElementGeometry()
     // Parallelogram condition: P1 + P3 == P2 + P4 (within tolerance).
     is_orthogonal_ = true;
 
-    for (int e = 0; e < N_elem_; ++e)
-    {
+    for (int e = 0; e < N_elem_; ++e) {
         // (1) Vertex coordinates into the 8-slot row.
         Real x[4], y[4];
-        for (int k = 0; k < 4; ++k)
-        {
+        for (int k = 0; k < 4; ++k) {
             const int v                  = elemVerts(e, k);
             x[k]                         = meshVerts(v, 0);
             y[k]                         = meshVerts(v, 1);
@@ -118,8 +112,7 @@ void MeshGeometry::buildElementGeometry()
         // (3) Per-quadrature-point Jacobian quantities.
         //     Point order k = j * Nq + i matches BasisFunctions2D.
         const size_t eOff = static_cast<size_t>(e) * Nq2_;
-        for (int q = 0; q < Nq2_; ++q)
-        {
+        for (int q = 0; q < Nq2_; ++q) {
             const Real r    = qp(q, 0);
             const Real s    = qp(q, 1);
             const Real dxdr = a1 + a3 * s;
@@ -127,8 +120,7 @@ void MeshGeometry::buildElementGeometry()
             const Real dydr = b1 + b3 * s;
             const Real dyds = b2 + b3 * r;
             const Real detJ = dxdr * dyds - dxds * dydr;
-            if (!(detJ > Real(0)))
-            {
+            if (!(detJ > Real(0))) {
                 throw std::runtime_error(
                     "MeshGeometry: non-positive Jacobian determinant in "
                     "element " +
@@ -151,8 +143,7 @@ void MeshGeometry::buildElementGeometry()
                             std::abs(y[2]) + std::abs(y[3]) + Real(1));
         const Real condX = (x[0] + x[2]) - (x[1] + x[3]);
         const Real condY = (y[0] + y[2]) - (y[1] + y[3]);
-        if (std::abs(condX) > tol || std::abs(condY) > tol)
-        {
+        if (std::abs(condX) > tol || std::abs(condY) > tol) {
             is_orthogonal_ = false;
         }
 
@@ -178,16 +169,14 @@ void MeshGeometry::buildElementGeometry()
 // Per-face geometry
 // ---------------------------------------------------------------------------
 
-void MeshGeometry::buildFaceGeometry()
-{
+void MeshGeometry::buildFaceGeometry() {
     const MatrixX2r &meshVerts = mesh_->vertices();
     const auto &faceElems      = mesh_->faceElements();
 
     face_normals_.resize(N_face_, 2);
     face_jac_.resize(N_face_);
 
-    for (int F = 0; F < N_face_; ++F)
-    {
+    for (int F = 0; F < N_face_; ++F) {
         // Edge direction is defined by the left element's counter-clockwise
         // traversal, A -> B (increasing face coordinate t).
         const int KL        = faceElems(F, 0);
@@ -210,8 +199,7 @@ void MeshGeometry::buildFaceGeometry()
 // Device memory
 // ---------------------------------------------------------------------------
 
-void MeshGeometry::allocateDeviceMemory(DeviceMemoryManager &mgr)
-{
+void MeshGeometry::allocateDeviceMemory(DeviceMemoryManager &mgr) {
     o_vertices_ = mgr.wrapOrMalloc(
         elem_vertices_.data(), static_cast<occa::dim_t>(elem_vertices_.size()));
     o_absJ_        = mgr.wrapOrMalloc(absJ_.data(), absJ_.size());
@@ -247,12 +235,10 @@ void MeshGeometry::allocateDeviceMemory(DeviceMemoryManager &mgr)
 // Face-to-element reference coordinate maps
 // ---------------------------------------------------------------------------
 
-const FaceRefMap &faceRefMapLeft(int f)
-{
+const FaceRefMap &faceRefMapLeft(int f) {
     return kFaceRefLeft[f];
 }
 
-const FaceRefMap &faceRefMapRight(int f)
-{
+const FaceRefMap &faceRefMapRight(int f) {
     return kFaceRefRight[f];
 }

@@ -13,12 +13,10 @@
 #include "Mesh.hpp"
 
 /// @brief Structured mesh generator.
-class StructuredMeshGenerator
-{
+class StructuredMeshGenerator {
 public:
     /// @brief Generation parameters.
-    struct Params
-    {
+    struct Params {
         int nx  = 1;       ///< Number of elements in the $x$ direction.
         int ny  = 1;       ///< Number of elements in the $y$ direction.
         Real x0 = Real(0); ///< Origin $x$ coordinate.

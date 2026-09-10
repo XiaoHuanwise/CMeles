@@ -19,8 +19,7 @@
 #include "core/DeviceMemoryManager.hpp"
 
 /// @brief OCCA-backed BLAS 1-3 kernels over \c Real with uniform backend paths.
-class Blas
-{
+class Blas {
 public:
     /// @brief Construct a Blas instance bound to a device and memory manager.
     /// @param device  OCCA device (lifetime must exceed this object).

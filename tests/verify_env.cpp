@@ -1,6 +1,6 @@
+#include <cmath>
 #include <iostream>
 #include <vector>
-#include <cmath>
 
 #include <Eigen/Dense>
 #include <occa.hpp>
@@ -10,9 +10,7 @@ int main() {
     std::cout << "===== Eigen Test =====" << std::endl;
 
     Eigen::Matrix3d A;
-    A << 1, 2, 3,
-         4, 5, 6,
-         7, 8, 9;
+    A << 1, 2, 3, 4, 5, 6, 7, 8, 9;
 
     Eigen::Vector3d x(1.0, 2.0, 3.0);
     Eigen::Vector3d b = A * x;
@@ -23,13 +21,12 @@ int main() {
 
     // Solve M * x = rhs
     Eigen::Matrix3d M;
-    M << 2, 1, 0,
-         1, 3, 1,
-         0, 1, 2;
+    M << 2, 1, 0, 1, 3, 1, 0, 1, 2;
     Eigen::Vector3d rhs(1.0, 2.0, 3.0);
     Eigen::Vector3d sol = M.colPivHouseholderQr().solve(rhs);
     std::cout << "\nSolve M * x = rhs:\n"
-              << "M =\n" << M << "\n"
+              << "M =\n"
+              << M << "\n"
               << "rhs = " << rhs.transpose() << "\n"
               << "x   = " << sol.transpose() << std::endl;
 
@@ -48,14 +45,12 @@ int main() {
     }
 
     // Create Serial device
-    occa::device device({
-        {"mode", "Serial"}
-    });
+    occa::device device({{"mode", "Serial"}});
     std::cout << "OCCA mode: " << device.mode() << std::endl;
 
     // Allocate device memory and copy data
-    occa::memory o_a = device.malloc<float>(entries, h_a.data());
-    occa::memory o_b = device.malloc<float>(entries, h_b.data());
+    occa::memory o_a  = device.malloc<float>(entries, h_a.data());
+    occa::memory o_b  = device.malloc<float>(entries, h_b.data());
     occa::memory o_ab = device.malloc<float>(entries);
 
     // Build kernel from string
@@ -70,7 +65,8 @@ int main() {
 }
 )";
 
-    occa::kernel addVectors = device.buildKernelFromString(kernelSource, "addVectors");
+    occa::kernel addVectors =
+        device.buildKernelFromString(kernelSource, "addVectors");
 
     // Run kernel
     addVectors(entries, o_a, o_b, o_ab);
@@ -82,11 +78,11 @@ int main() {
     bool ok = true;
     for (int i = 0; i < entries; ++i) {
         float expected = h_a[i] + h_b[i];
-        bool match = (std::fabs(h_ab[i] - expected) < 1e-6f);
-        std::cout << "  " << h_a[i] << " + " << h_b[i]
-                  << " = " << h_ab[i]
+        bool match     = (std::fabs(h_ab[i] - expected) < 1e-6f);
+        std::cout << "  " << h_a[i] << " + " << h_b[i] << " = " << h_ab[i]
                   << (match ? " PASS" : " FAIL") << std::endl;
-        if (!match) ok = false;
+        if (!match)
+            ok = false;
     }
 
     std::cout << "\nOCCA test: " << (ok ? "PASSED" : "FAILED") << std::endl;

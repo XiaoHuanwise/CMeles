@@ -17,33 +17,26 @@
 #include "mesh/MeshGeometry.hpp"
 #include "mesh/StructuredMeshGenerator.hpp"
 
-namespace
-{
+namespace {
 const Real tol = Real(1e3) * RealEpsilon;
 
 /// Probe whether a backend is available, returning its props if so.
-static occa::json tryMakeDevice(const std::string &mode)
-{
-    try
-    {
+static occa::json tryMakeDevice(const std::string &mode) {
+    try {
         occa::json props;
         props["mode"] = mode;
-        if (mode == "OpenCL")
-        {
+        if (mode == "OpenCL") {
             props["platform_id"] = 0;
             props["device_id"]   = 0;
         }
         occa::device dev(props);
-        if (dev.mode() != mode)
-        {
+        if (dev.mode() != mode) {
             dev.free();
             return occa::json();
         }
         dev.free();
         return props;
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception &e) {
         std::cout << "  (skip " << mode << ": " << e.what() << ")\n";
         return occa::json();
     }
@@ -51,14 +44,10 @@ static occa::json tryMakeDevice(const std::string &mode)
 
 /// Read a device array back to host, distinguishing the memory spaces.
 static void readResult(DeviceMemoryManager &mem, occa::memory o_data, Real *dst,
-                       occa::dim_t entries, const Real *hostAlias)
-{
-    if (mem.hasSeparateMemorySpace())
-    {
+                       occa::dim_t entries, const Real *hostAlias) {
+    if (mem.hasSeparateMemorySpace()) {
         mem.copyToHost(o_data, dst, entries);
-    }
-    else
-    {
+    } else {
         std::memcpy(dst, hostAlias,
                     static_cast<std::size_t>(entries) * sizeof(Real));
     }
@@ -66,14 +55,10 @@ static void readResult(DeviceMemoryManager &mem, occa::memory o_data, Real *dst,
 
 /// Same for int arrays.
 static void readResult(DeviceMemoryManager &mem, occa::memory o_data, int *dst,
-                       occa::dim_t entries, const int *hostAlias)
-{
-    if (mem.hasSeparateMemorySpace())
-    {
+                       occa::dim_t entries, const int *hostAlias) {
+    if (mem.hasSeparateMemorySpace()) {
         mem.copyToHost(o_data, dst, entries);
-    }
-    else
-    {
+    } else {
         std::memcpy(dst, hostAlias,
                     static_cast<std::size_t>(entries) * sizeof(int));
     }
@@ -81,15 +66,13 @@ static void readResult(DeviceMemoryManager &mem, occa::memory o_data, int *dst,
 
 /// Check a handle: initialised and of the expected size.
 /// occa::memory::size() returns the number of elements.
-bool checkHandle(occa::memory o, occa::dim_t expectedElements, const char *what)
-{
-    if (!o.isInitialized() || o.size() == 0)
-    {
+bool checkHandle(occa::memory o, occa::dim_t expectedElements,
+                 const char *what) {
+    if (!o.isInitialized() || o.size() == 0) {
         std::cout << "  FAIL " << what << ": uninitialised\n";
         return false;
     }
-    if (o.size() != expectedElements)
-    {
+    if (o.size() != expectedElements) {
         std::cout << "  FAIL " << what << ": size=" << o.size() << " (expect "
                   << expectedElements << " elements)\n";
         return false;
@@ -99,8 +82,7 @@ bool checkHandle(occa::memory o, occa::dim_t expectedElements, const char *what)
 
 /// Build a small mixed mesh: 2x2 quads + one triangle-split row, so both
 /// element kinds and interior/boundary faces appear.
-struct TestFixture
-{
+struct TestFixture {
     Mesh mesh;
     BasisFunctions2D basis;
     MeshGeometry geo;
@@ -109,22 +91,18 @@ struct TestFixture
         : mesh(
               StructuredMeshGenerator::generate(StructuredMeshGenerator::Params{
                   2, 2, Real(0), Real(0), Real(1), Real(1)})),
-          basis(makeBasis()), geo(mesh, basis)
-    {
+          basis(makeBasis()), geo(mesh, basis) {
     }
 
-    static BasisFunctions2D makeBasis()
-    {
+    static BasisFunctions2D makeBasis() {
         static BasisFunctions1D basis1D(2, 3);
         return BasisFunctions2D(basis1D, 2);
     }
 };
 
-bool runOnDevice(occa::json props, int &passed, int &skipped, int &failed)
-{
+bool runOnDevice(occa::json props, int &passed, int &skipped, int &failed) {
     bool ok = true;
-    if (props.isNull())
-    {
+    if (props.isNull()) {
         ++skipped;
         return ok;
     }
@@ -159,14 +137,11 @@ bool runOnDevice(occa::json props, int &passed, int &skipped, int &failed)
     ok &= checkHandle(fx.geo.o_elemFaces(), N_elem * 4, "o_elemFaces");
 
     // ---- Zero-copy check in unified memory space ----
-    if (!mem.hasSeparateMemorySpace())
-    {
+    if (!mem.hasSeparateMemorySpace()) {
         ok &= fx.geo.o_absJ().ptr<Real>() == fx.geo.absJacobian().data();
         ok &= fx.geo.o_faceKL().ptr<int>() != nullptr;
         ok &= fx.geo.o_lambdaWJ().ptr<Real>() == fx.geo.lambdaWJ().data();
-    }
-    else
-    {
+    } else {
         ok &= fx.geo.o_absJ().ptr<Real>() != fx.geo.absJacobian().data();
     }
 
@@ -188,26 +163,21 @@ bool runOnDevice(occa::json props, int &passed, int &skipped, int &failed)
         Eigen::VectorXi kl = fx.mesh.faceElements().col(0);
         std::vector<int> hostKL(N_face);
         readResult(mem, fx.geo.o_faceKL(), hostKL.data(), N_face, kl.data());
-        for (int F = 0; F < N_face; ++F)
-        {
+        for (int F = 0; F < N_face; ++F) {
             ok &= hostKL[F] == fx.mesh.faceElements()(F, 0);
         }
     }
 
-    if (!ok)
-    {
+    if (!ok) {
         ++failed;
-    }
-    else
-    {
+    } else {
         ++passed;
     }
     return ok;
 }
 } // namespace
 
-int main()
-{
+int main() {
     int passed = 0, skipped = 0, failed = 0;
 
     // Serial (unified memory space, mandatory).
@@ -222,13 +192,10 @@ int main()
     std::cout << "[OpenCL]\n";
     {
         occa::json props = tryMakeDevice("OpenCL");
-        if (props.isNull())
-        {
+        if (props.isNull()) {
             std::cout << "  (skip OpenCL: not available)\n";
             ++skipped;
-        }
-        else
-        {
+        } else {
             runOnDevice(props, passed, skipped, failed);
         }
     }

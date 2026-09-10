@@ -23,17 +23,13 @@ class DeviceMemoryManager;
 /// 2D basis functions are tensor products of 1D normalized Legendre
 /// polynomials:
 ///
-/// $$
-///   \phi_{ij}(r, s) = \tilde{P}_i(r) \cdot \tilde{P}_j(s), \quad i + j \le N.
-/// $$
+/// $$ \phi_{ij}(r, s) = \tilde{P}_i(r) \cdot \tilde{P}_j(s), \quad i + j \le N. $$
 ///
 /// They are stored in Pascal-triangle (row) order: functions with the same
 /// total degree $p = i + j$ are grouped together. The linear index $l$ is given
 /// by
 ///
-/// $$
-///   l = \frac{p(p+1)}{2} + j, \quad p = i + j.
-/// $$
+/// $$ l = \frac{p(p+1)}{2} + j, \quad p = i + j. $$
 ///
 /// All pre-computation happens at construction time. The class holds a
 /// non-owning const reference to a BasisFunctions1D instance whose lifetime
@@ -42,8 +38,7 @@ class DeviceMemoryManager;
 /// All 2D matrices use row-major storage to match OCCA's memory layout,
 /// so that `wrapMemory` directly exposes data to OCCA kernels without
 /// transposition.
-class BasisFunctions2D
-{
+class BasisFunctions2D {
 public:
     /// @brief Construct from 1D basis functions and polynomial order $N$.
     /// @param basis1D  1D basis (must be configured with order $\ge N$).
@@ -56,32 +51,27 @@ public:
     // ---- Accessors ----
 
     /// @brief 2D polynomial order $N$ (total degree $i+j \le N$).
-    int order() const noexcept
-    {
+    int order() const noexcept {
         return N_;
     }
 
     /// @brief Number of basis functions $N_{\text{base}} = (N+1)(N+2)/2$.
-    int numBases() const noexcept
-    {
+    int numBases() const noexcept {
         return N_base_;
     }
 
     /// @brief Total number of 2D quadrature points $N_q^2$.
-    int numPoints() const noexcept
-    {
+    int numPoints() const noexcept {
         return numPoints1D_ * numPoints1D_;
     }
 
     /// @brief Number of quadrature points per dimension $N_q$.
-    int numPoints1D() const noexcept
-    {
+    int numPoints1D() const noexcept {
         return numPoints1D_;
     }
 
     /// @brief Access to the underlying 1D basis.
-    const BasisFunctions1D &basis1D() const noexcept
-    {
+    const BasisFunctions1D &basis1D() const noexcept {
         return *basis1D_;
     }
 
@@ -112,8 +102,7 @@ public:
     /// @brief Pre-computed $(i_l, j_l)$ pairs for all bases, shape
     /// $N_{\text{base}} \times 2$.
     const Eigen::Matrix<int, Eigen::Dynamic, 2, Eigen::RowMajor> &indexMap()
-        const noexcept
-    {
+        const noexcept {
         return ij_map_;
     }
 
@@ -124,16 +113,14 @@ public:
     /// Stored in column-major order: $k = j \cdot N_q + i$, where $i$ indexes
     /// the $r$-direction column and $j$ indexes the $s$-direction row.
     /// Row $k$ stores the point $(r_i, s_j)$.
-    const MatrixX2r &quadraturePoints() const noexcept
-    {
+    const MatrixX2r &quadraturePoints() const noexcept {
         return quad_points_;
     }
 
     /// @brief 2D tensor-product quadrature weights, size $N_q^2$.
     ///
     /// $W_k = w_i \cdot w_j$, where $k = j \cdot N_q + i$.
-    const VectorXr &quadratureWeights() const noexcept
-    {
+    const VectorXr &quadratureWeights() const noexcept {
         return quad_weights_;
     }
 
@@ -143,26 +130,21 @@ public:
     ///
     /// $V_{2D}(k, l) = \tilde{P}_{i_l}(r_i) \cdot \tilde{P}_{j_l}(s_j)$,
     /// where $k = j \cdot N_q + i$ (column-major grid order).
-    const MatrixXr &vandermonde() const noexcept
-    {
+    const MatrixXr &vandermonde() const noexcept {
         return V2D_;
     }
 
-    /// @brief $r$-direction derivative Vandermonde, size $N_q^2 \times
-    /// N_{\text{base}}$.
+    /// @brief $r$-direction derivative Vandermonde, size $N_q^2 \times N_{\text{base}}$.
     ///
     /// $dV_{2D,r}(k, l) = \tilde{P}'_{i_l}(r_i) \cdot \tilde{P}_{j_l}(s_j)$.
-    const MatrixXr &vandermondeDerivativeR() const noexcept
-    {
+    const MatrixXr &vandermondeDerivativeR() const noexcept {
         return dV2D_r_;
     }
 
-    /// @brief $s$-direction derivative Vandermonde, size $N_q^2 \times
-    /// N_{\text{base}}$.
+    /// @brief $s$-direction derivative Vandermonde, size $N_q^2 \times N_{\text{base}}$.
     ///
     /// $dV_{2D,s}(k, l) = \tilde{P}_{i_l}(r_i) \cdot \tilde{P}'_{j_l}(s_j)$.
-    const MatrixXr &vandermondeDerivativeS() const noexcept
-    {
+    const MatrixXr &vandermondeDerivativeS() const noexcept {
         return dV2D_s_;
     }
 
@@ -185,9 +167,11 @@ public:
     /// projection.
     ///
     /// @note For physical elements with non-constant Jacobian, the per-element
-    ///       mass matrix $$M = V_{2D}^T \, \operatorname{diag}(|J| \odot W) \,
-    ///       V_{2D}$$
-    ///  must be inverted separately.
+    /// mass matrix
+    ///
+    /// $$M = V_{2D}^T \, \operatorname{diag}(|J| \odot W) \, V_{2D}$$
+    ///
+    /// must be inverted separately.
     ///
     /// @param u  Nodal values at quadrature points, size $N_q^2$.
     /// @return   Modal coefficients, size $N_{\text{base}}$.
@@ -199,10 +183,7 @@ public:
     ///
     /// Computes, for each basis $l$ with $(i_l, j_l)$:
     ///
-    /// $$
-    ///   R_l = \sum_i \tilde{P}'_{i_l}(r_i)
-    ///        \left[ \sum_j G(r_i, s_j) \, \tilde{P}_{j_l}(s_j) \right]
-    /// $$
+    /// $$ R_l = \sum_i \tilde{P}'_{i_l}(r_i) \left[ \sum_j G(r_i, s_j) \, \tilde{P}_{j_l}(s_j) \right] $$
     ///
     /// The two-step decomposition achieves $O(N_q^2 N + N^2 N_q)$ complexity
     /// instead of the naive $O(N_q^2 N^2)$.
@@ -217,10 +198,7 @@ public:
     ///
     /// Computes, for each basis $l$ with $(i_l, j_l)$:
     ///
-    /// $$
-    ///   R_l = \sum_i \tilde{P}_{i_l}(r_i)
-    ///        \left[ \sum_j G(r_i, s_j) \, \tilde{P}'_{j_l}(s_j) \right]
-    /// $$
+    /// $$ R_l = \sum_i \tilde{P}_{i_l}(r_i) \left[ \sum_j G(r_i, s_j) \, \tilde{P}'_{j_l}(s_j) \right] $$
     ///
     /// @param G  Field at quadrature points, stored as $N_q \times N_q$ matrix
     ///           where $G(j, i) = G(r_i, s_j)$: row $j$ indexes the
@@ -240,41 +218,35 @@ public:
     void allocateDeviceMemory(DeviceMemoryManager &mgr);
 
     /// @brief Device memory handle for 2D quadrature points.
-    occa::memory o_quadraturePoints() const
-    {
+    occa::memory o_quadraturePoints() const {
         return o_quad_points_;
     }
 
     /// @brief Device memory handle for 2D quadrature weights.
-    occa::memory o_quadratureWeights() const
-    {
+    occa::memory o_quadratureWeights() const {
         return o_quad_weights_;
     }
 
     /// @brief Device memory handle for 2D Vandermonde matrix $V_{2D}$.
-    occa::memory o_V2D() const
-    {
+    occa::memory o_V2D() const {
         return o_V2D_;
     }
 
     /// @brief Device memory handle for $r$-derivative Vandermonde $dV_{2D,r}$.
-    occa::memory o_dV2D_r() const
-    {
+    occa::memory o_dV2D_r() const {
         return o_dV2D_r_;
     }
 
     /// @brief Device memory handle for $s$-derivative Vandermonde $dV_{2D,s}$.
-    occa::memory o_dV2D_s() const
-    {
+    occa::memory o_dV2D_s() const {
         return o_dV2D_s_;
     }
 
 private:
     const BasisFunctions1D *basis1D_; ///< Non-owning pointer to 1D basis.
 
-    int N_;           ///< 2D polynomial order (total degree $\le N$).
-    int N_base_;      ///< Number of basis functions $N_{\text{base}} =
-                      ///< (N+1)(N+2)/2$.
+    int N_;      ///< 2D polynomial order (total degree $\le N$).
+    int N_base_; ///< Number of basis functions $N_{\text{base}} = (N+1)(N+2)/2$.
     int numPoints1D_; ///< $N_q$ from 1D basis.
 
     /// Pascal-triangle index map,

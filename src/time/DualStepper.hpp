@@ -5,9 +5,9 @@
 /// One physical step $u^n \to u^{n+1}$ solves $\mathcal{F}(u^{n+1}) = 0$ of
 /// the owned temporal residual (BackwardEulerResidual or DitrResidual) by
 /// marching the pseudo-time ODE $du/d\tau = \mathcal{F}(u)$ until
-/// $$ \|\mathcal{F}\|_\infty / \max_{k \le 5} \|\mathcal{F}_0\|_\infty
-///    \le \mathrm{rtol} \quad\text{or}\quad
-///    \|\mathcal{F}\|_\infty \le \mathrm{atol}, $$
+///
+/// $$ \|\mathcal{F}\|_\infty / \max_{k \le 5} \|\mathcal{F}_0\|_\infty \le \mathrm{rtol} \quad\text{or}\quad \|\mathcal{F}\|_\infty \le \mathrm{atol}, $$
+///
 /// where the reference norm is the running maximum over the first
 /// REF_STEP = 5 pseudo steps (the "magic number from fluent" in the
 /// prototype). The state initial guess is $u^n$ (both stages for DITR).
@@ -15,8 +15,7 @@
 /// Coupled mode advances the stacked state $[u^{n+c_2}, u^{n+1}]$ with a
 /// single pseudo stepper; decoupled mode (DITR only) advances each stage
 /// with its own pseudo stepper and refreshes the other stage's residual
-/// after every half-iteration. $u^{n-1}$ and $\theta = \Delta t^{n-1} /
-/// \Delta t^n$ are maintained internally for U3R1.
+/// after every half-iteration. $u^{n-1}$ and $\theta = \Delta t^{n-1} / \Delta t^n$ are maintained internally for U3R1.
 ///
 /// Reference: docs/tech_docs/time_marching/implicit_time_marching.md and
 /// .stepper.py DualStepper.
@@ -34,12 +33,10 @@
 
 /// @brief Dual time-stepping driver: owns the temporal residual and the
 ///        pseudo steppers, advances one physical step per advance() call.
-class DualStepper : public StepperBase
-{
+class DualStepper : public StepperBase {
 public:
     /// @brief Dual-time parameters.
-    struct Params
-    {
+    struct Params {
         Real atol          = Real(1e-6); ///< Absolute convergence tolerance.
         Real rtol          = Real(1e-6); ///< Relative convergence tolerance.
         int maxPseudoSteps = 100;
@@ -61,12 +58,10 @@ public:
     Real advance(occa::memory o_u, Real t, Real dt) override;
 
     /// @brief Order of the physical scheme (Backward Euler: 1, DITR: 2).
-    int order() const override
-    {
+    int order() const override {
         return nStages_ == 1 ? 1 : 2;
     }
-    const char *name() const override
-    {
+    const char *name() const override {
         return nStages_ == 1 ? "be" : "ditr";
     }
 

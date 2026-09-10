@@ -7,17 +7,14 @@
 
 #include "config/Config.hpp"
 
-namespace
-{
+namespace {
 /// @brief Write \p content to a temporary file and return its path.
 /// The file is created next to the test binary so ctest's working directory
 /// (the build tree) always contains it.
-std::string writeTempToml(const std::string &content)
-{
+std::string writeTempToml(const std::string &content) {
     static const char *kPath = "test_config_scratch.toml";
     std::FILE *f             = std::fopen(kPath, "w");
-    if (!f)
-    {
+    if (!f) {
         return "";
     }
     std::fputs(content.c_str(), f);
@@ -25,19 +22,15 @@ std::string writeTempToml(const std::string &content)
     return kPath;
 }
 
-bool check(bool cond, const char *what)
-{
-    if (!cond)
-    {
+bool check(bool cond, const char *what) {
+    if (!cond) {
         std::cout << "  FAIL " << what << "\n";
     }
     return cond;
 }
 
-bool checkInt(int value, int ref, const char *what)
-{
-    if (value != ref)
-    {
+bool checkInt(int value, int ref, const char *what) {
+    if (value != ref) {
         std::cout << "  FAIL " << what << ": value=" << value << " ref=" << ref
                   << "\n";
         return false;
@@ -45,11 +38,9 @@ bool checkInt(int value, int ref, const char *what)
     return true;
 }
 
-bool checkReal(Real value, Real ref, const char *what)
-{
+bool checkReal(Real value, Real ref, const char *what) {
     const Real tol = Real(1e3) * RealEpsilon;
-    if (std::abs(value - ref) > tol * std::max(std::abs(ref), RealEpsilon))
-    {
+    if (std::abs(value - ref) > tol * std::max(std::abs(ref), RealEpsilon)) {
         std::cout << "  FAIL " << what << ": value=" << value << " ref=" << ref
                   << "\n";
         return false;
@@ -58,10 +49,8 @@ bool checkReal(Real value, Real ref, const char *what)
 }
 
 bool checkStr(const std::string &value, const std::string &ref,
-              const char *what)
-{
-    if (value != ref)
-    {
+              const char *what) {
+    if (value != ref) {
         std::cout << "  FAIL " << what << ": value='" << value << "' ref='"
                   << ref << "'\n";
         return false;
@@ -74,8 +63,7 @@ bool checkStr(const std::string &value, const std::string &ref,
 // 1. Default construction (no file)
 // ---------------------------------------------------------------------------
 
-static bool testDefaults()
-{
+static bool testDefaults() {
     std::cout << "Test 1: default construction\n";
     Config cfg;
     bool ok = true;
@@ -101,8 +89,7 @@ static bool testDefaults()
 // 2. TOML parsing: full file
 // ---------------------------------------------------------------------------
 
-static bool testParseFull()
-{
+static bool testParseFull() {
     std::cout << "Test 2: full TOML file\n";
     const std::string content = R"(
 [basis]
@@ -139,8 +126,7 @@ platform = 1
 device = 2
 )";
     const std::string path    = writeTempToml(content);
-    if (path.empty())
-    {
+    if (path.empty()) {
         std::cout << "  FAIL could not write scratch toml\n";
         return false;
     }
@@ -178,8 +164,7 @@ device = 2
 // 3. Partial file: missing sections fall back to defaults
 // ---------------------------------------------------------------------------
 
-static bool testParsePartial()
-{
+static bool testParsePartial() {
     std::cout << "Test 3: partial TOML file (fallback defaults)\n";
     const std::string content = R"(
 [basis]
@@ -189,8 +174,7 @@ order = 1
 flux = "llf"
 )";
     const std::string path    = writeTempToml(content);
-    if (path.empty())
-    {
+    if (path.empty()) {
         std::cout << "  FAIL could not write scratch toml\n";
         return false;
     }
@@ -211,8 +195,7 @@ flux = "llf"
 // 4. [occa] threads validation
 // ---------------------------------------------------------------------------
 
-static bool testOcaThreadsValidation()
-{
+static bool testOcaThreadsValidation() {
     std::cout << "Test 4: occa threads validation\n";
     bool ok = true;
 
@@ -226,12 +209,9 @@ t_final = 1.0
 threads = -2
 )";
     const std::string badPath = writeTempToml(bad);
-    try
-    {
+    try {
         Config cfg(badPath);
-    }
-    catch (const std::exception &)
-    {
+    } catch (const std::exception &) {
         threw = true;
     }
     ok &= check(threw, "negative threads throws");
@@ -246,13 +226,10 @@ mode = "OpenMP"
 threads = 0
 )";
     const std::string goodPath = writeTempToml(good);
-    try
-    {
+    try {
         Config cfg(goodPath);
         ok &= checkInt(cfg.occaThreads(), 0, "threads = 0 accepted");
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception &e) {
         std::cout << "  FAIL threads = 0 threw: " << e.what() << "\n";
         ok = false;
     }
@@ -264,8 +241,7 @@ threads = 0
 // 5. [time_marching] pseudo tolerance keys
 // ---------------------------------------------------------------------------
 
-static bool testPseudoToleranceKeys()
-{
+static bool testPseudoToleranceKeys() {
     std::cout << "Test 5: pseudo tolerance keys\n";
     bool ok = true;
 
@@ -278,16 +254,13 @@ pseudo_rtol = 1e-6
 pseudo_atol = 2e-6
 )";
     const std::string goodPath = writeTempToml(good);
-    try
-    {
+    try {
         Config cfg(goodPath);
         ok &=
             checkReal(cfg.timePseudoRtol(), Real(1e-6), "pseudo_rtol (parsed)");
         ok &=
             checkReal(cfg.timePseudoAtol(), Real(2e-6), "pseudo_atol (parsed)");
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception &e) {
         std::cout << "  FAIL explicit pseudo tolerances threw: " << e.what()
                   << "\n";
         ok = false;
@@ -299,16 +272,13 @@ pseudo_atol = 2e-6
 t_final = 1.0
 )";
     const std::string unsetPath = writeTempToml(unset);
-    try
-    {
+    try {
         Config cfg(unsetPath);
         ok &= checkReal(cfg.timePseudoRtol(), Real(0),
                         "pseudo_rtol default (auto)");
         ok &= checkReal(cfg.timePseudoAtol(), Real(0),
                         "pseudo_atol default (auto)");
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception &e) {
         std::cout << "  FAIL unset pseudo tolerances threw: " << e.what()
                   << "\n";
         ok = false;
@@ -322,12 +292,9 @@ pseudo_rtol = -1e-6
 )";
     const std::string badPath = writeTempToml(bad);
     bool threw                = false;
-    try
-    {
+    try {
         Config cfg(badPath);
-    }
-    catch (const std::exception &)
-    {
+    } catch (const std::exception &) {
         threw = true;
     }
     ok &= check(threw, "negative pseudo_rtol throws");
@@ -339,8 +306,7 @@ pseudo_rtol = -1e-6
 // 6. FluxType name mapping
 // ---------------------------------------------------------------------------
 
-static bool testFluxTypeNames()
-{
+static bool testFluxTypeNames() {
     std::cout << "Test 6: flux type names\n";
     bool ok = true;
     ok &= check(parseFluxType("llf") == FluxType::Llf, "parse 'llf'");
@@ -355,23 +321,18 @@ static bool testFluxTypeNames()
     ok &= checkStr(fluxTypeName(FluxType::RoeE), "roe-e", "name 'roe-e'");
 
     bool threw = false;
-    try
-    {
+    try {
         (void)parseFluxType("hllc");
-    }
-    catch (const std::invalid_argument &)
-    {
+    } catch (const std::invalid_argument &) {
         threw = true;
     }
     ok &= check(threw, "unknown name throws");
     return ok;
 }
 
-int main()
-{
+int main() {
     bool ok = true;
-    struct Case
-    {
+    struct Case {
         const char *name;
         bool (*fn)();
     };
@@ -383,8 +344,7 @@ int main()
         {"testPseudoToleranceKeys", testPseudoToleranceKeys},
         {"testFluxTypeNames", testFluxTypeNames},
     };
-    for (const auto &c : cases)
-    {
+    for (const auto &c : cases) {
         const bool r = c.fn();
         std::cout << "  [" << (r ? "PASS" : "FAIL") << "] " << c.name << "\n";
         ok &= r;

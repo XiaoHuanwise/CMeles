@@ -24,50 +24,39 @@
 #include "core/DeviceMemoryManager.hpp"
 #include "riemann/Riemann.hpp"
 
-namespace
-{
+namespace {
 const Real tol = Real(1e3) * RealEpsilon;
 
 // ============================================================================
 // Device helpers (mirror test_blas.cpp)
 // ============================================================================
 
-static occa::json tryMakeDevice(const std::string &mode)
-{
-    try
-    {
+static occa::json tryMakeDevice(const std::string &mode) {
+    try {
         occa::json props;
         props["mode"] = mode;
-        if (mode == "OpenCL")
-        {
+        if (mode == "OpenCL") {
             props["platform_id"] = 0;
             props["device_id"]   = 0;
         }
         occa::device dev(props);
-        if (dev.mode() != mode)
-        {
+        if (dev.mode() != mode) {
             dev.free();
             return occa::json();
         }
         dev.free();
         return props;
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception &e) {
         std::cout << "  (skip " << mode << ": " << e.what() << ")\n";
         return occa::json();
     }
 }
 
 static void readResult(DeviceMemoryManager &mem, occa::memory &o_data,
-                       Real *dst, occa::dim_t entries, const Real *hostAlias)
-{
-    if (mem.hasSeparateMemorySpace())
-    {
+                       Real *dst, occa::dim_t entries, const Real *hostAlias) {
+    if (mem.hasSeparateMemorySpace()) {
         mem.copyToHost(o_data, dst, entries);
-    }
-    else
-    {
+    } else {
         std::memcpy(dst, hostAlias,
                     static_cast<std::size_t>(entries) * sizeof(Real));
     }
@@ -75,8 +64,7 @@ static void readResult(DeviceMemoryManager &mem, occa::memory &o_data,
 
 /// Build the llfFlux kernel with the same JIT props as DgField.
 static occa::kernel buildLlfKernel(occa::device &device, int tileSize,
-                                   const std::string &oklDir)
-{
+                                   const std::string &oklDir) {
     occa::json props;
 #ifdef USE_FLOAT_PRECISION
     props["defines/Real"] = "float";
@@ -92,8 +80,7 @@ static occa::kernel buildLlfKernel(occa::device &device, int tileSize,
 // Check helpers
 // ============================================================================
 
-bool checkVec(const Real *value, const Real *ref, int n, const char *what)
-{
+bool checkVec(const Real *value, const Real *ref, int n, const char *what) {
     // Mixed absolute/relative criterion: flux components are differences of
     // O(1) terms, so cancellation-heavy near-zero components carry float
     // rounding noise (~1e-7 absolute) that a pure relative tolerance would
@@ -101,11 +88,9 @@ bool checkVec(const Real *value, const Real *ref, int n, const char *what)
     const Real absFloor =
         std::is_same<Real, float>::value ? Real(1e-6) : Real(0);
     bool ok = true;
-    for (int k = 0; k < n; ++k)
-    {
+    for (int k = 0; k < n; ++k) {
         const Real denom = std::max(std::abs(ref[k]), RealEpsilon);
-        if (std::abs(value[k] - ref[k]) > absFloor + tol * denom)
-        {
+        if (std::abs(value[k] - ref[k]) > absFloor + tol * denom) {
             std::cout << "  FAIL " << what << "[" << k
                       << "]: value=" << value[k] << " ref=" << ref[k] << "\n";
             ok = false;
@@ -119,8 +104,7 @@ bool checkVec(const Real *value, const Real *ref, int n, const char *what)
 // ============================================================================
 
 /// A physically valid random state.
-static void randomState(std::mt19937 &rng, Real gamma, Real *q)
-{
+static void randomState(std::mt19937 &rng, Real gamma, Real *q) {
     std::uniform_real_distribution<Real> dist(Real(0.8), Real(1.2));
     const Real rho = dist(rng);
     const Real u   = dist(rng) * Real(0.3);
@@ -132,8 +116,7 @@ static void randomState(std::mt19937 &rng, Real gamma, Real *q)
     q[3]           = p / (gamma - Real(1)) + Real(0.5) * rho * (u * u + v * v);
 }
 
-static bool testPhysicalFlux()
-{
+static bool testPhysicalFlux() {
     std::cout << "Test 1: physical flux and primitive extraction\n";
     bool ok          = true;
     const Real gamma = Real(1.4);
@@ -168,8 +151,7 @@ static bool testPhysicalFlux()
     return ok;
 }
 
-static bool testLLFProperties()
-{
+static bool testLLFProperties() {
     std::cout << "Test 2: LLF analytic properties\n";
     bool ok          = true;
     const Real gamma = Real(1.4);
@@ -200,13 +182,11 @@ static bool testLLFProperties()
     computePhysicalFlux(qR, gamma, fR);
     computeLLFFlux(qL, qR, gamma, fLR);
     computeLLFFlux(qR, qL, gamma, fRL);
-    for (int k = 0; k < 4; ++k)
-    {
+    for (int k = 0; k < 4; ++k) {
         const Real center = Real(0.5) * (fL[k] + fR[k]);
         // F_LR + F_RL = center*2 (dissipation terms cancel).
         if (std::abs((fLR[k] + fRL[k]) - Real(2) * center) >
-            tol * std::max(std::abs(Real(2) * center), RealEpsilon))
-        {
+            tol * std::max(std::abs(Real(2) * center), RealEpsilon)) {
             std::cout << "  FAIL symmetry component " << k << "\n";
             ok = false;
         }
@@ -229,8 +209,7 @@ static bool testLLFProperties()
 // Rotation / face flux
 // ============================================================================
 
-static bool testFaceFlux()
-{
+static bool testFaceFlux() {
     std::cout << "Test 3: face flux rotation invariance\n";
     bool ok          = true;
     const Real gamma = Real(1.4);
@@ -293,11 +272,9 @@ static bool testFaceFlux()
     // Odd symmetry: F(qL,qR,n) = -F(qR,qL,-n).
     Real flux_minus[4];
     computeFaceFlux(qR, qL, -nx, -ny, gamma, flux_minus);
-    for (int k = 0; k < 4; ++k)
-    {
+    for (int k = 0; k < 4; ++k) {
         if (std::abs(flux_minus[k] + flux_rot_path[k]) >
-            tol * std::max(std::abs(flux_rot_path[k]), RealEpsilon))
-        {
+            tol * std::max(std::abs(flux_rot_path[k]), RealEpsilon)) {
             std::cout << "  FAIL odd symmetry component " << k << "\n";
             ok = false;
         }
@@ -310,10 +287,8 @@ static bool testFaceFlux()
 // ============================================================================
 
 static bool runDeviceTest(const std::string &mode, occa::json props,
-                          int &passed, int &skipped, int &failed)
-{
-    if (props.isNull())
-    {
+                          int &passed, int &skipped, int &failed) {
+    if (props.isNull()) {
         ++skipped;
         return true;
     }
@@ -331,12 +306,9 @@ static bool runDeviceTest(const std::string &mode, occa::json props,
     // a real defect (math functions resolve to built-ins on GPU backends
     // and to <cmath> via the serial/include_std property on CPU backends).
     occa::kernel kernel;
-    try
-    {
+    try {
         kernel = buildLlfKernel(device, 256, std::string(OCCA_OKL_DIR));
-    }
-    catch (const std::exception &e)
-    {
+    } catch (const std::exception &e) {
         std::cout << "  (FAILED " << mode << ": kernel build failed — "
                   << e.what() << ")\n";
         return false;
@@ -346,8 +318,7 @@ static bool runDeviceTest(const std::string &mode, occa::json props,
     std::mt19937 rng(777);
     std::vector<Real> h_qL(4 * nPairs), h_qR(4 * nPairs), h_gamma(1, gamma);
     std::vector<Real> h_ref(4 * nPairs), h_dev(4 * nPairs);
-    for (int i = 0; i < nPairs; ++i)
-    {
+    for (int i = 0; i < nPairs; ++i) {
         randomState(rng, gamma, &h_qL[4 * i]);
         randomState(rng, gamma, &h_qR[4 * i]);
         computeLLFFlux(&h_qL[4 * i], &h_qR[4 * i], gamma, &h_ref[4 * i]);
@@ -366,32 +337,25 @@ static bool runDeviceTest(const std::string &mode, occa::json props,
 
     readResult(mem, o_flux, h_dev.data(), 4 * nPairs, h_dev.data());
 
-    for (int i = 0; i < nPairs; ++i)
-    {
-        if (!checkVec(&h_dev[4 * i], &h_ref[4 * i], 4, "device llf"))
-        {
+    for (int i = 0; i < nPairs; ++i) {
+        if (!checkVec(&h_dev[4 * i], &h_ref[4 * i], 4, "device llf")) {
             ok = false;
-            if (i > 5)
-            {
+            if (i > 5) {
                 break;
             }
         }
     }
 
-    if (ok)
-    {
+    if (ok) {
         ++passed;
-    }
-    else
-    {
+    } else {
         ++failed;
     }
     return ok;
 }
 } // namespace
 
-int main()
-{
+int main() {
     bool ok = true;
     ok &= testPhysicalFlux();
     ok &= testLLFProperties();
