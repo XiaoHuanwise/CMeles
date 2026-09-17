@@ -373,6 +373,22 @@ public:
         return output_directory_;
     }
 
+    // ---- Log ----
+
+    /// @brief Console log output depth ([log] level). A message prints when
+    ///        its depth is <= this level: 0 prints nothing, 1 (default) the
+    ///        physical-step layer (banner, progress lines, aborts, summary),
+    ///        2 the inner-iteration layer (dual-time pseudo statistics);
+    ///        deeper layers may be added, so no upper bound is imposed.
+    int logLevel() const noexcept {
+        return log_level_;
+    }
+
+    /// @brief Number of time steps between two progress lines ($\ge 1$).
+    int logInterval() const noexcept {
+        return log_interval_;
+    }
+
 private:
     /// @brief Reset to built-in defaults (used by the default constructor).
     void setDefaults();
@@ -431,4 +447,7 @@ private:
     OutputStrategy output_strategy_ = OutputStrategy::Direct;
     int output_interval_            = 100;
     std::string output_directory_   = "./results";
+
+    int log_level_    = 1;
+    int log_interval_ = 100;
 };

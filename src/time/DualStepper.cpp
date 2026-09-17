@@ -4,9 +4,10 @@
 #include "DualStepper.hpp"
 
 #include <algorithm>
-#include <iostream>
 #include <stdexcept>
 #include <utility>
+
+#include "common/Log.hpp"
 
 DualStepper::DualStepper(occa::device &device, DeviceMemoryManager &mem,
                          RhsFunction rhs, occa::dim_t nDof,
@@ -46,6 +47,12 @@ DualStepper::DualStepper(occa::device &device, DeviceMemoryManager &mem,
     } else {
         o_uNew_ = mem.wrapOrMalloc(nDof * nStages_);
     }
+}
+
+DualStepper::~DualStepper() {
+    CMES_LOG_DETAIL << "DualStepper[" << name() << "] " << advances_
+                    << " physical steps, total pseudo steps = "
+                    << totalPseudoSteps_;
 }
 
 void DualStepper::pseudoStep(RungeKuttaStepper &ps) {
@@ -160,10 +167,15 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
     }
 
     if (notConverged(fNorm, f0Norm) && cnt >= params_.maxPseudoSteps) {
-        std::cout << "DualStepper[" << name()
-                  << "]: pseudo stepper hit max steps (|F|_inf = " << fNorm
-                  << ")\n";
+        CMES_LOG_NORMAL << "DualStepper[" << name()
+                        << "]: pseudo stepper hit max steps (|F|_inf = "
+                        << fNorm << ")";
     }
+
+    ++advances_;
+    totalPseudoSteps_ += cnt;
+    CMES_LOG_DETAIL << "DualStepper[" << name() << "] step " << advances_
+                    << ": pseudo_iters=" << cnt;
 
     // Publish: u^{n-1} <- u^n (U3R1 only), u^{n+1} <- the marched pseudo
     // state. The pseudo steppers own copies of the state (setState copies

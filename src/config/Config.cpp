@@ -285,6 +285,9 @@ void Config::setDefaults() {
     output_strategy_  = OutputStrategy::Direct;
     output_interval_  = 100;
     output_directory_ = "./results";
+
+    log_level_    = 1;
+    log_interval_ = 100;
 }
 
 Config::Config() {
@@ -435,6 +438,13 @@ Config::Config(const std::string &path) {
         output_directory_ = getString(*tbl, "directory", output_directory_);
     }
 
+    // [log]
+    if (const auto it = root.find("log"); it != root.end()) {
+        const auto &tbl = it->second.as_table();
+        log_level_      = getInt(*tbl, "level", log_level_);
+        log_interval_   = getInt(*tbl, "interval", log_interval_);
+    }
+
     // Validation of the time-marching parameters.
     if (time_final_ <= Real(0)) {
         throw std::invalid_argument("Config: t_final must be > 0");
@@ -464,5 +474,11 @@ Config::Config(const std::string &path) {
     if (output_enable_ && output_interval_ < 1) {
         throw std::invalid_argument(
             "Config: output.interval must be >= 1 when output is enabled");
+    }
+    if (log_level_ < 0) {
+        throw std::invalid_argument("Config: log.level must be >= 0");
+    }
+    if (log_interval_ < 1) {
+        throw std::invalid_argument("Config: log.interval must be >= 1");
     }
 }

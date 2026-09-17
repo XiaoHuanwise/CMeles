@@ -15,6 +15,8 @@
 #endif
 
 #include "ExprInitialCondition.hpp"
+#include "common/Log.hpp"
+#include "common/Timer.hpp"
 #include "io/FieldOutput.hpp"
 #include "time/StepperFactory.hpp"
 
@@ -80,6 +82,8 @@ Real CompressibleFlowSolver::computeDt(Real t) {
 }
 
 int CompressibleFlowSolver::run() {
+    cmeles::Log::setLevel(cfg_.logLevel());
+    logInterval_ = cfg_.logInterval();
     // OCCA's OpenMP backend emits `#pragma omp parallel for` with no
     // num_threads clause, so the runtime ICV governs every kernel; set it
     // before the first parallel region (no-op for the non-OpenMP backends).
@@ -113,56 +117,70 @@ int CompressibleFlowSolver::run() {
         output_->write(0, time_);
     }
 
-    std::cout << "CMeles: method=" << stepper_->name()
-              << " order=" << stepper_->order()
-              << " elems=" << field_->numElements() << " dofs=" << nDof
-              << " T_final=" << cfg_.timeFinal() << "\n";
+    CMES_LOG_NORMAL << "CMeles: method=" << stepper_->name()
+                    << " order=" << stepper_->order()
+                    << " elems=" << field_->numElements() << " dofs=" << nDof
+                    << " T_final=" << cfg_.timeFinal();
+
+    cmeles::Timer loopTimer;
+    cmeles::Timer intervalTimer;
 
     time_  = Real(0);
     steps_ = 0;
+    loopTimer.start();
+    intervalTimer.start();
     while (time_ < cfg_.timeFinal() - Real(1e-12) * cfg_.timeFinal()) {
         const Real dt    = computeDt(time_);
         const Real taken = stepper_->advance(field_->o_u(), time_, dt);
         time_ += taken;
         ++steps_;
 
-        if (steps_ % printInterval_ == 0) {
+        if (steps_ % logInterval_ == 0) {
             occa::memory ou = field_->o_u(), ores = field_->o_res();
             rhs(ou, ores);
+            // nrm2 returns a host value, so this is also the device sync
+            // point that makes the interval wall time trustworthy on the
+            // asynchronous backends.
             const Real resNorm = blas_->nrm2(nDof, ores);
             if (!std::isfinite(resNorm)) {
-                std::cout << "CMeles: residual is not finite at step " << steps_
-                          << ", t = " << time_ << " — aborting\n";
+                CMES_LOG_NORMAL << "CMeles: residual is not finite at step "
+                                << steps_ << ", t = " << time_ << " — aborting";
                 return 1;
             }
-            std::cout << "  step " << steps_ << ": t = " << time_
-                      << ", dt = " << taken << ", |res|_2 = " << resNorm
-                      << "\n";
+            const double wall = intervalTimer.elapsed();
+            CMES_LOG_NORMAL << "  step " << steps_ << ": t = " << time_
+                            << ", dt = " << taken << ", |res|_2 = " << resNorm
+                            << ", wall = " << wall << " s ("
+                            << wall / logInterval_ * 1e3 << " ms/step)";
+            intervalTimer.start();
         }
         if (taken <= Real(0)) {
-            std::cout << "CMeles: zero time step at t = " << time_
-                      << " — aborting\n";
+            CMES_LOG_NORMAL << "CMeles: zero time step at t = " << time_
+                            << " — aborting";
             return 1;
         }
         if (output_ && steps_ % outputInterval_ == 0) {
             output_->write(steps_, time_);
         }
     }
+    const double loopWall = loopTimer.elapsed();
 
     occa::memory ou = field_->o_u(), ores = field_->o_res();
     rhs(ou, ores);
     const Real resNorm = blas_->nrm2(nDof, ores);
     if (!std::isfinite(resNorm)) {
-        std::cout << "CMeles: final residual is not finite after " << steps_
-                  << " steps — aborting\n";
+        CMES_LOG_NORMAL << "CMeles: final residual is not finite after "
+                        << steps_ << " steps — aborting";
         return 1;
     }
     // Final state (skipped when the last interval output already covers it).
     if (output_ && steps_ % outputInterval_ != 0) {
         output_->write(steps_, time_);
     }
-    std::cout << "CMeles: finished t = " << time_ << " in " << steps_
-              << " steps, |res|_2 = " << resNorm << "\n";
+    CMES_LOG_NORMAL << "CMeles: finished t = " << time_ << " in " << steps_
+                    << " steps, |res|_2 = " << resNorm
+                    << ", loop wall time = " << loopWall << " s ("
+                    << loopWall / steps_ * 1e3 << " ms/step)";
     device_.finish();
     return 0;
 }

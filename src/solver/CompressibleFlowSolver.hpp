@@ -108,6 +108,6 @@ private:
 
     Real time_          = Real(0);
     int steps_          = 0;
-    int printInterval_  = 100;
+    int logInterval_    = 100;
     int outputInterval_ = 100;
 };

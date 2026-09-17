@@ -57,6 +57,10 @@ public:
     ///        convergence, publish $u^{n+1}$. Returns \p dt.
     Real advance(occa::memory o_u, Real t, Real dt) override;
 
+    /// @brief Prints the accumulated pseudo-iteration statistics of the
+    ///        whole run at the detail log depth.
+    ~DualStepper() override;
+
     /// @brief Order of the physical scheme (Backward Euler: 1, DITR: 2).
     int order() const override {
         return nStages_ == 1 ? 1 : 2;
@@ -102,4 +106,7 @@ private:
     occa::memory o_uPrev_; ///< $u^{n-1}$ (U3R1 only); published every step.
 
     Real dtPrev_ = Real(0); ///< Previous physical step (for theta).
+
+    long advances_         = 0; ///< Physical steps taken (run statistics).
+    long totalPseudoSteps_ = 0; ///< Sum of pseudo iterations (run statistics).
 };

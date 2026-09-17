@@ -140,6 +140,13 @@ enable = false            # 总开关：false（默认）时不产生任何文�
 strategy = "direct"       # 输出策略："direct" (策略 A) | "checkpoint" (策略 B)
 interval = 100            # 每隔 N 个时间步输出一次（enable 时须 >= 1）
 directory = "./results"   # 输出目录（不存在则自动创建）
+
+[log]
+level = 1                 # 日志输出深度：消息深度 <= level 时才输出
+                          # 0 = 完全静默；1（默认）= 物理步层（banner、
+                          # 进度行、abort、结束摘要）；2 = 内迭代层（双时间
+                          # 步伪迭代统计）；更深层级后续按需引入
+interval = 100            # 进度行打印间隔（时间步数，>= 1）
 ```
 
 > 注：`format` 与 `variables` 键未实现（当前仅 HDF5 一种格式、总是全量输出 7 个物理量），预留为未来扩展。`enable = true` 时输出时机为：初始场（step 0）+ 每 `interval` 步 + 终态（与最后一次间隔输出重合时去重）。
@@ -265,6 +272,8 @@ Config load_config(const std::string& path) {
 | CFL 数 | `CFL > 0` | `solver.CFL 必须为正数` |
 | 比热比 | `gamma > 1.0` | `physics.gamma 必须 > 1` |
 | 输出间隔 | `interval >= 0` | `output.interval 不能为负` |
+| 日志等级 | `level >= 0`（无上限，更深值合法） | `Config: log.level must be >= 0` |
+| 日志间隔 | `interval >= 1` | `Config: log.interval must be >= 1` |
 | 时间步长 | `dt > 0`（显式方法时） | `定步长显式方法的 dt 必须为正数` |
 | Riemann 求解器 | 必须在支持列表中 | `未知的 riemann_solver，支持: HLLC, Roe, ...` |
 

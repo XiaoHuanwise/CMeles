@@ -106,3 +106,14 @@ strategy = "direct"       # "direct" (strategy A: quadrature-point SoA files,
 interval = 100            # Number of time steps between two outputs (>= 1
                           # when enabled).
 directory = "./results"   # Output directory, created if missing.
+
+# ---- Console logging ----
+[log]
+level = 1                 # Log output depth: a message prints when its depth
+                          # is <= level. 0 prints nothing, 1 (default) the
+                          # physical-step layer (banner, progress lines,
+                          # aborts, summary), 2 the inner-iteration layer
+                          # (dual-time per-step pseudo-iteration statistics);
+                          # deeper layers may be added, so no upper bound.
+interval = 100            # Number of time steps between two progress lines
+                          # (>= 1).

@@ -82,6 +82,8 @@ static bool testDefaults() {
     ok &= checkInt(cfg.occaDevice(), 0, "occaDevice default");
     ok &= check(cfg.fluxType() == FluxType::Llf, "fluxType == Llf");
     ok &= checkInt(cfg.fluxTypeInt(), 0, "fluxTypeInt");
+    ok &= checkInt(cfg.logLevel(), 1, "logLevel default");
+    ok &= checkInt(cfg.logInterval(), 100, "logInterval default");
     return ok;
 }
 
@@ -124,6 +126,10 @@ mode = "OpenMP"
 threads = 8
 platform = 1
 device = 2
+
+[log]
+level = 2
+interval = 25
 )";
     const std::string path    = writeTempToml(content);
     if (path.empty()) {
@@ -155,6 +161,8 @@ device = 2
     ok &= checkInt(cfg.occaThreads(), 8, "occaThreads (parsed)");
     ok &= checkInt(cfg.occaPlatform(), 1, "occaPlatform (parsed)");
     ok &= checkInt(cfg.occaDevice(), 2, "occaDevice (parsed)");
+    ok &= checkInt(cfg.logLevel(), 2, "logLevel (parsed)");
+    ok &= checkInt(cfg.logInterval(), 25, "logInterval (parsed)");
 
     std::remove(path.c_str());
     return ok;
@@ -330,6 +338,74 @@ static bool testFluxTypeNames() {
     return ok;
 }
 
+// ---------------------------------------------------------------------------
+// 7. [log] section validation
+// ---------------------------------------------------------------------------
+
+static bool testLogValidation() {
+    std::cout << "Test 7: log section validation\n";
+    bool ok = true;
+
+    // level = 0 (silent) and large levels (deeper than any current emitter)
+    // are both valid; interval = 0 must throw.
+    const std::string silent     = R"(
+[log]
+level = 0
+)";
+    const std::string silentPath = writeTempToml(silent);
+    try {
+        Config cfg(silentPath);
+        ok &= checkInt(cfg.logLevel(), 0, "level = 0 accepted");
+    } catch (const std::exception &e) {
+        std::cout << "  FAIL level = 0 threw: " << e.what() << "\n";
+        ok = false;
+    }
+    std::remove(silentPath.c_str());
+
+    const std::string deep     = R"(
+[log]
+level = 5
+)";
+    const std::string deepPath = writeTempToml(deep);
+    try {
+        Config cfg(deepPath);
+        ok &= checkInt(cfg.logLevel(), 5, "level = 5 accepted (no cap)");
+    } catch (const std::exception &e) {
+        std::cout << "  FAIL level = 5 threw: " << e.what() << "\n";
+        ok = false;
+    }
+    std::remove(deepPath.c_str());
+
+    const std::string badLevel     = R"(
+[log]
+level = -1
+)";
+    const std::string badLevelPath = writeTempToml(badLevel);
+    bool threw                     = false;
+    try {
+        Config cfg(badLevelPath);
+    } catch (const std::exception &) {
+        threw = true;
+    }
+    ok &= check(threw, "negative level throws");
+    std::remove(badLevelPath.c_str());
+
+    const std::string badInterval     = R"(
+[log]
+interval = 0
+)";
+    const std::string badIntervalPath = writeTempToml(badInterval);
+    threw                             = false;
+    try {
+        Config cfg(badIntervalPath);
+    } catch (const std::exception &) {
+        threw = true;
+    }
+    ok &= check(threw, "zero interval throws");
+    std::remove(badIntervalPath.c_str());
+    return ok;
+}
+
 int main() {
     bool ok = true;
     struct Case {
@@ -343,6 +419,7 @@ int main() {
         {"testOcaThreadsValidation", testOcaThreadsValidation},
         {"testPseudoToleranceKeys", testPseudoToleranceKeys},
         {"testFluxTypeNames", testFluxTypeNames},
+        {"testLogValidation", testLogValidation},
     };
     for (const auto &c : cases) {
         const bool r = c.fn();
