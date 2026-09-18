@@ -13,8 +13,11 @@
 /// dt still updated by the PI factor) are preserved in stepPseudo() for
 /// the dual time-stepping driver.
 ///
-/// Controller constants (prototype / docs): SAFETY = 0.9, MIN_FACTOR = 0.2,
-/// MAX_FACTOR = 5, MAX_GROWTH = 10, ALPHA = 0.7, BETA = 0.4.
+/// Controller constants (prototype / docs): SAFETY = 0.9, MIN_FACTOR = 0.1,
+/// MAX_FACTOR = 10, MAX_GROWTH = 100, ALPHA = 0.7, BETA = 0.4. SAFETY /
+/// MIN_FACTOR / MAX_FACTOR / MAX_GROWTH live in Params and are configurable
+/// through the [time_marching] keys safety / min_factor / max_factor /
+/// max_growth; ALPHA and BETA remain compile-time constants.
 
 #pragma once
 
@@ -23,12 +26,20 @@
 
 class RungeKuttaStepper : public StepperBase {
 public:
-    /// @brief Tolerances and step bounds.
+    /// @brief Tolerances, step bounds and PI-controller knobs.
     struct Params {
         Real rtol    = Real(1e-6);
         Real atol    = Real(1e-6);
         Real minStep = Real(10) * RealEpsilon;
         Real maxStep = std::numeric_limits<Real>::infinity();
+
+        // PI-controller knobs (formerly class constants), configurable
+        // through [time_marching] safety / min_factor / max_factor /
+        // max_growth (see updateDt).
+        Real safety    = Real(0.9);
+        Real minFactor = Real(0.1);
+        Real maxFactor = Real(10);
+        Real maxGrowth = Real(100);
     };
 
     RungeKuttaStepper(occa::device &device, DeviceMemoryManager &mem,
@@ -95,13 +106,10 @@ public:
         return errorNormPrev_;
     }
 
-    // PI controller constants (prototype).
-    static constexpr Real kSafety    = Real(0.9);
-    static constexpr Real kMinFactor = Real(0.2);
-    static constexpr Real kMaxFactor = Real(5);
-    static constexpr Real kMaxGrowth = Real(10);
-    static constexpr Real kAlpha     = Real(0.7);
-    static constexpr Real kBeta      = Real(0.4);
+    // PI controller exponents (compile-time; the gain/clamp knobs live in
+    // Params so they can be configured per run).
+    static constexpr Real kAlpha = Real(0.7);
+    static constexpr Real kBeta  = Real(0.4);
 
 private:
     /// @brief One Butcher step: stages from (u, f), writes u_new and

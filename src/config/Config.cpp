@@ -267,6 +267,10 @@ void Config::setDefaults() {
     time_final_            = Real(1);
     time_rtol_             = Real(1e-6);
     time_atol_             = Real(1e-6);
+    time_safety_           = Real(0.9);
+    time_min_factor_       = Real(0.1);
+    time_max_factor_       = Real(10);
+    time_max_growth_       = Real(100);
     time_max_pseudo_steps_ = 100;
     time_pseudo_method_    = TimeMethod::SspRk332;
     time_pseudo_dt_        = Real(0);
@@ -373,11 +377,15 @@ Config::Config(const std::string &path) {
                 mIt->second.value_or(std::string("ssprk3"));
             time_method_ = parseTimeMethod(name);
         }
-        time_cfl_   = getReal(*tbl, "cfl", time_cfl_);
-        time_dt_    = getReal(*tbl, "dt", time_dt_);
-        time_final_ = getReal(*tbl, "t_final", time_final_);
-        time_rtol_  = getReal(*tbl, "rtol", time_rtol_);
-        time_atol_  = getReal(*tbl, "atol", time_atol_);
+        time_cfl_        = getReal(*tbl, "cfl", time_cfl_);
+        time_dt_         = getReal(*tbl, "dt", time_dt_);
+        time_final_      = getReal(*tbl, "t_final", time_final_);
+        time_rtol_       = getReal(*tbl, "rtol", time_rtol_);
+        time_atol_       = getReal(*tbl, "atol", time_atol_);
+        time_safety_     = getReal(*tbl, "safety", time_safety_);
+        time_min_factor_ = getReal(*tbl, "min_factor", time_min_factor_);
+        time_max_factor_ = getReal(*tbl, "max_factor", time_max_factor_);
+        time_max_growth_ = getReal(*tbl, "max_growth", time_max_growth_);
         time_max_pseudo_steps_ =
             getInt(*tbl, "max_pseudo_steps", time_max_pseudo_steps_);
         if (const auto pIt = tbl->find("pseudo_method"); pIt != tbl->end()) {
@@ -457,6 +465,16 @@ Config::Config(const std::string &path) {
     }
     if (time_rtol_ <= Real(0) || time_atol_ <= Real(0)) {
         throw std::invalid_argument("Config: rtol and atol must be > 0");
+    }
+    if (time_safety_ <= Real(0)) {
+        throw std::invalid_argument("Config: safety must be > 0");
+    }
+    if (time_min_factor_ <= Real(0) || time_max_factor_ < time_min_factor_) {
+        throw std::invalid_argument(
+            "Config: min_factor must be > 0 and max_factor >= min_factor");
+    }
+    if (time_max_growth_ <= Real(0)) {
+        throw std::invalid_argument("Config: max_growth must be > 0");
     }
     if (time_max_pseudo_steps_ <= 0) {
         throw std::invalid_argument("Config: max_pseudo_steps must be > 0");

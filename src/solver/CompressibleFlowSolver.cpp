@@ -7,8 +7,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iostream>
 #include <memory>
+#include <stdexcept>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -135,6 +135,19 @@ int CompressibleFlowSolver::run() {
         time_ += taken;
         ++steps_;
 
+        // Per-step NaN sweep of the solution: a NaN residual inside any
+        // stage contaminates the updated state immediately, so one sweep
+        // per physical step (instead of per RHS evaluation) catches the
+        // blow-up without serialising every stage.
+        const Real nNaN = field_->countSolutionNaN();
+        if (nNaN > Real(0)) {
+            CMES_LOG_NORMAL << "CMeles: " << nNaN
+                            << " NaN entries in the solution at step " << steps_
+                            << ", t = " << time_ << " — aborting";
+            throw std::runtime_error(
+                "CompressibleFlowSolver::run: NaN detected in the solution");
+        }
+
         if (steps_ % logInterval_ == 0) {
             occa::memory ou = field_->o_u(), ores = field_->o_res();
             rhs(ou, ores);
@@ -151,7 +164,7 @@ int CompressibleFlowSolver::run() {
             CMES_LOG_NORMAL << "  step " << steps_ << ": t = " << time_
                             << ", dt = " << taken << ", |res|_2 = " << resNorm
                             << ", wall = " << wall << " s ("
-                            << wall / logInterval_ * 1e3 << " ms/step)";
+                            << wall / logInterval_ << " s/step)";
             intervalTimer.start();
         }
         if (taken <= Real(0)) {
@@ -180,7 +193,7 @@ int CompressibleFlowSolver::run() {
     CMES_LOG_NORMAL << "CMeles: finished t = " << time_ << " in " << steps_
                     << " steps, |res|_2 = " << resNorm
                     << ", loop wall time = " << loopWall << " s ("
-                    << loopWall / steps_ * 1e3 << " ms/step)";
+                    << loopWall / steps_ << " s/step)";
     device_.finish();
     return 0;
 }

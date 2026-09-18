@@ -13,6 +13,7 @@
 #include "basis/BasisFunctions1D.hpp"
 #include "basis/BasisFunctions2D.hpp"
 #include "common/KernelProps.hpp"
+#include "math/MathOps.hpp"
 #include "mesh/Mesh.hpp"
 #include "mesh/MeshGeometry.hpp"
 #include "mesh/StructuredMeshGenerator.hpp"
@@ -24,6 +25,9 @@
 DgField::DgField(const Config &cfg, occa::device &device,
                  DeviceMemoryManager &mem, const std::string &oklDir)
     : cfg_(cfg), device_(device), mem_(mem), oklDir_(oklDir) {
+    // NaN-diagnostics kernels (countSolutionNaN); shares the device, the
+    // memory manager and the OKL directory of this field module.
+    mathOps_ = std::make_unique<MathOps>(device_, mem_, oklDir_);
 }
 
 DgField::~DgField() = default;
@@ -69,9 +73,9 @@ void DgField::setup() {
     if (N_modes_ > kMaxModes) {
         throw std::invalid_argument(
             "DgField: polynomial order N = " +
-            std::to_string(cfg_.polynomialOrder()) + " gives N_modes = " +
-            std::to_string(N_modes_) + " > kMaxModes = " +
-            std::to_string(kMaxModes) +
+            std::to_string(cfg_.polynomialOrder()) +
+            " gives N_modes = " + std::to_string(N_modes_) +
+            " > kMaxModes = " + std::to_string(kMaxModes) +
             " (raise the caps in src/common/Constants.hpp)");
     }
 
@@ -437,4 +441,10 @@ Real DgField::estimateDt(occa::memory o_u, Real cfl) {
         dt = std::min(dt, d);
     }
     return dt;
+}
+
+Real DgField::countSolutionNaN() {
+    const occa::dim_t nEvm =
+        static_cast<occa::dim_t>(geo_->numElements()) * N_vars_ * N_modes_;
+    return mathOps_->countNaN(nEvm, o_u_);
 }

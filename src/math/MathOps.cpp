@@ -3,6 +3,8 @@
 
 #include "math/MathOps.hpp"
 
+#include <vector>
+
 #include "common/KernelProps.hpp"
 
 // ============================================================================
@@ -35,6 +37,7 @@ occa::kernel MathOps::buildKernel(const std::string &file,
 void MathOps::setTileSize(int tileSize) {
     tileSize_ = tileSize;
     vmul_     = occa::kernel();
+    countNaN_ = occa::kernel();
 }
 
 // ============================================================================
@@ -46,4 +49,41 @@ void MathOps::vmul(occa::dim_t n, occa::memory &x, occa::memory &y,
     if (!vmul_.isInitialized())
         vmul_ = buildKernel("elemwise.okl", "vmul");
     vmul_(static_cast<int>(n), x, y, z);
+}
+
+// ============================================================================
+// Diagnostics
+// ============================================================================
+
+void MathOps::ensureNanScratch(occa::dim_t groups) {
+    if (nanPartialCap_ >= groups)
+        return;
+
+    // Allocate directly via device (not wrapOrMalloc) — scratch is
+    // device-resident and fully overwritten by the kernel, so no zero-fill
+    // is needed (same rationale as Blas::ensureScratch).
+    o_nanPartial_  = device_.malloc<Real>(groups);
+    nanPartialCap_ = groups;
+}
+
+Real MathOps::countNaN(occa::dim_t n, occa::memory &x) {
+    if (n == 0)
+        return Real(0);
+
+    if (!countNaN_.isInitialized())
+        countNaN_ = buildKernel("nan_check.okl", "countNaN");
+
+    const occa::dim_t groups = (n + tileSize_ - 1) / tileSize_;
+    ensureNanScratch(groups);
+    countNaN_(static_cast<int>(groups), static_cast<int>(n), x, o_nanPartial_);
+
+    // Final combine on the host: the partial count is small relative to the
+    // scanned field and this is already the synchronisation point.
+    std::vector<Real> partials(static_cast<std::size_t>(groups));
+    o_nanPartial_.copyTo(partials.data());
+    Real count = Real(0);
+    for (const Real p : partials) {
+        count += p;
+    }
+    return count;
 }

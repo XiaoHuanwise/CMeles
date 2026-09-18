@@ -134,6 +134,13 @@ static bool testConstantSolution() {
     field.computeRHS(field.o_u(), field.o_res());
     device.finish();
 
+    // Wiring sanity for the per-step NaN sweep: the free-stream solution
+    // must report zero NaN entries.
+    if (field.countSolutionNaN() != Real(0)) {
+        std::cout << "  FAIL countSolutionNaN on free stream\n";
+        return false;
+    }
+
     const int nEvm = field.numElements() * field.numVars() * field.numModes();
     std::vector<Real> res(nEvm);
     readResult(mem, field.o_res(), res.data(), nEvm, res.data());

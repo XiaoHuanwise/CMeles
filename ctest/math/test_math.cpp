@@ -9,6 +9,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -86,6 +87,34 @@ static bool runMathTests(const std::string &mode, occa::json &props) {
         if ((h_r - h_ref).template lpNorm<Eigen::Infinity>() >
             tol * h_ref.template lpNorm<Eigen::Infinity>()) {
             std::cerr << "  FAIL vmul n=" << n << '\n';
+            allPass = false;
+        }
+    }
+
+    // ========================================================================
+    // countNaN: NaN-entry counting (diagnostics)
+    // ========================================================================
+    std::cout << "  --- countNaN ---" << std::endl;
+
+    const Real nanValue = std::numeric_limits<Real>::quiet_NaN();
+    for (int n : sizes) {
+        // Clean data: no NaN anywhere.
+        VectorXr h_clean     = VectorXr::Random(n);
+        occa::memory o_clean = mem.wrapOrMalloc(h_clean.data(), n);
+        if (math.countNaN(n, o_clean) != Real(0)) {
+            std::cerr << "  FAIL countNaN clean n=" << n << '\n';
+            allPass = false;
+        }
+
+        // NaN at the last entry: also exercises the tail of the final
+        // group for sizes that are not a multiple of TILE_SIZE. The NaN
+        // is injected into the host data before wrapping so separate-
+        // memory backends upload it.
+        VectorXr h_nan     = VectorXr::Random(n);
+        h_nan[n - 1]       = nanValue;
+        occa::memory o_nan = mem.wrapOrMalloc(h_nan.data(), n);
+        if (math.countNaN(n, o_nan) != Real(1)) {
+            std::cerr << "  FAIL countNaN NaN-injected n=" << n << '\n';
             allPass = false;
         }
     }

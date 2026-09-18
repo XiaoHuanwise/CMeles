@@ -34,6 +34,12 @@ DualStepper::Params dualParams(const Config &cfg) {
     params.rkParams.atol = cfg.timePseudoAtol() > Real(0)
                                ? cfg.timePseudoAtol()
                                : params.rkParams.rtol;
+    // The PI-controller knobs are shared with the explicit adaptive RK
+    // arm: the same [time_marching] keys govern both controllers.
+    params.rkParams.safety    = cfg.timeSafety();
+    params.rkParams.minFactor = cfg.timeMinFactor();
+    params.rkParams.maxFactor = cfg.timeMaxFactor();
+    params.rkParams.maxGrowth = cfg.timeMaxGrowth();
     return params;
 }
 
@@ -84,8 +90,12 @@ StepperFactory makeStepperFactory(const Config &cfg) {
                     "makeStepperFactory: method is not an embedded RK pair");
             }
             RungeKuttaStepper::Params params;
-            params.rtol = cfg.timeRtol();
-            params.atol = cfg.timeAtol();
+            params.rtol      = cfg.timeRtol();
+            params.atol      = cfg.timeAtol();
+            params.safety    = cfg.timeSafety();
+            params.minFactor = cfg.timeMinFactor();
+            params.maxFactor = cfg.timeMaxFactor();
+            params.maxGrowth = cfg.timeMaxGrowth();
 
             const ButcherTable &tab = *table;
             return [&tab, params](occa::device &device,

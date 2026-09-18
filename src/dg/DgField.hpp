@@ -43,6 +43,7 @@ class BasisFunctions1D;
 class BasisFunctions2D;
 class Mesh;
 class MeshGeometry;
+class MathOps;
 
 /// @brief Discontinuous Galerkin field for the 2D inviscid Euler equations.
 class DgField {
@@ -155,6 +156,15 @@ public:
     /// @return The minimum element time step.
     Real estimateDt(occa::memory o_u, Real cfl);
 
+    /// @brief Count NaN entries in the current solution state (o_u()).
+    ///
+    /// Synchronises the device (full-field sweep over
+    /// $N_e \cdot N_v \cdot N_m$ modal coefficients). Intended to be
+    /// evaluated once per physical time step by the solver controller —
+    /// a per-RHS-evaluation check would serialise every stage.
+    /// @return The number of NaN entries in the solution.
+    Real countSolutionNaN();
+
     // ---- Viscous path (reserved skeleton) ----
 
     /// @brief Reserved interface skeleton for the viscous gradient
@@ -211,6 +221,7 @@ private:
     std::unique_ptr<BasisFunctions2D> basis2D_;
     std::unique_ptr<Mesh> mesh_;
     std::unique_ptr<MeshGeometry> geo_;
+    std::unique_ptr<MathOps> mathOps_;
 
     // Persistent host copies of data wrapped on the device. On unified
     // memory backends wrapMemory aliases these buffers (zero-copy), so they

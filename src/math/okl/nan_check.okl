@@ -1,0 +1,32 @@
+// nan_check.okl — NaN detection (counting reduction, no @shared)
+// countNaN: per-group count of NaN entries, one partial per group; the
+// host sums the partials afterwards.
+//
+// Placement: src/math/okl/ — supplementary math kernels beyond standard BLAS.
+// Conventions follow docs/tech_docs/occa.md.
+//
+// Group-parallel with a serial scan inside each group (same shape as
+// estimate_dt.okl: one output per tile iteration, serial work inside):
+// reduce.okl is the only sanctioned @shared file, so this kernel reduces
+// through global memory instead of shared-memory tree reduction.
+//
+// NaN is detected with the self-inequality test x != x — the portable idiom
+// across the OpenCL/CUDA/CPU backends (isnan is not uniformly available in
+// device code, and no math built-in is needed at all here). Constants use
+// C-style casts (Real)0 (not the C++ functional cast Real(0)), which OpenCL
+// C rejects.
+
+@kernel void countNaN(const int nGroups, const int n, const Real *x,
+                      Real *partial) {
+    for (int group = 0; group < nGroups; ++group;
+         @tile(TILE_SIZE, @outer, @inner)) {
+        Real cnt = (Real)0;
+        for (int k = 0; k < TILE_SIZE; ++k) {
+            const int i = group * TILE_SIZE + k;
+            if (i < n && x[i] != x[i]) {
+                cnt += (Real)1;
+            }
+        }
+        partial[group] = cnt;
+    }
+}

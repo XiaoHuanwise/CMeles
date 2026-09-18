@@ -406,6 +406,89 @@ interval = 0
     return ok;
 }
 
+// ---------------------------------------------------------------------------
+// 8. [time_marching] PI-controller keys (safety / min_factor / max_factor /
+//    max_growth)
+// ---------------------------------------------------------------------------
+
+static bool testControllerKeys() {
+    std::cout << "Test 8: PI-controller keys\n";
+    bool ok = true;
+
+    // Unset keys keep the defaults; explicit values parse through; invalid
+    // combinations must throw.
+    const std::string unset     = R"(
+[time_marching]
+t_final = 1.0
+)";
+    const std::string unsetPath = writeTempToml(unset);
+    try {
+        Config cfg(unsetPath);
+        ok &= checkReal(cfg.timeSafety(), Real(0.9), "safety default");
+        ok &= checkReal(cfg.timeMinFactor(), Real(0.1), "min_factor default");
+        ok &= checkReal(cfg.timeMaxFactor(), Real(10), "max_factor default");
+        ok &= checkReal(cfg.timeMaxGrowth(), Real(100), "max_growth default");
+    } catch (const std::exception &e) {
+        std::cout << "  FAIL unset controller keys threw: " << e.what() << "\n";
+        ok = false;
+    }
+    std::remove(unsetPath.c_str());
+
+    const std::string good     = R"(
+[time_marching]
+t_final = 1.0
+safety = 0.8
+min_factor = 0.05
+max_factor = 50
+max_growth = 20
+)";
+    const std::string goodPath = writeTempToml(good);
+    try {
+        Config cfg(goodPath);
+        ok &= checkReal(cfg.timeSafety(), Real(0.8), "safety (parsed)");
+        ok &= checkReal(cfg.timeMinFactor(), Real(0.05), "min_factor (parsed)");
+        ok &= checkReal(cfg.timeMaxFactor(), Real(50), "max_factor (parsed)");
+        ok &= checkReal(cfg.timeMaxGrowth(), Real(20), "max_growth (parsed)");
+    } catch (const std::exception &e) {
+        std::cout << "  FAIL explicit controller keys threw: " << e.what()
+                  << "\n";
+        ok = false;
+    }
+    std::remove(goodPath.c_str());
+
+    const std::string badZero     = R"(
+[time_marching]
+t_final = 1.0
+min_factor = 0.0
+)";
+    const std::string badZeroPath = writeTempToml(badZero);
+    bool threw                    = false;
+    try {
+        Config cfg(badZeroPath);
+    } catch (const std::exception &) {
+        threw = true;
+    }
+    ok &= check(threw, "zero min_factor throws");
+    std::remove(badZeroPath.c_str());
+
+    const std::string badCross     = R"(
+[time_marching]
+t_final = 1.0
+min_factor = 2.0
+max_factor = 1.0
+)";
+    const std::string badCrossPath = writeTempToml(badCross);
+    threw                          = false;
+    try {
+        Config cfg(badCrossPath);
+    } catch (const std::exception &) {
+        threw = true;
+    }
+    ok &= check(threw, "max_factor < min_factor throws");
+    std::remove(badCrossPath.c_str());
+    return ok;
+}
+
 int main() {
     bool ok = true;
     struct Case {
@@ -420,6 +503,7 @@ int main() {
         {"testPseudoToleranceKeys", testPseudoToleranceKeys},
         {"testFluxTypeNames", testFluxTypeNames},
         {"testLogValidation", testLogValidation},
+        {"testControllerKeys", testControllerKeys},
     };
     for (const auto &c : cases) {
         const bool r = c.fn();

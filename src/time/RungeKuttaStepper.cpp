@@ -93,19 +93,20 @@ Real RungeKuttaStepper::computeErrorNorm(Real rmsU, Real rmsUnew) {
 }
 
 void RungeKuttaStepper::updateDt(Real sigma, bool accepted, bool wasRejected) {
-    Real factor = kSafety * std::pow(sigma, -kAlpha * errorExponent_) *
+    Real factor = params_.safety * std::pow(sigma, -kAlpha * errorExponent_) *
                   std::pow(errorNormPrev_, kBeta * errorExponent_);
     if (accepted) {
-        factor = (sigma == Real(0)) ? kMaxFactor : std::min(kMaxFactor, factor);
+        factor = (sigma == Real(0)) ? params_.maxFactor
+                                    : std::min(params_.maxFactor, factor);
         if (wasRejected) {
             factor = std::min(factor, Real(1));
         }
     } else {
-        factor = std::max(kMinFactor, factor);
+        factor = std::max(params_.minFactor, factor);
     }
 
     dt_ *= factor;
-    dt_ = std::min(dt_, kMaxGrowth * dtInit_);
+    dt_ = std::min(dt_, params_.maxGrowth * dtInit_);
     dt_ = std::max(dt_, params_.minStep);
     dt_ = std::min(dt_, maxStep_);
 }

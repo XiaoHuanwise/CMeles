@@ -243,13 +243,16 @@ $$
 | 参数                | 含义                              | 典型值    |
 | :------------------ | :-------------------------------- | :-------: |
 | $\alpha_{\text{safe}}$ | 安全因子（SAFETY）             |   0.9     |
-| $\alpha_{\min}$     | 最小步长缩放因子（MIN_FACTOR）    |   0.2     |
-| $\alpha_{\max}$     | 最大步长缩放因子（MAX_FACTOR）    |    5      |
+| $\alpha_{\min}$     | 最小步长缩放因子（MIN_FACTOR）    |   0.1     |
+| $\alpha_{\max}$     | 最大步长缩放因子（MAX_FACTOR）    |   10      |
+| $\gamma_{\max}$     | 步长增长上限（MAX_GROWTH，相对初始步长的倍数） |   100   |
 | $\alpha$            | PI 控制器比例系数（ALPHA）        |   0.7     |
 | $\beta$             | PI 控制器积分系数（BETA）         |   0.4     |
 | $q$                 | 推进阶数（order）                 | 视格式而定 |
 | $\sigma_{lkj}$      | 当前步归一化误差                  |     —     |
 | $(\sigma_{\text{prev}})_{lkj}$ | 上一步归一化误差         |     —     |
+
+> **备注**：SAFETY / MIN_FACTOR / MAX_FACTOR / MAX_GROWTH 四个控制器常数可在配置文件 `[time_marching]` 中通过 `safety` / `min_factor` / `max_factor` / `max_growth` 键自定义（同一组键同时作用于显式自适应 RK 与双时间步伪时间控制器）；ALPHA 与 BETA 仍为编译期常数（`RungeKuttaStepper::kAlpha` / `kBeta`）。
 
 > **备注**：$\beta$ 项的加入使得 PI 控制器具备了积分（memory）特性，相比纯 P 控制器能有效抑制步长振荡。当 $\beta = 0$ 时退化为纯比例控制器。
 
@@ -292,7 +295,7 @@ $$
     用相同公式计算缩小因子，重新尝试
 ```
 
-步长更新后施加增长上限（MAX_GROWTH = 10× 初始步长）和上下界约束（min_step, max_step）。
+步长更新后施加增长上限（MAX_GROWTH = 100× 初始步长）和上下界约束（min_step, max_step）。
 
 > **备注**：伪时间步长以逐自由度（per-degree-of-freedom）方式存储和张量运算，与 DG 的分块并行策略完全兼容。
 

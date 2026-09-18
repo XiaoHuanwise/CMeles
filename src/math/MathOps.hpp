@@ -30,8 +30,21 @@ public:
     /// z = x .* y  (Hadamard / element-wise product)
     void vmul(occa::dim_t n, occa::memory &x, occa::memory &y, occa::memory &z);
 
+    // ---- Diagnostics -------------------------------------------------------
+
+    /// @brief Count NaN entries in \p x (self-inequality test $x \neq x$).
+    ///
+    /// Synchronises the device: the kernel writes one NaN count per tile
+    /// group and the host sums the partials. Intended for once-per-step
+    /// sanity checks, not per-RHS-evaluation hot paths.
+    /// @return The number of NaN entries (0 when \p n is 0).
+    Real countNaN(occa::dim_t n, occa::memory &x);
+
 private:
     occa::kernel buildKernel(const std::string &file, const std::string &name);
+
+    /// Grow the NaN-partial scratch to at least \p groups entries (lazy).
+    void ensureNanScratch(occa::dim_t groups);
 
     occa::device &device_;
     DeviceMemoryManager &mem_;
@@ -39,4 +52,10 @@ private:
     int tileSize_ = cmeles::DefaultTileSize;
 
     occa::kernel vmul_;
+    occa::kernel countNaN_;
+
+    // NaN-count partials (device-resident, grown on demand; fully
+    // overwritten by each launch, so no zero-fill is needed).
+    occa::memory o_nanPartial_;
+    occa::dim_t nanPartialCap_ = 0;
 };

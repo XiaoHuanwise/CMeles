@@ -274,6 +274,27 @@ public:
         return time_atol_;
     }
 
+    /// @brief PI-controller safety factor (adaptive RK step size; also
+    ///        applied to the dual-time pseudo stepper).
+    Real timeSafety() const noexcept {
+        return time_safety_;
+    }
+
+    /// @brief Minimum step-size shrink factor applied on rejection.
+    Real timeMinFactor() const noexcept {
+        return time_min_factor_;
+    }
+
+    /// @brief Maximum step-size growth factor per accepted step.
+    Real timeMaxFactor() const noexcept {
+        return time_max_factor_;
+    }
+
+    /// @brief Step-size growth cap relative to the initial step.
+    Real timeMaxGrowth() const noexcept {
+        return time_max_growth_;
+    }
+
     /// @brief Maximum pseudo-time steps per physical step (dual time).
     int timeMaxPseudoSteps() const noexcept {
         return time_max_pseudo_steps_;
@@ -427,6 +448,10 @@ private:
     Real time_final_               = Real(1);
     Real time_rtol_                = Real(1e-6);
     Real time_atol_                = Real(1e-6);
+    Real time_safety_              = Real(0.9);
+    Real time_min_factor_          = Real(0.1);
+    Real time_max_factor_          = Real(10);
+    Real time_max_growth_          = Real(100);
     int time_max_pseudo_steps_     = 100;
     TimeMethod time_pseudo_method_ = TimeMethod::SspRk332;
     Real time_pseudo_dt_           = Real(0);
