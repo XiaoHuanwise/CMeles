@@ -395,21 +395,28 @@ static bool testDualTime() {
                                          decoupledParams);
         const Real e2Dec = dualStepError(device, mem, ode, Real(0.05), makeU2R2,
                                          decoupledParams);
+        const Real e1DecU3R1 = dualStepError(device, mem, ode, Real(0.1),
+                                             makeU3R1, decoupledParams);
+        const Real e2DecU3R1 = dualStepError(device, mem, ode, Real(0.05),
+                                             makeU3R1, decoupledParams);
         std::cout << "  u2r1  " << e1U2R1 << " -> " << e2U2R1 << "\n"
                   << "  u3r1  " << e1U3R1 << " -> " << e2U3R1 << "\n"
-                  << "  decou " << e1Dec << " -> " << e2Dec << "\n";
-        // U2R1 observes ~3rd order here (linear problem); U3R1 is limited
-        // to ~1st order by the start-up u^{n-1} = u^0 initialisation
-        // (inherent to the method on runs that start at t = 0, matching
-        // the prototype); the decoupled U2R2 tracks the coupled one.
+                  << "  decou " << e1Dec << " -> " << e2Dec << "\n"
+                  << "  decou_u3r1 " << e1DecU3R1 << " -> " << e2DecU3R1
+                  << "\n";
+        // U2R1 / U3R1 observe ~3rd / ~4th order here (linear problem); U3R1
+        // starts its first step with the U2R1 reconstruction (no u^{n-1}
+        // exists at t = 0), so the start-up costs one O(dt^4) local error
+        // only; the decoupled steppers track the coupled ones.
         if (kSinglePrecision) {
             // Residual-limited accuracy at the scaled dual tolerance.
             ok &= e1U2R1 < Real(1e-3) && e1U3R1 < Real(1e-2) &&
-                  e1Dec < Real(1e-3);
+                  e1Dec < Real(1e-3) && e1DecU3R1 < Real(1e-2);
         } else {
             ok &= e2U2R1 < Real(0.4) * e1U2R1;
-            ok &= e2U3R1 < Real(0.7) * e1U3R1;
+            ok &= e2U3R1 < Real(0.2) * e1U3R1;
             ok &= e2Dec < Real(0.4) * e1Dec;
+            ok &= e2DecU3R1 < Real(0.2) * e1DecU3R1;
         }
     }
     return ok;

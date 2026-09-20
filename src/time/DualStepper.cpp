@@ -73,9 +73,13 @@ Real DualStepper::residualNorm(const RungeKuttaStepper &ps, occa::dim_t n) {
 }
 
 Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
-    // U3R1 needs u^{n-1} (kept from the previous step) and theta.
+    // U3R1 needs u^{n-1} (kept from the previous step) and theta. The first
+    // step has no u^{n-1} yet, so it runs with the U2R1 start-up
+    // reconstruction; theta is irrelevant there (kept at 1).
     if (residual_->needsPrev()) {
-        residual_->setTheta(dtPrev_ > Real(0) ? dtPrev_ / dt : Real(1));
+        const bool startup = dtPrev_ <= Real(0);
+        residual_->setStartup(startup);
+        residual_->setTheta(startup ? Real(1) : dtPrev_ / dt);
     }
 
     // R(u^n) is required by the two-stage residuals.

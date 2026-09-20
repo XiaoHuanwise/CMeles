@@ -5,8 +5,6 @@
 
 #include "common/KernelProps.hpp"
 
-#include <stdexcept>
-
 // ============================================================================
 // TemporalResidual
 // ============================================================================
@@ -103,7 +101,12 @@ DitrResidual::DitrResidual(occa::device &device, DeviceMemoryManager &mem,
 
 void DitrResidual::rebuildCoefficients() {
     const Real c2 = c2_, c22 = c2 * c2, c23 = c22 * c2;
-    switch (variant_) {
+    // Start-up of U3R1: the first physical step has no $u^{n-1}$, so the
+    // reconstruction falls back to U2R1 ($a_0 = d_1 = 0$), whose residual
+    // reads the u-prev operand at zero coefficient.
+    const Variant variant =
+        (variant_ == Variant::U3R1 && startup_) ? Variant::U2R1 : variant_;
+    switch (variant) {
         case Variant::U2R2:
             a_[0] = Real(0);
             a_[1] = Real(1) - (Real(3) * c22 - Real(2) * c23);
@@ -139,7 +142,21 @@ void DitrResidual::rebuildCoefficients() {
 }
 
 void DitrResidual::setTheta(Real theta) {
+    // Coefficients are a pure function of theta: a bit-identical input
+    // (constant-dt runs recompute the same dtPrev/dt every step) would
+    // rebuild bit-identical values, so skip.
+    if (theta == theta_) {
+        return;
+    }
     theta_ = theta;
+    rebuildCoefficients();
+}
+
+void DitrResidual::setStartup(bool startup) {
+    if (startup == startup_) {
+        return;
+    }
+    startup_ = startup;
     rebuildCoefficients();
 }
 

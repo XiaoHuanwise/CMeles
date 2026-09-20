@@ -30,7 +30,9 @@
 /// ($\beta = 1$).
 /// The U2R2/U2R1/U3R1 variants differ only in the coefficient values
 /// ($a_0 = 0$ and $d_1 = 0$ except where noted; U3R1 additionally uses
-/// $\theta = \Delta t^{n-1} / \Delta t^n$ and $u^{n-1}$).
+/// $\theta = \Delta t^{n-1} / \Delta t^n$ and $u^{n-1}$). U3R1 starts its
+/// first physical step (no $u^{n-1}$ exists yet) with the U2R1 coefficients
+/// through setStartup().
 ///
 /// Coupled mode stacks the two stages into one $2 N_{dof}$ state and one
 /// pseudo stepper; decoupled mode advances each stage with its own pseudo
@@ -70,6 +72,12 @@ public:
     /// @brief Set $\theta = \Delta t^{n-1} / \Delta t^n$; no-op except DITR
     ///        U3R1 (rebuilds the reconstruction coefficients).
     virtual void setTheta(Real /*theta*/) {
+    }
+
+    /// @brief Toggle the start-up reconstruction (DITR U3R1 only): while
+    ///        set, the residual is built with the U2R1 coefficients, which
+    ///        require no $u^{n-1}$. No-op for the other variants.
+    virtual void setStartup(bool /*startup*/) {
     }
 
     /// @brief Coupled residual of the stacked implicit state.
@@ -191,8 +199,14 @@ public:
                  const std::string &oklDir = OCCA_OKL_DIR);
 
     /// @brief Set $\theta = \Delta t^{n-1} / \Delta t^n$ (U3R1 only;
-    ///        rebuilds the reconstruction coefficients).
+    ///        rebuilds the reconstruction coefficients, no-op when the
+    ///        value is unchanged).
     void setTheta(Real theta) override;
+
+    /// @brief Toggle the start-up reconstruction (U3R1 only): while set,
+    ///        rebuilds with the U2R1 coefficients so the residual needs no
+    ///        $u^{n-1}$; no rebuild when the flag is unchanged.
+    void setStartup(bool startup) override;
 
     // ---- Coupled residuals (stacked 2*N_dof states) ----
 
@@ -234,6 +248,7 @@ private:
     void rebuildCoefficients();
 
     Variant variant_;
+    bool startup_ = false; ///< Start-up step flag (U3R1 falls back to U2R1).
     Real c2_;
     Real beta_;
     Real theta_ = Real(1);

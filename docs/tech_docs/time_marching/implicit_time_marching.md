@@ -214,6 +214,12 @@ $$
 
 注意 U3R1 的 $\mathcal{G}^{n+c_2}$ 包含上一时间步 $\boldsymbol{u}_{\text{f}}^{n-1}$ 的贡献（系数 $a_{0,\text{U3R1}}$），而 $\mathcal{G}^{n+1}$ 在所有 DITR 格式中保持统一形式。
 
+### 4.5 启动处理
+
+U3R1 的重构需要 $\boldsymbol{u}_{\text{f}}^{n-1}$，但计算始于 $t^0$，首个物理步不存在上一时间层的解。CMeles 的启动策略：首个物理步（含重启后的第一步）临时改用 **U2R1 重构系数**（$a_0 = d_1 = 0$，无需 $\boldsymbol{u}_{\text{f}}^{n-1}$，同为 L-stable），第二步起恢复 U3R1 系数并按 $\Theta = \Delta t^{n-1}/\Delta t^n$ 重建。
+
+启动步只引入单个 $O((\Delta t)^4)$ 局部误差（U2R1 单步 3 阶），不损害 U3R1 的 4 阶全局精度。实现对应 `DitrResidual::setStartup()`（重建系数）与 `DualStepper::advance()`（跟踪首步并切换）。
+
 ---
 
 ## 五、后向欧拉法
@@ -411,6 +417,8 @@ DualStepper : StepperBase — 双时间步驱动器
      d. cnt++, 检查收敛
 4. out = uNew[1]  (即 u^{n+1})
 ```
+
+U3R1 在流程之前按步切换重构系数：首步（无 $u^{n-1}$）用 U2R1 启动系数，其后按 $\Theta = \Delta t^{n-1}/\Delta t^n$ 重建 U3R1 系数（见 4.5 节）。
 
 ### 9.3 伪时间步长策略
 
