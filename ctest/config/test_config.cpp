@@ -425,9 +425,9 @@ t_final = 1.0
     try {
         Config cfg(unsetPath);
         ok &= checkReal(cfg.timeSafety(), Real(0.9), "safety default");
-        ok &= checkReal(cfg.timeMinFactor(), Real(0.1), "min_factor default");
-        ok &= checkReal(cfg.timeMaxFactor(), Real(10), "max_factor default");
-        ok &= checkReal(cfg.timeMaxGrowth(), Real(100), "max_growth default");
+        ok &= checkReal(cfg.timeMinFactor(), Real(0.2), "min_factor default");
+        ok &= checkReal(cfg.timeMaxFactor(), Real(5), "max_factor default");
+        ok &= checkReal(cfg.timeMaxGrowth(), Real(10), "max_growth default");
     } catch (const std::exception &e) {
         std::cout << "  FAIL unset controller keys threw: " << e.what() << "\n";
         ok = false;

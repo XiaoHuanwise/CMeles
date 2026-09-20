@@ -449,9 +449,9 @@ private:
     Real time_rtol_                = Real(1e-6);
     Real time_atol_                = Real(1e-6);
     Real time_safety_              = Real(0.9);
-    Real time_min_factor_          = Real(0.1);
-    Real time_max_factor_          = Real(10);
-    Real time_max_growth_          = Real(100);
+    Real time_min_factor_          = Real(0.2);
+    Real time_max_factor_          = Real(5);
+    Real time_max_growth_          = Real(10);
     int time_max_pseudo_steps_     = 100;
     TimeMethod time_pseudo_method_ = TimeMethod::SspRk332;
     Real time_pseudo_dt_           = Real(0);

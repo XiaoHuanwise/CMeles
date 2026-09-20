@@ -268,9 +268,9 @@ void Config::setDefaults() {
     time_rtol_             = Real(1e-6);
     time_atol_             = Real(1e-6);
     time_safety_           = Real(0.9);
-    time_min_factor_       = Real(0.1);
-    time_max_factor_       = Real(10);
-    time_max_growth_       = Real(100);
+    time_min_factor_       = Real(0.2);
+    time_max_factor_       = Real(5);
+    time_max_growth_       = Real(10);
     time_max_pseudo_steps_ = 100;
     time_pseudo_method_    = TimeMethod::SspRk332;
     time_pseudo_dt_        = Real(0);

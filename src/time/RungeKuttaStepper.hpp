@@ -13,8 +13,8 @@
 /// dt still updated by the PI factor) are preserved in stepPseudo() for
 /// the dual time-stepping driver.
 ///
-/// Controller constants (prototype / docs): SAFETY = 0.9, MIN_FACTOR = 0.1,
-/// MAX_FACTOR = 10, MAX_GROWTH = 100, ALPHA = 0.7, BETA = 0.4. SAFETY /
+/// Controller constants (prototype / docs): SAFETY = 0.9, MIN_FACTOR = 0.2,
+/// MAX_FACTOR = 5, MAX_GROWTH = 10, ALPHA = 0.7, BETA = 0.4. SAFETY /
 /// MIN_FACTOR / MAX_FACTOR / MAX_GROWTH live in Params and are configurable
 /// through the [time_marching] keys safety / min_factor / max_factor /
 /// max_growth; ALPHA and BETA remain compile-time constants.
@@ -37,9 +37,9 @@ public:
         // through [time_marching] safety / min_factor / max_factor /
         // max_growth (see updateDt).
         Real safety    = Real(0.9);
-        Real minFactor = Real(0.1);
-        Real maxFactor = Real(10);
-        Real maxGrowth = Real(100);
+        Real minFactor = Real(0.2);
+        Real maxFactor = Real(5);
+        Real maxGrowth = Real(10);
     };
 
     RungeKuttaStepper(occa::device &device, DeviceMemoryManager &mem,
