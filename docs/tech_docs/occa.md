@@ -223,6 +223,28 @@ mem_mgr.copyToHost(o_u, u_result.data(), N_total);
 
 > 分块策略的详细描述（目标硬件绑定行为、SIMD 向量化说明、`@outer`/`@inner` 语义、`TILE_SIZE` 选择依据等）见[控制方程与 DG 场](governed_equations_and_DG_field.md#occa-共享内存分块形状)。
 
+#### `@tile` 的书写位置（易错，有误导性报错）
+
+`@tile(...)` 是 **for 语句头部的第四段**：用分号与初始化/条件/递增三段隔开，整体位于 for 的圆括号**之内**：
+
+```okl
+// 正确：@tile 是 for 头部的第四段（分号隔开、括号内）
+for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+    // work
+}
+
+// 错误：先闭合 for 括号再写 @tile —— 悬空一个右括号
+for (int d = 0; d < N_dof; ++d) @tile(TILE_SIZE, @outer, @inner)) {
+    // work
+}
+```
+
+错误写法的报错**不在出错内核处**：悬空的 `)` 使 OCCA 词法器的括号配对失步，JIT 报出 `Could not find a closing '}'`，且位置指向**同文件中更早的、完全无关的内核**的函数体开头（最终以 `Unable to transform OKL kernel` 抛出）。排查此类"找不到闭括号"错误时，应先全文搜索 `) @tile` 确认没有内核把 for 括号提前闭合，再怀疑内核本身。
+
+依据：官方文档 `third_party/occa/docs/guide/okl/attributes.md` 的 `@tile` 一节，标准形式即 `for (int i = 0; i < N; ++i; @tile(16, @outer, @inner))`；其 `check=false` 关键字参数（循环可完美分块时省略越界判断）当前未使用。
+
+> **推广**：这一"分号子句"形式适用于 OKL 的**所有** for 循环属性——裸属性 `@outer`/`@inner` 同样写在 for 头部的分号之后（如 `for (int item = 0; item < TILE_SIZE; ++item; @inner)`，见 `reduce.okl`）。**逗号形式（`++item, @inner`）是无效语法**：`@inner` 不会被识别为循环属性，JIT 报 `[@kernel] requires at least one [@inner] for-loop`。
+
 ### 平台间差异
 
 仅 `TILE_SIZE` 参数根据不同平台调优，OKL 源码本身完全一致。C++ 侧默认值统一为 `src/common/KernelProps.hpp` 中的 `cmeles::DefaultTileSize`（当前 256），各内核构建点均引用该常量，不再分散硬编码：
@@ -281,6 +303,7 @@ OCCA 的完整文档位于 `third_party/occa/docs/`，CMeles 开发中最常查�
 - `third_party/occa/docs/api/device/malloc.md` — `malloc` API（含 `{"host": true}` 共享内存分配）
 
 > **规则**：在处理 OCCA/OKL 相关问题时，必须先阅读上述文档确认语法和限制。关键语法规则：
+> - **`@tile` 是 for 头部的第四段**：`for (init; cond; ++i; @tile(TILE_SIZE, @outer, @inner))`，不是独立于 for 之外的表达式。提前闭合 for 括号（`++i) @tile(...)`）会悬空一个 `)`，报出指向无关内核的误导性"找不到闭括号"错误（详见上文 [`@tile` 的书写位置](#tile-的书写位置易错有误导性报错)）
 > - `@outer` 和 `@inner` 是**裸属性**，不用括号或数字：`for (...; @outer)`，**不是** `@outer(0)`
 > - OKL **支持嵌套 `@outer`**（多维 block grid，如 `fd2d.okl`），**也支持顺序 `@outer`**（不嵌套的多个 `@outer` 之间顺序执行）
 > - 多个 `@inner` 循环**允许存在**但要求**迭代次数必须相同**
