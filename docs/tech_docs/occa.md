@@ -219,7 +219,7 @@ mem_mgr.copyToHost(o_u, u_result.data(), N_total);
 - 使用 `@tile(TILE_SIZE, @outer, @inner)` 对 `elem`（单元编号）循环分块。`@tile` 自动拆分为外层 `@outer`（GPU block / OpenMP `#pragma omp parallel for`）和内层 `@inner`（GPU thread / 串行退化）。elem 内全部串行。
 - 当前不考虑 `@shared` 共享内存，所有数据读写走全局内存。
 
-> **特例 — 归约核函数（`reduce.okl`）**：BLAS-1 归约操作（`dot`、`nrm2`、`asum`、`sumReduce`）是项目中**唯一使用 `@shared` 的例外**。块内树形归约必须依赖共享内存实现高效的并行规约，无法通过全局内存高效替代。详见 `src/blas/okl/reduce.okl`。
+> **特例 — 归约核函数（`reduce.okl`）**：BLAS-1 归约操作（`dot`、`nrm2`、`asum`、`amax`、`amin`）是项目中**唯一使用 `@shared` 的例外**。块内树形归约必须依赖共享内存实现高效的并行规约，无法通过全局内存高效替代。详见 `src/blas/okl/reduce.okl`。
 
 > 分块策略的详细描述（目标硬件绑定行为、SIMD 向量化说明、`@outer`/`@inner` 语义、`TILE_SIZE` 选择依据等）见[控制方程与 DG 场](governed_equations_and_DG_field.md#occa-共享内存分块形状)。
 
@@ -299,7 +299,7 @@ OCCA 的完整文档位于 `third_party/occa/docs/`，CMeles 开发中最常查�
 | 文件 | 内核 | 对应 BLAS 操作 |
 |---|---|---|
 | `blas1.okl` | `scal`, `axpy`, `copy` | BLAS-1 元素级 |
-| `reduce.okl` | `dot`, `nrm2`, `asum`, `sumReduce` | BLAS-1 归约（**含 `@shared` 例外**） |
+| `reduce.okl` | `dot`, `nrm2`, `asum`, `amax`, `amin`（多级流水线归约 `sumReduce` / `maxReduce` / `minReduce`） | BLAS-1 归约（**含 `@shared` 例外**；`amin` 的越界填充恒等元为 $+\infty$，由宿主端以标量参数传入以保证跨后端可移植） |
 | `blas2.okl` | `gemv`, `ger` | BLAS-2 |
 | `gemm.okl` | `gemm` | BLAS-3 |
 

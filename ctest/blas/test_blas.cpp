@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -169,7 +170,7 @@ static bool runBlasTests(const std::string &mode, occa::json &props) {
     }
 
     // ========================================================================
-    // BLAS-1 reductions: dot, nrm2, asum, amax
+    // BLAS-1 reductions: dot, nrm2, asum, amax, amin
     // ========================================================================
     std::cout << "  --- BLAS-1 reductions ---" << std::endl;
 
@@ -204,6 +205,11 @@ static bool runBlasTests(const std::string &mode, occa::json &props) {
         ref      = h_x.template lpNorm<Eigen::Infinity>();
         if (!checkRelative(computed, ref, tol, "amax n=" + std::to_string(n)))
             allPass = false;
+
+        computed = blas.amin(n, o_x);
+        ref      = h_x.minCoeff();
+        if (!checkRelative(computed, ref, tol, "amin n=" + std::to_string(n)))
+            allPass = false;
     }
 
     // n=0 edge cases
@@ -224,6 +230,10 @@ static bool runBlasTests(const std::string &mode, occa::json &props) {
         if (blas.amax(0, o_d0) != Real(0)) {
             allPass = false;
             std::cerr << "  FAIL amax n=0\n";
+        }
+        if (blas.amin(0, o_d0) != std::numeric_limits<Real>::infinity()) {
+            allPass = false;
+            std::cerr << "  FAIL amin n=0\n";
         }
     }
 

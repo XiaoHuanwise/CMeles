@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -48,7 +49,11 @@ void Blas::setTileSize(int tileSize) {
     dot_       = occa::kernel();
     nrm2_      = occa::kernel();
     asum_      = occa::kernel();
+    amax_      = occa::kernel();
+    amin_      = occa::kernel();
     sumReduce_ = occa::kernel();
+    maxReduce_ = occa::kernel();
+    minReduce_ = occa::kernel();
     gemv_      = occa::kernel();
     ger_       = occa::kernel();
     gemm_      = occa::kernel();
@@ -148,6 +153,32 @@ Real Blas::finalizeMaxReduction(occa::dim_t count) {
     return m;
 }
 
+Real Blas::finalizeMinReduction(occa::dim_t count) {
+    // Level-1+: device-side ping-pong minReduce (+infinity identity for the
+    // padding lanes; amax's 0.0 identity would clamp negative minima).
+    occa::memory *src = &o_partial_a_;
+    occa::memory *dst = &o_partial_b_;
+
+    while (count > kHostReduceMax) {
+        const occa::dim_t next = (count + tileSize_ - 1) / tileSize_;
+        ensureScratch(next);
+        minReduce_(static_cast<int>(count),
+                   std::numeric_limits<Real>::infinity(), *src, *dst);
+        std::swap(src, dst);
+        count = next;
+    }
+
+    // Level-2: copy remaining partials to host and min (+infinity identity).
+    std::vector<Real> host(static_cast<std::size_t>(count));
+    src->copyTo(host.data());
+
+    Real m = std::numeric_limits<Real>::infinity();
+    for (occa::dim_t i = 0; i < count; ++i) {
+        m = std::min(m, host[i]);
+    }
+    return m;
+}
+
 // ---- Reduction entry points ----
 
 Real Blas::dot(occa::dim_t n, occa::memory &x, occa::memory &y) {
@@ -212,6 +243,23 @@ Real Blas::amax(occa::dim_t n, occa::memory &x) {
     amax_(static_cast<int>(n), x, o_partial_a_);
 
     return finalizeMaxReduction(count0);
+}
+
+Real Blas::amin(occa::dim_t n, occa::memory &x) {
+    if (n == 0)
+        return std::numeric_limits<Real>::infinity();
+
+    if (!amin_.isInitialized())
+        amin_ = buildKernel("reduce.okl", "amin");
+    if (!minReduce_.isInitialized())
+        minReduce_ = buildKernel("reduce.okl", "minReduce");
+
+    const occa::dim_t count0 = (n + tileSize_ - 1) / tileSize_;
+    ensureScratch(count0);
+    amin_(static_cast<int>(n), std::numeric_limits<Real>::infinity(), x,
+          o_partial_a_);
+
+    return finalizeMinReduction(count0);
 }
 
 // ============================================================================

@@ -62,6 +62,9 @@ public:
     /// @return max|x|  (infinity norm of x)
     Real amax(occa::dim_t n, occa::memory &x);
 
+    /// @return min_i x_i  (+infinity when n == 0)
+    Real amin(occa::dim_t n, occa::memory &x);
+
     // ---- BLAS-2 ------------------------------------------------------------
 
     /// y = alpha * A * x + beta * y
@@ -99,6 +102,11 @@ private:
     /// ≤ kHostReduceMax, then host-finalise with max.
     Real finalizeMaxReduction(occa::dim_t count);
 
+    /// Multi-level min-reduction pipeline: run amin (which writes partial
+    /// minima into `o_partial_a_`), then ping-pong `minReduce` until
+    /// ≤ kHostReduceMax, then host-finalise with min (+infinity identity).
+    Real finalizeMinReduction(occa::dim_t count);
+
     /// Grow scratch buffers to at least `capacity` elements (lazy / reuse).
     void ensureScratch(occa::dim_t capacity);
 
@@ -118,8 +126,10 @@ private:
     occa::kernel nrm2_;
     occa::kernel asum_;
     occa::kernel amax_;
+    occa::kernel amin_;
     occa::kernel sumReduce_;
     occa::kernel maxReduce_;
+    occa::kernel minReduce_;
     occa::kernel gemv_;
     occa::kernel ger_;
     occa::kernel gemm_;
