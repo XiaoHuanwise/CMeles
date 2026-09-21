@@ -217,25 +217,27 @@ $$
 
 ### 2.4 方法汇总
 
-| 嵌入式对     | 推进阶数 | 误差阶数 | 阶段数 | SSP 性质 | 推荐场景                     |
-| :----------- | :------: | :------: | :----: | :------: | :--------------------------- |
-| RK3(2)       |    3     |    2     |   3    |    无    | 一般非刚性 ODE；伪时间稳态与 SSPRK3(3)2 同档 |
-| RK5(4)       |    5     |    4     | 7(6)   |    无    | 高精度光滑问题；伪时间稳态不适用（甜点容差超出实用范围） |
-| SSPRK2(2)1   |    2     |    1     |   2    |  SSP 有  | 轻量激波问题（伪时间容差悬崖最陡） |
-| SSPRK3(2)1   |    2     |    1     |   3    |  SSP 有  | 伪时间稳态优选（低阶估计子 + 大稳定步长） |
-| **SSPRK3(3)2** |  **3**   |  **2**   | **3**  | **SSP 有** | **CFD 优选（激波自适应；默认伪时间格式）** |
-| SSPRK4(3)2   |    3     |    2     |   4    |  SSP 有  | 伪时间稳态次优               |
+| 嵌入式对       | 推进阶数 | 误差阶数 | 阶段数 |  SSP 性质  | 推荐场景                                                 |
+| :------------- | :------: | :------: | :----: | :--------: | :------------------------------------------------------- |
+| RK3(2)         |    3     |    2     |   3    |     无     | 一般非刚性 ODE；伪时间稳态与 SSPRK3(3)2 同档             |
+| RK5(4)         |    5     |    4     |  7(6)  |     无     | 高精度光滑问题；伪时间稳态不适用（甜点容差超出实用范围） |
+| SSPRK2(2)1     |    2     |    1     |   2    |   SSP 有   | 轻量激波问题（伪时间容差悬崖最陡）                       |
+| SSPRK3(2)1     |    2     |    1     |   3    |   SSP 有   | 伪时间稳态优选（低阶估计子 + 大稳定步长）                |
+| **SSPRK3(3)2** |  **3**   |  **2**   | **3**  | **SSP 有** | **CFD 优选（激波自适应；默认伪时间格式）**               |
+| SSPRK4(3)2     |    3     |    2     |   4    |   SSP 有   | 伪时间稳态次优                                           |
 
 **伪时间稳态甜点容差**（等熵涡容差扫描实验，DITR-U2R1 驱动）：甜点容差随估计子阶数 $p$ 单调变紧（$\Delta\tau \propto \mathrm{tol}^{1/(p+1)}$）——高阶估计子为压低局部误差估计反而限制步长：
 
-| 伪时间格式 | 估计子阶数 | 甜点容差 | 备注                       |
-| :--------- | :--------: | :------: | :------------------------- |
-| SSPRK2(2)1  |     1      |  $10^{-4}$ | $10^{-3}$ 挣扎、$10^{-2}$ NaN |
-| SSPRK3(2)1  |     1      |  $10^{-3}$ | 自适应伪时间最优           |
-| SSPRK3(3)2  |     2      |  $10^{-6}$ | $10^{-5}$ / $10^{-4}$ 触顶 |
-| SSPRK4(3)2  |     2      |  $10^{-5}$ | $10^{-4}$ 触顶；次优       |
-| RK3(2)      |     2      |  $10^{-6}$ | 与 SSPRK3(3)2 同档         |
-| RK5(4)      |     4      |    —     | $< 10^{-8}$ 仍触顶，出局   |
+| 伪时间格式 | 估计子阶数 | 甜点容差  | 备注                          |
+| :--------- | :--------: | :-------: | :---------------------------- |
+| SSPRK2(2)1 |     1      | $10^{-4}$ | $10^{-3}$ 挣扎、$10^{-2}$ NaN |
+| SSPRK3(2)1 |     1      | $10^{-3}$ | 自适应伪时间最优              |
+| SSPRK3(3)2 |     2      | $10^{-6}$ | $10^{-5}$ / $10^{-4}$ 触顶    |
+| SSPRK4(3)2 |     2      | $10^{-5}$ | $10^{-4}$ 触顶；次优          |
+| RK3(2)     |     2      | $10^{-6}$ | 与 SSPRK3(3)2 同档            |
+| RK5(4)     |     4      |     —     | $< 10^{-8}$ 仍触顶，出局      |
+
+> **数据适用范围**：上表及以下要点均在**全局标量控制器**（`pseudo_dt_mode = "global"`，即 RMS 误差范数 + 标量 PI 因子）下测得；局部逐自由度控制器（`pseudo_dt_mode = "local"`，见 3.4 节）的收敛路径不同，尚未做等效扫描，引用本表数据时应注明控制器模式。
 
 要点：
 
@@ -259,17 +261,17 @@ $$
 
 其中各参数含义：
 
-| 参数                | 含义                              | 典型值    |
-| :------------------ | :-------------------------------- | :-------: |
-| $\alpha_{\text{safe}}$ | 安全因子（SAFETY）             |   0.9     |
-| $\alpha_{\min}$     | 最小步长缩放因子（MIN_FACTOR）    |   0.2     |
-| $\alpha_{\max}$     | 最大步长缩放因子（MAX_FACTOR）    |    5      |
-| $\gamma_{\max}$     | 步长增长上限（MAX_GROWTH，相对初始步长的倍数） |   10   |
-| $\alpha$            | PI 控制器比例系数（ALPHA）        |   0.7     |
-| $\beta$             | PI 控制器积分系数（BETA）         |   0.4     |
-| $q$                 | 推进阶数（order）                 | 视格式而定 |
-| $\sigma_{lkj}$      | 当前步归一化误差                  |     —     |
-| $(\sigma_{\text{prev}})_{lkj}$ | 上一步归一化误差         |     —     |
+| 参数                           | 含义                                           |   典型值   |
+| :----------------------------- | :--------------------------------------------- | :--------: |
+| $\alpha_{\text{safe}}$         | 安全因子（SAFETY）                             |    0.9     |
+| $\alpha_{\min}$                | 最小步长缩放因子（MIN_FACTOR）                 |    0.2     |
+| $\alpha_{\max}$                | 最大步长缩放因子（MAX_FACTOR）                 |     5      |
+| $\gamma_{\max}$                | 步长增长上限（MAX_GROWTH，相对初始步长的倍数） |     10     |
+| $\alpha$                       | PI 控制器比例系数（ALPHA）                     |    0.7     |
+| $\beta$                        | PI 控制器积分系数（BETA）                      |    0.4     |
+| $q$                            | 推进阶数（order）                              | 视格式而定 |
+| $\sigma_{lkj}$                 | 当前步归一化误差                               |     —      |
+| $(\sigma_{\text{prev}})_{lkj}$ | 上一步归一化误差                               |     —      |
 
 > **备注**：SAFETY / MIN_FACTOR / MAX_FACTOR / MAX_GROWTH 四个控制器常数可在配置文件 `[time_marching]` 中通过 `safety` / `min_factor` / `max_factor` / `max_growth` 键自定义（同一组键同时作用于显式自适应 RK 与双时间步伪时间控制器）；ALPHA 与 BETA 仍为编译期常数（`RungeKuttaStepper::kAlpha` / `kBeta`）。
 
@@ -316,7 +318,56 @@ $$
 
 步长更新后施加增长上限（MAX_GROWTH = 10× 初始步长）和上下界约束（min_step, max_step）。
 
-> **备注**：伪时间步长以逐自由度（per-degree-of-freedom）方式存储和张量运算，与 DG 的分块并行策略完全兼容。
+> **备注**：以上为**全局（标量）控制器**的流程，$\sigma$ 是整个解向量的单个 RMS 范数。逐自由度的局部控制器见 3.4 节。
+
+### 3.4 局部（逐自由度）自适应控制器
+
+局部控制器将伪时间步长细化到单个模态系数 $u_{lkj}$（PyFR 风格的逐自由度步长）：每个自由度持有独立的 $\Delta\tau_{lkj}$、归一化误差 $\sigma_{lkj}$ 与 PI 状态 $(\sigma_{\text{prev}})_{lkj}$，RK 各阶段更新与误差估计中的标量乘积全部变为逐自由度乘积。
+
+**逐自由度误差与缩放**：
+
+$$
+\xi_{lkj} = \Delta\tau_{lkj} \sum_{i=1}^{s} \left(b_i - b_i^{*}\right) k_{i,lkj}
+$$
+
+$$
+\sigma_{lkj} = \frac{\left|\xi_{lkj}\right|}{\epsilon_{lkj}}, \quad \epsilon_{lkj} = \mathrm{atol} + \mathrm{rtol} \cdot \max\left(\left|u_{lkj}\right|, \left|u_{lkj}^{\text{new}}\right|\right)
+$$
+
+其中缩放 $\epsilon_{lkj}$ 逐自由度构造（全局控制器用的是整个向量的 RMS 范数）；$\sigma_{lkj}$ 逐元素下限 $10^{-14}$。
+
+**接受判据与步长更新**：每个伪时间步内做一次 RK 尝试，计算所有 $\sigma_{lkj}$ 后以**全局最大值**判定接受：
+
+$$
+\max_{l,k,j} \sigma_{lkj} < 1 \quad \Rightarrow \quad \text{接受该步}
+$$
+
+逐自由度 PI 因子与标量形式相同，但按各自误差独立计算：
+
+$$
+f_{lkj} = \alpha_{\text{safe}} \cdot \sigma_{lkj}^{-\alpha/q} \cdot (\sigma_{\text{prev}})_{lkj}^{\,\beta/q}
+$$
+
+随后 $\Delta\tau_{lkj} \mathrel{*}= f_{lkj}$，并施加 $\mathrm{MAX\_GROWTH} \cdot \Delta\tau_{\text{init}}$ 增长上限与 $[\mathrm{min\_step}, \mathrm{max\_step}]$ 夹持（$\mathrm{max\_step}$ 为物理步长）。
+
+**与全局控制器的语义差异**（移植自原型，实现有意保留）：
+
+| 方面                        | 全局（标量）控制器                                                    | 局部（逐自由度）控制器                                                         |
+| :-------------------------- | :-------------------------------------------------------------------- | :----------------------------------------------------------------------------- |
+| 误差范数                    | 全向量 RMS：$\sigma = \lVert \xi \rVert_2 / (\sqrt{N}\,\bar\epsilon)$ | 逐自由度 $\sigma_{lkj}$，$\epsilon_{lkj}$ 逐元素构造                           |
+| 接受判据                    | $\sigma < 1$                                                          | $\max_{lkj} \sigma_{lkj} < 1$                                                  |
+| factor 夹持                 | 拒绝时夹 $\alpha_{\min}$、接受时夹 $\alpha_{\max}$（单侧）            | **每次尝试双侧夹持** $[\alpha_{\min}, \alpha_{\max}]$                          |
+| 接受后限增                  | 曾拒步则 factor ≤ 1（标量）                                           | 曾拒步则逐元素 $f_{lkj} \le 1$                                                 |
+| $\sigma_{\text{prev}}$ 提交 | 每步末提交                                                            | 仅提交最终（接受/强制接受）尝试的 $\sigma_{lkj}$，中间拒步不进入               |
+| 初始化                      | Hairer 标量启发式                                                     | 同一标量启发式**均匀填充**整个 $\Delta\tau_{lkj}$ 数组（分化完全来自 PI 更新） |
+
+**C++ 增补**（原型没有的鲁棒性守护）：拒绝重试模式下，当 $\min_{lkj} \Delta\tau_{lkj} \le \mathrm{min\_step}$ 且仍未接受时强制提交该次尝试——否则触底条目无法再缩小步长，重试将无限重复同一尝试（原型会死循环）。
+
+**实现映射**（`RungeKuttaStepper` 的 `Params::localDt`，经 `[time_marching] pseudo_dt_mode = "local"` 开启，仅作用于双时间步的伪时间步进器）：
+
+- OKL 内核（`src/time/okl/time_update.okl`）：`rkStageCombineLocalDt` / `rkWeightedSumLocalDt` / `rkFinalUpdateLocalDt`（Butcher 递推的逐 DOF dt 变体）、`rkErrorNormLocal`（逐 DOF $\sigma_{lkj}$）、`rkDtUpdateLocal`（逐 DOF PI 更新，含全部夹持）、`fillReal`（均匀初始化）。
+- 设备状态：`o_dt_` / `o_sigma_` / `o_sigmaPrev_`（各 $N_{\text{dof}}$）。耦合双时间模式下 $N_{\text{dof}}$ 覆盖堆叠的两个阶段（$n{+}c_2$ 与 $n{+}1$ 行各自持有独立步长，对应原型 `pseudo_dt = empty_like(F)`）；解耦模式下每个阶段步进器各持一份长度 $N$ 的数组。
+- 接受判定经 `Blas::amax` 归约 $\max \sigma_{lkj}$；$\min \Delta\tau$ 经"取负 + amax"组合实现（不新增 Blas 原语）。
 
 ---
 
@@ -324,7 +375,7 @@ $$
 
 ### 4.1 伪时间层上的显式自适应推进
 
-在 DITR 双时间步格式中，每个物理时间步内部以伪时间 $\tau$ 迭代至稳态。伪时间层上采用显式嵌入式 RK 对（如 SSPRK3(3)2）推进，$N_{\text{elem}} \times N_{\text{vars}} \times N_{\text{modes}}$ 个自由度各自持有独立的伪时间步长 $\Delta \tau_{lkj}$。
+在 DITR 双时间步格式中，每个物理时间步内部以伪时间 $\tau$ 迭代至稳态。伪时间层上采用显式嵌入式 RK 对（如 SSPRK3(3)2）推进。`pseudo_dt_mode = "local"`（见 3.4 节）时，$N_{\text{elem}} \times N_{\text{vars}} \times N_{\text{modes}}$ 个自由度各自持有独立的伪时间步长 $\Delta \tau_{lkj}$；默认的 `"global"` 模式下所有自由度共享单一标量步长。
 
 伪时间残差 $\mathcal{F} = \mathbf{P}\,\mathcal{G}$ 在 $\tau \to \infty$ 时趋于零，物理时间步收敛。自适应步长控制确保每个自由度的截断误差保持在容限内，同时最大化稳定步长。
 
@@ -338,22 +389,21 @@ $$
 
 ### 4.3 CMeles 实现架构
 
-CMeles 中的自适应步长控制通过 `RungeKuttaStepper` 基类统一实现：
+CMeles 用**单个** `RungeKuttaStepper` 类实现全部六对嵌入式 RK 对（Butcher 表为运行期数据，一次上传设备、内核运行期读取），并通过 `Params::localDt` 提供两种步长控制器：
 
 ```
-RungeKuttaStepper (基类)
-├── Butcher 表: C, A, B, E
-├── 误差估计: _estimateError()
-├── RK 步:   _rkStep()
-├── PI 控制:  step() / stepSingleDt()
-├── 步长初始化: _selectInitialStepSdt()
-│
-├── RK32Stepper     — RK3(2) Bogacki-Shampine
-├── RK54Stepper     — RK5(4) Dormand-Prince
-├── SSPRK221Stepper — SSPRK2(2)1
-├── SSPRK321Stepper — SSPRK3(2)1
-├── SSPRK332Stepper — SSPRK3(3)2
-└── SSPRK432Stepper — SSPRK4(3)2
+RungeKuttaStepper : StepperBase（单类，六对表共用）
+├── Butcher 表: table_ (constexpr 表) + 设备数组 o_A_ / o_B_ / o_E_
+├── RK 步:    rkStep()（标量或逐 DOF dt 内核二选一）
+├── 全局控制器（默认）
+│   ├── 误差: computeErrorNorm()  — RMS 范数 + 标量 scale
+│   └── PI:   updateDt()          — 标量 factor
+├── 局部控制器（Params::localDt，pseudo_dt_mode = "local"）
+│   ├── 误差: computeErrorNormLocal() — 逐 DOF σ，amax 判接受
+│   └── PI:   updateDtLocal()        — 逐 DOF factor（rkDtUpdateLocal 内核）
+├── 步长初始化: selectInitialStep()（Hairer 启发式；局部模式均匀填充 o_dt_）
+└── 接口: advance()（物理时间，恒为全局控制器）/ stepPseudo(allowReject)
+         / stepFixed(dt) / setState() / setRhs()
 ```
 
 `DualStepper` 将自适应显式伪时间步进器与隐式物理时间步进器组合（详见隐式时间推进文档）：
@@ -361,10 +411,11 @@ RungeKuttaStepper (基类)
 ```
 DualStepper(residual, pseudoTable, ...)
 ├── residual_:       DitrResidual / BackwardEulerResidual
-└── pseudo_:         RungeKuttaStepper (自适应嵌入式RK)
+└── pseudo_:         RungeKuttaStepper (自适应嵌入式RK，全局或局部控制器)
+    └── pseudoC2_:   解耦模式的第二个伪步进器
 ```
 
-对于解耦 DITR 格式，两个伪时间子系统（$n+c_2$ 和 $n+1$）各自持有独立的 `RungeKuttaStepper` 实例和独立的步长状态。
+对于解耦 DITR 格式，两个伪时间子系统（$n+c_2$ 和 $n+1$）各自持有独立的 `RungeKuttaStepper` 实例和独立的步长状态；局部模式下即各自独立的逐 DOF 步长数组。控制器模式由 `makeStepperFactory` 经 `[time_marching] pseudo_dt_mode` 装配（`"global"` 默认 / `"local"`），固定伪步长（`pseudo_dt > 0`）优先于两种自适应模式。
 
 ---
 

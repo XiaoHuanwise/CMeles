@@ -40,6 +40,10 @@ DualStepper::Params dualParams(const Config &cfg) {
     params.rkParams.minFactor = cfg.timeMinFactor();
     params.rkParams.maxFactor = cfg.timeMaxFactor();
     params.rkParams.maxGrowth = cfg.timeMaxGrowth();
+    // Pseudo-dt controller granularity: one scalar step (global, the
+    // default) or one step size per modal coefficient (local,
+    // [time_marching] pseudo_dt_mode = "local").
+    params.rkParams.localDt = cfg.timePseudoDtMode() == PseudoDtMode::Local;
     return params;
 }
 

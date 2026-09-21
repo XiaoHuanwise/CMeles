@@ -5,13 +5,23 @@
 /// data (uploaded once, read by the OKL kernels), so the variants differ by
 /// construction argument, not by code.
 ///
-/// Ported from the prototype's RungeKuttaStepper. The scalar-dt controller
-/// of `step_single_dt` (RMS-scaled error, PI factor) is the single
-/// controller here, since CMeles advances a global dt; the prototype's
-/// per-DOF controller exists only for its local-dt tensor mode. The
-/// prototype's `step(reject=False)` semantics (one attempt, forced accept,
-/// dt still updated by the PI factor) are preserved in stepPseudo() for
-/// the dual time-stepping driver.
+/// Ported from the prototype's RungeKuttaStepper. Two step-size controllers
+/// exist, selected by Params::localDt:
+///
+///  - Global (localDt = false, the default): the scalar controller of the
+///    prototype's `step_single_dt` — RMS-scaled error norm, scalar PI
+///    factor. Serves both the explicit adaptive RK arm (advance()) and the
+///    dual-time pseudo stepper.
+///  - Local (localDt = true): the per-DOF controller of the prototype's
+///    `step()` — one pseudo step size per modal coefficient
+///    $u_{lkj}$ (PyFR-style local adaptive pseudo time stepping). Pseudo
+///    stepping only: it drives stepPseudo() of the dual time-stepping
+///    driver; advance() keeps the global controller (a per-DOF physical
+///    step would be local time stepping, which is out of scope).
+///
+/// The prototype's `step(reject=False)` semantics (one attempt, forced
+/// accept, dt still updated by the PI factor) are preserved in stepPseudo()
+/// for both controllers.
 ///
 /// Controller constants (prototype / docs): SAFETY = 0.9, MIN_FACTOR = 0.2,
 /// MAX_FACTOR = 5, MAX_GROWTH = 10, ALPHA = 0.7, BETA = 0.4. SAFETY /
@@ -40,6 +50,13 @@ public:
         Real minFactor = Real(0.2);
         Real maxFactor = Real(5);
         Real maxGrowth = Real(10);
+
+        /// @brief Per-DOF (modal-coefficient-level) adaptive pseudo step
+        ///        sizes instead of a single scalar dt config key
+        ///        [time_marching] pseudo_dt_mode = "local"). Pseudo
+        ///        stepping only; advance() always uses the global
+        ///        controller.
+        bool localDt = false;
     };
 
     RungeKuttaStepper(occa::device &device, DeviceMemoryManager &mem,
@@ -60,7 +77,8 @@ public:
 
     /// @brief One adaptive physical step in place on \p o_u (internal
     ///        accept/reject; \p dt is the step-size cap). Returns the
-    ///        accepted step.
+    ///        accepted step. Always the global controller — the local-dt
+    ///        mode is a pseudo-stepping feature and is ignored here.
     Real advance(occa::memory o_u, Real t, Real dtMax) override;
 
     int order() const override {
@@ -78,12 +96,16 @@ public:
 
     /// @brief Install a state $u_0$ and (re)initialise the step size via
     ///        the Hairer heuristic, capped by the physical step
-    ///        (= set_new_state in the prototype).
+    ///        (= set_new_state in the prototype). In local-dt mode the
+    ///        per-DOF dt array is filled uniformly with that scalar
+    ///        (divergence comes from the PI updates) and sigma_prev is
+    ///        reset to one.
     void setState(occa::memory &o_u0, Real phyDtCap);
 
-    /// @brief One pseudo step with the PI controller. With
-    ///        \p allowReject false the attempt is unconditionally accepted
-    ///        (single attempt), matching step(reject=False).
+    /// @brief One pseudo step with the PI controller (global or local,
+    ///        per Params::localDt). With \p allowReject false the attempt
+    ///        is unconditionally accepted (single attempt), matching
+    ///        step(reject=False).
     void stepPseudo(bool allowReject);
 
     /// @brief One fixed-step pseudo step without control (= step_set_sdt).
@@ -97,13 +119,17 @@ public:
     const occa::memory &f() const {
         return o_f_;
     }
-    /// @brief Current (controlled) step size.
+    /// @brief Current (controlled) step size (global controller).
     Real dt() const noexcept {
         return dt_;
     }
-    /// @brief Last accepted error norm.
+    /// @brief Last accepted error norm (global controller).
     Real errorNorm() const noexcept {
         return errorNormPrev_;
+    }
+    /// @brief Per-DOF step-size array (local-dt mode; pseudo stepping).
+    const occa::memory &localDt() const {
+        return o_dt_;
     }
 
     // PI controller exponents (compile-time; the gain/clamp knobs live in
@@ -114,17 +140,33 @@ public:
 private:
     /// @brief One Butcher step: stages from (u, f), writes u_new and
     ///        f_new = R(u_new) (FSAL); K[0..s] filled. u is not modified.
-    void rkStep(occa::memory &o_u, occa::memory &o_uNew, occa::memory &o_fNew);
+    ///        Launches the scalar-dt or per-DOF-dt kernels per \p
+    ///        useLocalDt; the recurrence is identical. advance() and
+    ///        stepFixed() always pass false (local dt is a pseudo-stepping
+    ///        mode and their dt is scalar).
+    void rkStep(occa::memory &o_u, occa::memory &o_uNew, occa::memory &o_fNew,
+                bool useLocalDt);
 
     /// @brief RMS-scaled error norm sigma of the last attempt (K, dt).
     Real computeErrorNorm(Real rmsU, Real rmsUnew);
 
+    /// @brief Per-DOF normalised error of the last attempt into o_sigma_
+    ///        (floor 1e-14); returns $\max_d \sigma_d$ for the accept test.
+    Real computeErrorNormLocal();
+
     /// @brief Hairer initial-step heuristic (= _select_initial_step_sdt).
     Real selectInitialStep(occa::memory &o_u);
 
-    /// @brief Advance the internal step-size controller after an attempt
-    ///        with error norm \p sigma.
+    /// @brief Advance the internal scalar step-size controller after an
+    ///        attempt with error norm \p sigma.
     void updateDt(Real sigma, bool accepted, bool wasRejected);
+
+    /// @brief Advance the per-DOF step-size controller (one rkDtUpdateLocal
+    ///        launch; factor clamps apply on every attempt).
+    void updateDtLocal(bool accepted, bool wasRejected);
+
+    /// @brief $\min_d dt_d$ of the per-DOF array (Blas::amin).
+    Real dtMinLocal();
 
     /// @brief Lazily compile the Butcher kernels (idempotent).
     void ensureRkKernels() {
@@ -135,6 +177,20 @@ private:
         rkWeightedSum_  = buildTimeKernel("rkWeightedSum");
         rkFinalUpdate_  = buildTimeKernel("rkFinalUpdate");
         rkKernelsBuilt_ = true;
+    }
+
+    /// @brief Lazily compile the local-dt controller kernels (idempotent).
+    void ensureLocalKernels() {
+        if (localKernelsBuilt_) {
+            return;
+        }
+        fillReal_              = buildTimeKernel("fillReal");
+        rkStageCombineLocalDt_ = buildTimeKernel("rkStageCombineLocalDt");
+        rkWeightedSumLocalDt_  = buildTimeKernel("rkWeightedSumLocalDt");
+        rkFinalUpdateLocalDt_  = buildTimeKernel("rkFinalUpdateLocalDt");
+        rkErrorNormLocal_      = buildTimeKernel("rkErrorNormLocal");
+        rkDtUpdateLocal_       = buildTimeKernel("rkDtUpdateLocal");
+        localKernelsBuilt_     = true;
     }
 
     const ButcherTable &table_;
@@ -156,6 +212,11 @@ private:
     occa::memory o_err_;    ///< Embedded error vector.
     occa::memory o_scratch_;
 
+    // Local-dt controller state (allocated only when params_.localDt).
+    occa::memory o_dt_;        ///< Per-DOF pseudo step sizes.
+    occa::memory o_sigma_;     ///< Per-DOF normalised error of the attempt.
+    occa::memory o_sigmaPrev_; ///< Per-DOF error of the last commit.
+
     Real dt_            = Real(0);
     Real dtInit_        = Real(0);
     Real maxStep_       = std::numeric_limits<Real>::infinity();
@@ -167,4 +228,13 @@ private:
     occa::kernel rkWeightedSum_;
     occa::kernel rkFinalUpdate_;
     bool rkKernelsBuilt_ = false;
+
+    // Local-dt controller kernels (lazily built by ensureLocalKernels()).
+    occa::kernel fillReal_;
+    occa::kernel rkStageCombineLocalDt_;
+    occa::kernel rkWeightedSumLocalDt_;
+    occa::kernel rkFinalUpdateLocalDt_;
+    occa::kernel rkErrorNormLocal_;
+    occa::kernel rkDtUpdateLocal_;
+    bool localKernelsBuilt_ = false;
 };

@@ -48,6 +48,16 @@ RungeKuttaStepper::RungeKuttaStepper(occa::device &device,
     o_fNew_    = mem_.wrapOrMalloc(nDof_);
     o_err_     = mem_.wrapOrMalloc(nDof_);
     o_scratch_ = mem_.wrapOrMalloc(nDof_);
+
+    // Per-DOF controller state (local mode only). In the coupled dual-time
+    // mode nDof covers the stacked stages, so each stage row carries its own
+    // step sizes (prototype: pseudo_dt = empty_like(F)); in decoupled mode
+    // every pseudo stepper owns one array of length N.
+    if (params_.localDt) {
+        o_dt_        = mem_.wrapOrMalloc(nDof_);
+        o_sigma_     = mem_.wrapOrMalloc(nDof_);
+        o_sigmaPrev_ = mem_.wrapOrMalloc(nDof_);
+    }
 }
 
 void RungeKuttaStepper::setRhs(RhsFunction rhs) {
@@ -55,8 +65,11 @@ void RungeKuttaStepper::setRhs(RhsFunction rhs) {
 }
 
 void RungeKuttaStepper::rkStep(occa::memory &o_u, occa::memory &o_uNew,
-                               occa::memory &o_fNew) {
+                               occa::memory &o_fNew, bool useLocalDt) {
     ensureRkKernels();
+    if (useLocalDt) {
+        ensureLocalKernels();
+    }
     const int n    = static_cast<int>(nDof_);
     const int s    = table_.nStages;
     const auto nSz = static_cast<std::size_t>(nDof_);
@@ -65,14 +78,25 @@ void RungeKuttaStepper::rkStep(occa::memory &o_u, occa::memory &o_uNew,
     occa::memory k0 = o_K_.slice(0, nDof_);
     blas_.copy(nDof_, o_f_, k0);
 
+    // Same Butcher recurrence with a scalar dt or a per-DOF dt array; only
+    // the launched kernels differ.
     for (int stage = 1; stage < s; ++stage) {
-        rkStageCombine_(n, dt_, stage, s, o_A_, o_u, o_K_, o_uStage_);
+        if (useLocalDt) {
+            rkStageCombineLocalDt_(n, o_dt_, stage, s, o_A_, o_u, o_K_,
+                                   o_uStage_);
+        } else {
+            rkStageCombine_(n, dt_, stage, s, o_A_, o_u, o_K_, o_uStage_);
+        }
         occa::memory kS =
             o_K_.slice(nSz * static_cast<std::size_t>(stage), nSz);
         rhs_(o_uStage_, kS);
     }
 
-    rkFinalUpdate_(n, dt_, s, o_B_, o_u, o_K_, o_uNew);
+    if (useLocalDt) {
+        rkFinalUpdateLocalDt_(n, o_dt_, s, o_B_, o_u, o_K_, o_uNew);
+    } else {
+        rkFinalUpdate_(n, dt_, s, o_B_, o_u, o_K_, o_uNew);
+    }
     rhs_(o_uNew_, o_fNew);
 
     // FSAL row: K[s] = f_new (consumed by the error estimate).
@@ -109,6 +133,30 @@ void RungeKuttaStepper::updateDt(Real sigma, bool accepted, bool wasRejected) {
     dt_ = std::min(dt_, params_.maxGrowth * dtInit_);
     dt_ = std::max(dt_, params_.minStep);
     dt_ = std::min(dt_, maxStep_);
+}
+
+Real RungeKuttaStepper::computeErrorNormLocal() {
+    ensureLocalKernels();
+    const int n = static_cast<int>(nDof_);
+    rkWeightedSumLocalDt_(n, o_dt_, table_.nStages + 1, o_E_, o_K_, o_err_);
+    rkErrorNormLocal_(n, params_.rtol, params_.atol, o_u_, o_uNew_, o_err_,
+                      o_sigma_);
+    // Accept test of the prototype's per-DOF controller: max sigma < 1.
+    return blas_.amax(nDof_, o_sigma_);
+}
+
+void RungeKuttaStepper::updateDtLocal(bool accepted, bool wasRejected) {
+    ensureLocalKernels();
+    const int n = static_cast<int>(nDof_);
+    rkDtUpdateLocal_(n, -kAlpha * errorExponent_, kBeta * errorExponent_,
+                     params_.safety, params_.minFactor, params_.maxFactor,
+                     params_.maxGrowth * dtInit_, params_.minStep, maxStep_,
+                     (accepted && wasRejected) ? 1 : 0, o_sigma_, o_sigmaPrev_,
+                     o_dt_);
+}
+
+Real RungeKuttaStepper::dtMinLocal() {
+    return blas_.amin(nDof_, o_dt_);
 }
 
 Real RungeKuttaStepper::selectInitialStep(occa::memory &o_u) {
@@ -156,7 +204,7 @@ Real RungeKuttaStepper::advance(occa::memory o_u, Real /*t*/, Real dtMax) {
     for (;;) {
         taken           = dt_;
         const Real rmsU = blas_.nrm2(nDof_, o_u) / std::sqrt(Real(nDof_));
-        rkStep(o_u, o_uNew_, o_fNew_);
+        rkStep(o_u, o_uNew_, o_fNew_, /*useLocalDt=*/false);
         sigma = computeErrorNorm(rmsU, blas_.nrm2(nDof_, o_uNew_) /
                                            std::sqrt(Real(nDof_)));
         if (sigma < Real(1)) {
@@ -184,19 +232,61 @@ Real RungeKuttaStepper::advance(occa::memory o_u, Real /*t*/, Real dtMax) {
 void RungeKuttaStepper::setState(occa::memory &o_u0, Real phyDtCap) {
     blas_.copy(nDof_, o_u0, o_u_);
     rhs_(o_u_, o_f_);
-    maxStep_       = phyDtCap;
-    dt_            = std::min(selectInitialStep(o_u_), phyDtCap);
-    dtInit_        = dt_;
+    maxStep_ = phyDtCap;
+    dt_      = std::min(selectInitialStep(o_u_), phyDtCap);
+    dtInit_  = dt_;
+    if (params_.localDt) {
+        // Uniform fill with the scalar heuristic (prototype set_new_state):
+        // per-DOF divergence comes from the PI updates, not the seed.
+        ensureLocalKernels();
+        const int n = static_cast<int>(nDof_);
+        fillReal_(n, dt_, o_dt_);
+        fillReal_(n, Real(1), o_sigmaPrev_);
+    }
     errorNormPrev_ = Real(1);
     stateValid_    = true;
 }
 
 void RungeKuttaStepper::stepPseudo(bool allowReject) {
+    if (params_.localDt) {
+        // Per-DOF controller (prototype step(), non-cell branch): one PI
+        // factor per DOF, accept iff max sigma < 1. The dt update runs on
+        // every attempt (factor clamps apply unconditionally, unlike the
+        // scalar controller); sigma_prev is committed from the final
+        // attempt only.
+        bool wasRejected = false;
+        for (;;) {
+            rkStep(o_u_, o_uNew_, o_fNew_, /*useLocalDt=*/true);
+            const bool accepted = computeErrorNormLocal() < Real(1);
+            updateDtLocal(accepted, wasRejected);
+            if (accepted) {
+                break;
+            }
+            // Single-attempt mode (prototype step(reject=False)): the
+            // attempt is unconditionally accepted, but the controller still
+            // adapts dt for the next pseudo step.
+            if (!allowReject) {
+                break;
+            }
+            // Guard against an endless loop when the step has bottomed out
+            // at minStep
+            if (dtMinLocal() <= params_.minStep) {
+                break;
+            }
+            wasRejected = true;
+        }
+
+        blas_.copy(nDof_, o_sigma_, o_sigmaPrev_);
+        blas_.copy(nDof_, o_uNew_, o_u_);
+        blas_.copy(nDof_, o_fNew_, o_f_);
+        return;
+    }
+
     bool wasRejected = false;
     Real sigma       = Real(1);
     for (;;) {
         const Real rmsU = blas_.nrm2(nDof_, o_u_) / std::sqrt(Real(nDof_));
-        rkStep(o_u_, o_uNew_, o_fNew_);
+        rkStep(o_u_, o_uNew_, o_fNew_, /*useLocalDt=*/false);
         sigma = computeErrorNorm(rmsU, blas_.nrm2(nDof_, o_uNew_) /
                                            std::sqrt(Real(nDof_)));
         if (sigma < Real(1)) {
@@ -228,7 +318,7 @@ void RungeKuttaStepper::stepPseudo(bool allowReject) {
 
 void RungeKuttaStepper::stepFixed(Real dt) {
     dt_ = dt;
-    rkStep(o_u_, o_uNew_, o_fNew_);
+    rkStep(o_u_, o_uNew_, o_fNew_, /*useLocalDt=*/false);
     blas_.copy(nDof_, o_uNew_, o_u_);
     blas_.copy(nDof_, o_fNew_, o_f_);
 }

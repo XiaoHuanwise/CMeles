@@ -15,7 +15,11 @@
 /// Coupled mode advances the stacked state $[u^{n+c_2}, u^{n+1}]$ with a
 /// single pseudo stepper; decoupled mode (DITR only) advances each stage
 /// with its own pseudo stepper and refreshes the other stage's residual
-/// after every half-iteration. $u^{n-1}$ and $\theta = \Delta t^{n-1} / \Delta t^n$ are maintained internally for U3R1,
+/// after every half-iteration. The pseudo stepper's adaptive step control
+/// is global (scalar RMS controller) or local (one pseudo step size per
+/// modal coefficient, stacked stages carrying their own arrays in coupled
+/// mode) per rkParams.localDt — config [time_marching] pseudo_dt_mode.
+/// $u^{n-1}$ and $\theta = \Delta t^{n-1} / \Delta t^n$ are maintained internally for U3R1,
 /// whose first physical step starts with the U2R1 reconstruction (no $u^{n-1}$ exists yet; also after a restart).
 ///
 /// Reference: docs/tech_docs/time_marching/implicit_time_marching.md and

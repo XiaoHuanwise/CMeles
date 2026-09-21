@@ -489,6 +489,65 @@ max_factor = 1.0
     return ok;
 }
 
+// ---------------------------------------------------------------------------
+// 9. [time_marching] pseudo_dt_mode (global / local adaptive pseudo dt)
+// ---------------------------------------------------------------------------
+
+static bool testPseudoDtModeKey() {
+    std::cout << "Test 9: pseudo_dt_mode key\n";
+    bool ok = true;
+
+    // Unset keeps the global (scalar) default; "local" parses through;
+    // unknown names must throw.
+    const std::string unset     = R"(
+[time_marching]
+t_final = 1.0
+)";
+    const std::string unsetPath = writeTempToml(unset);
+    try {
+        Config cfg(unsetPath);
+        ok &= check(cfg.timePseudoDtMode() == PseudoDtMode::Global,
+                    "pseudo_dt_mode default (global)");
+    } catch (const std::exception &e) {
+        std::cout << "  FAIL unset pseudo_dt_mode threw: " << e.what() << "\n";
+        ok = false;
+    }
+    std::remove(unsetPath.c_str());
+
+    const std::string good     = R"(
+[time_marching]
+t_final = 1.0
+pseudo_dt_mode = "local"
+)";
+    const std::string goodPath = writeTempToml(good);
+    try {
+        Config cfg(goodPath);
+        ok &= check(cfg.timePseudoDtMode() == PseudoDtMode::Local,
+                    "pseudo_dt_mode (parsed)");
+    } catch (const std::exception &e) {
+        std::cout << "  FAIL explicit pseudo_dt_mode threw: " << e.what()
+                  << "\n";
+        ok = false;
+    }
+    std::remove(goodPath.c_str());
+
+    const std::string bad     = R"(
+[time_marching]
+t_final = 1.0
+pseudo_dt_mode = "scalar"
+)";
+    const std::string badPath = writeTempToml(bad);
+    bool threw                = false;
+    try {
+        Config cfg(badPath);
+    } catch (const std::exception &) {
+        threw = true;
+    }
+    ok &= check(threw, "unknown pseudo_dt_mode throws");
+    std::remove(badPath.c_str());
+    return ok;
+}
+
 int main() {
     bool ok = true;
     struct Case {
@@ -504,6 +563,7 @@ int main() {
         {"testFluxTypeNames", testFluxTypeNames},
         {"testLogValidation", testLogValidation},
         {"testControllerKeys", testControllerKeys},
+        {"testPseudoDtModeKey", testPseudoDtModeKey},
     };
     for (const auto &c : cases) {
         const bool r = c.fn();

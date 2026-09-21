@@ -11,6 +11,10 @@
 //
 // Butcher coefficients (A, B, E) are passed as device arrays and read at
 // runtime — the RK variants differ only by data, not by kernel code.
+//
+// The *LocalDt variants take the step size as a per-DOF array dt[d]
+// instead of a scalar; they back the local (modal-coefficient-level)
+// adaptive pseudo time stepping of RungeKuttaStepper (dual time stepping).
 
 // --- Simple explicit updates -------------------------------------------------
 
@@ -73,6 +77,119 @@
             acc += B[j] * K[j * N_dof + d];
         }
         u_new[d] = u[d] + dt * acc;
+    }
+}
+
+// --- Local (per-DOF) dt controller kernels ------------------------------------
+//
+// Same recurrences as the scalar-dt Butcher kernels above, with the step
+// size read per DOF: every scalar product dt * (...) becomes dt[d] * (...).
+// Used only by the pseudo stepper of the dual time-stepping driver
+// (RungeKuttaStepper in local-dt mode).
+
+// x[d] = value  (uniform fill; initialises the per-DOF dt / sigma_prev).
+@kernel void fillReal(const int N_dof, const Real value, Real *x) {
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        x[d] = value;
+    }
+}
+
+// u_stage[d] = u[d] + dt[d] * sum_{j < stage} A[stage][j] * K[j][d]
+@kernel void rkStageCombineLocalDt(const int N_dof, const Real *dt,
+                                   const int stage, const int n_stages,
+                                   const Real *A, const Real *u, const Real *K,
+                                   Real *u_stage) {
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        Real acc = 0.0;
+        for (int j = 0; j < stage; ++j) {
+            acc += A[stage * n_stages + j] * K[j * N_dof + d];
+        }
+        u_stage[d] = u[d] + dt[d] * acc;
+    }
+}
+
+// out[d] = dt[d] * sum_{j < n_terms} W[j] * K[j][d]   (embedded error vector).
+@kernel void rkWeightedSumLocalDt(const int N_dof, const Real *dt,
+                                  const int n_terms, const Real *W,
+                                  const Real *K, Real *out) {
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        Real acc = 0.0;
+        for (int j = 0; j < n_terms; ++j) {
+            acc += W[j] * K[j * N_dof + d];
+        }
+        out[d] = dt[d] * acc;
+    }
+}
+
+// u_new[d] = u[d] + dt[d] * sum_{j < n_stages} B[j] * K[j][d]
+@kernel void rkFinalUpdateLocalDt(const int N_dof, const Real *dt,
+                                  const int n_stages, const Real *B,
+                                  const Real *u, const Real *K, Real *u_new) {
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        Real acc = 0.0;
+        for (int j = 0; j < n_stages; ++j) {
+            acc += B[j] * K[j * N_dof + d];
+        }
+        u_new[d] = u[d] + dt[d] * acc;
+    }
+}
+
+// sigma[d] = max(sigma_floor, |err[d]| / (atol + max(|u[d]|, |u_new[d]|) * rtol))
+// (per-DOF normalised error of the embedded pair, floored at 1e-14).
+@kernel void rkErrorNormLocal(const int N_dof, const Real rtol,
+                              const Real atol, const Real *u,
+                              const Real *u_new, const Real *err, Real *sigma) {
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        const Real aerr = err[d] >= 0 ? err[d] : -err[d];
+        const Real au = u[d] >= 0 ? u[d] : -u[d];
+        const Real aun = u_new[d] >= 0 ? u_new[d] : -u_new[d];
+        const Real scale = atol + (au > aun ? au : aun) * rtol;
+        Real s = aerr / scale;
+        if (s < 1e-14) {
+            s = 1e-14;
+        }
+        sigma[d] = s;
+    }
+}
+
+// One per-DOF PI step-size update (prototype RungeKuttaStepper.step):
+// factor_d = safety * sigma_d^exp_prop * sigma_prev_d^exp_int, clamped to
+// [min_factor, max_factor] on every attempt (unlike the scalar controller,
+// which clamps only one side per outcome); on an accepted attempt that
+// follows a rejection, factor_d is further capped at 1. Then
+// dt[d] *= factor; dt[d] = min(dt[d], growth_cap); dt[d] clamped to
+// [min_step, max_step]. sigma_prev is NOT written here - the host commits
+// it (copy) only after the final attempt of the step.
+@kernel void rkDtUpdateLocal(const int N_dof, const Real exp_prop,
+                             const Real exp_int, const Real safety,
+                             const Real min_factor, const Real max_factor,
+                             const Real growth_cap, const Real min_step,
+                             const Real max_step, const int limit_to_one,
+                             const Real *sigma, const Real *sigma_prev,
+                             Real *dt) {
+    for (int d = 0; d < N_dof; ++d; @tile(TILE_SIZE, @outer, @inner)) {
+        Real factor =
+            safety * pow(sigma[d], exp_prop) * pow(sigma_prev[d], exp_int);
+        if (factor < min_factor) {
+            factor = min_factor;
+        }
+        if (factor > max_factor) {
+            factor = max_factor;
+        }
+        if (limit_to_one != 0 && factor > 1.0) {
+            factor = 1.0;
+        }
+        Real new_dt = dt[d] * factor;
+        if (new_dt > growth_cap) {
+            new_dt = growth_cap;
+        }
+        if (new_dt < min_step) {
+            new_dt = min_step;
+        }
+        if (new_dt > max_step) {
+            new_dt = max_step;
+        }
+        dt[d] = new_dt;
     }
 }
 

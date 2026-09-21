@@ -197,6 +197,18 @@ const char *timeMethodName(TimeMethod t) noexcept {
     }
 }
 
+PseudoDtMode parsePseudoDtMode(const std::string &name) {
+    const std::string key = toLower(name);
+    if (key == "global") {
+        return PseudoDtMode::Global;
+    }
+    if (key == "local") {
+        return PseudoDtMode::Local;
+    }
+    throw std::invalid_argument("parsePseudoDtMode: unknown mode name '" +
+                                name + "'");
+}
+
 IcType parseIcType(const std::string &name) {
     const std::string key = toLower(name);
     if (key == "uniform") {
@@ -274,7 +286,7 @@ void Config::setDefaults() {
     time_max_pseudo_steps_ = 100;
     time_pseudo_method_    = TimeMethod::SspRk332;
     time_pseudo_dt_        = Real(0);
-    time_pseudo_single_dt_ = false;
+    time_pseudo_dt_mode_   = PseudoDtMode::Global;
     time_pseudo_reject_    = false;
     time_dual_decoupled_   = false;
 
@@ -396,8 +408,11 @@ Config::Config(const std::string &path) {
         time_pseudo_dt_   = getReal(*tbl, "pseudo_dt", time_pseudo_dt_);
         time_pseudo_rtol_ = getReal(*tbl, "pseudo_rtol", time_pseudo_rtol_);
         time_pseudo_atol_ = getReal(*tbl, "pseudo_atol", time_pseudo_atol_);
-        time_pseudo_single_dt_ =
-            getBool(*tbl, "pseudo_single_dt", time_pseudo_single_dt_);
+        if (const auto mIt = tbl->find("pseudo_dt_mode"); mIt != tbl->end()) {
+            const std::string name =
+                mIt->second.value_or(std::string("global"));
+            time_pseudo_dt_mode_ = parsePseudoDtMode(name);
+        }
         time_pseudo_reject_ =
             getBool(*tbl, "pseudo_reject", time_pseudo_reject_);
         time_dual_decoupled_ =

@@ -98,6 +98,18 @@ constexpr bool isDualTimeMethod(TimeMethod t) noexcept {
            t == TimeMethod::DitrU2R1 || t == TimeMethod::DitrU3R1;
 }
 
+/// @brief Adaptive pseudo-dt granularity of the dual-time pseudo stepper.
+enum class PseudoDtMode : int {
+    Global = 0, ///< Single scalar dt, RMS-based controller (default).
+    Local  = 1  ///< One pseudo dt per modal coefficient (per-DOF controller).
+};
+
+/// @brief Parse a pseudo-dt-mode name string into a \p PseudoDtMode.
+///
+/// Accepted names (case-insensitive): "global", "local". Throws
+/// std::invalid_argument for unknown names.
+PseudoDtMode parsePseudoDtMode(const std::string &name);
+
 /// @brief Initial-condition type.
 enum class IcType : int {
     Uniform = 0, ///< Constant free stream from the [flow] section.
@@ -322,10 +334,13 @@ public:
         return time_pseudo_atol_;
     }
 
-    /// @brief Whether the pseudo stepper uses a single (scalar) dt with the
-    ///        RMS-based controller (`step_single_dt` in the prototype).
-    bool timePseudoSingleDt() const noexcept {
-        return time_pseudo_single_dt_;
+    /// @brief Adaptive pseudo-dt granularity of the dual-time pseudo
+    ///        stepper (`pseudo_dt_mode` in the prototype's terms:
+    ///        `is_single_dt` false = Local). A fixed pseudo step
+    ///        ([time_marching] pseudo_dt > 0) takes precedence over both
+    ///        adaptive modes.
+    PseudoDtMode timePseudoDtMode() const noexcept {
+        return time_pseudo_dt_mode_;
     }
 
     /// @brief Whether a rejected pseudo step may retry with a smaller dt
@@ -442,24 +457,24 @@ private:
 
     BcType bc_type_ = BcType::Farfield;
 
-    TimeMethod time_method_        = TimeMethod::SspRk3;
-    Real time_cfl_                 = Real(0.2);
-    Real time_dt_                  = Real(0);
-    Real time_final_               = Real(1);
-    Real time_rtol_                = Real(1e-6);
-    Real time_atol_                = Real(1e-6);
-    Real time_safety_              = Real(0.9);
-    Real time_min_factor_          = Real(0.2);
-    Real time_max_factor_          = Real(5);
-    Real time_max_growth_          = Real(10);
-    int time_max_pseudo_steps_     = 100;
-    TimeMethod time_pseudo_method_ = TimeMethod::SspRk332;
-    Real time_pseudo_dt_           = Real(0);
-    Real time_pseudo_rtol_         = Real(0); ///< <= 0: automatic heuristic.
-    Real time_pseudo_atol_         = Real(0); ///< <= 0: automatic heuristic.
-    bool time_pseudo_single_dt_    = false;
-    bool time_pseudo_reject_       = false;
-    bool time_dual_decoupled_      = false;
+    TimeMethod time_method_           = TimeMethod::SspRk3;
+    Real time_cfl_                    = Real(0.2);
+    Real time_dt_                     = Real(0);
+    Real time_final_                  = Real(1);
+    Real time_rtol_                   = Real(1e-6);
+    Real time_atol_                   = Real(1e-6);
+    Real time_safety_                 = Real(0.9);
+    Real time_min_factor_             = Real(0.2);
+    Real time_max_factor_             = Real(5);
+    Real time_max_growth_             = Real(10);
+    int time_max_pseudo_steps_        = 100;
+    TimeMethod time_pseudo_method_    = TimeMethod::SspRk332;
+    Real time_pseudo_dt_              = Real(0);
+    Real time_pseudo_rtol_            = Real(0); ///< <= 0: automatic heuristic.
+    Real time_pseudo_atol_            = Real(0); ///< <= 0: automatic heuristic.
+    PseudoDtMode time_pseudo_dt_mode_ = PseudoDtMode::Global;
+    bool time_pseudo_reject_          = false;
+    bool time_dual_decoupled_         = false;
 
     IcType ic_type_     = IcType::Uniform;
     std::string ic_rho_ = "1";

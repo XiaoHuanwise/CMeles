@@ -13,12 +13,16 @@
 ///      adaptive-mode acceptance behaviour.
 ///   3. Dual time stepping: BackwardEuler (order 1) and DITR U2R2/U2R1/U3R1
 ///      physical-time convergence orders.
+///   4. Local (per-DOF) adaptive pseudo dt: step-size differentiation on a
+///      two-rate stiff ODE, and dual-time orders driven by the local-dt
+///      pseudo stepper.
 
 #include <occa.hpp>
 
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <type_traits>
 #include <vector>
@@ -26,6 +30,7 @@
 #include "blas/Blas.hpp"
 #include "common/Types.hpp"
 #include "core/DeviceMemoryManager.hpp"
+#include "math/MathOps.hpp"
 #include "time/ButcherTable.hpp"
 #include "time/DualStepper.hpp"
 #include "time/ImplicitResidual.hpp"
@@ -84,6 +89,53 @@ struct DecayOde {
 
     Real exactScale() const {
         return std::exp(lambda); // u(1) = e^lambda u0
+    }
+};
+
+/// @brief Two-rate stiff ODE context: u'_i = lambda_i * u_i with
+///        lambda_i = -1 (even indices, mild) or -1000 (odd indices,
+///        stiff). Exercises the per-DOF step-size differentiation of the
+///        local-dt controller.
+struct MultiRateOde {
+    occa::device &device;
+    DeviceMemoryManager &mem;
+    MathOps math;
+    int n;
+    std::vector<Real> u0Host;  ///< Host source of o_u0 (must outlive the wrap).
+    std::vector<Real> lamHost; ///< Host source of o_lam (per-DOF lambda).
+    occa::memory o_u0;
+    occa::memory o_lam;
+
+    static Real lambdaAt(int i) {
+        return (i % 2 == 0) ? Real(-1) : Real(-1000);
+    }
+
+    MultiRateOde(occa::device &dev, DeviceMemoryManager &m, int nDof)
+        : device(dev), mem(m), math(dev, m), n(nDof) {
+        u0Host.resize(static_cast<std::size_t>(nDof));
+        lamHost.resize(static_cast<std::size_t>(nDof));
+        for (int i = 0; i < nDof; ++i) {
+            u0Host[static_cast<std::size_t>(i)] =
+                Real(1) + Real(0.25) * Real(i);
+            lamHost[static_cast<std::size_t>(i)] = lambdaAt(i);
+        }
+        o_u0  = mem.wrapOrMalloc(u0Host.data(), nDof);
+        o_lam = mem.wrapOrMalloc(lamHost.data(), nDof);
+    }
+
+    /// res = lambda .* u  (Hadamard with the per-DOF lambda array).
+    RhsFunction rhs() const {
+        MathOps mo         = math;
+        occa::memory lam   = o_lam;
+        occa::dim_t nDofSz = n;
+        return [mo, lam, nDofSz](occa::memory u, occa::memory res) mutable {
+            occa::memory x = lam, y = u, z = res;
+            mo.vmul(nDofSz, x, y, z);
+        };
+    }
+
+    Real exactAt(int i, Real t) const {
+        return std::exp(lambdaAt(i) * t) * u0Host[static_cast<std::size_t>(i)];
     }
 };
 
@@ -422,12 +474,160 @@ static bool testDualTime() {
     return ok;
 }
 
+// ---------------------------------------------------------------------------
+// 5. Local (per-DOF) adaptive pseudo dt
+// ---------------------------------------------------------------------------
+
+static bool testLocalDtPseudo() {
+    std::cout << "Test 5: local (per-DOF) adaptive pseudo dt\n";
+    occa::device device({{"mode", "Serial"}});
+    DeviceMemoryManager mem(device);
+
+    bool ok = true;
+
+    // ---- 5a. Standalone local controller on the two-rate stiff ODE ------
+    {
+        MultiRateOde ode(device, mem, 24);
+        RungeKuttaStepper::Params params;
+        params.rtol    = Real(1e-3);
+        params.atol    = Real(1e-3);
+        params.localDt = true;
+        RungeKuttaStepper stepper(device, mem, ode.rhs(), ode.n, kSspRk332,
+                                  params);
+
+        occa::memory o_u  = mem.wrapOrMalloc(static_cast<occa::dim_t>(ode.n));
+        occa::memory o_u0 = ode.o_u0;
+        Blas blas(device, mem);
+        blas.copy(ode.n, o_u0, o_u);
+        stepper.setState(o_u, Real(1e30));
+
+        // Pseudo stepping with rejection enabled (stable sigma ~ 1
+        // equilibrium for the stiff entries). The step-size differentiation
+        // is checked early (step 12): once the stiff component has decayed
+        // to the atol floor, its normalised error collapses and the
+        // controller correctly lets its dt grow to the cap as well, so a
+        // late readout would not show the two-rate split.
+        for (int step = 0; step < 12; ++step) {
+            stepper.stepPseudo(/*allowReject=*/true);
+        }
+
+        std::vector<Real> dth(static_cast<std::size_t>(ode.n));
+        readResult(mem, stepper.localDt(), dth.data(), ode.n);
+
+        // Step-size differentiation: every entry positive/finite, and the
+        // mild group (even, |lambda| = 1) sits well above the stiff group
+        // (odd, |lambda| = 1000) after the PI transients.
+        Real dtMildMin  = std::numeric_limits<Real>::infinity();
+        Real dtStiffMax = Real(0);
+        for (int i = 0; i < ode.n; ++i) {
+            const Real dtv = dth[static_cast<std::size_t>(i)];
+            ok &= (dtv > Real(0)) && std::isfinite(dtv);
+            if (i % 2 == 0) {
+                dtMildMin = std::min(dtMildMin, dtv);
+            } else {
+                dtStiffMax = std::max(dtStiffMax, dtv);
+            }
+        }
+        std::cout << "  dt mild_min = " << dtMildMin
+                  << ", stiff_max = " << dtStiffMax << "\n";
+        ok &= dtMildMin > Real(4) * dtStiffMax;
+
+        for (int step = 12; step < 60; ++step) {
+            stepper.stepPseudo(/*allowReject=*/true);
+        }
+
+        std::vector<Real> uh(static_cast<std::size_t>(ode.n));
+        readResult(mem, stepper.state(), uh.data(), ode.n);
+
+        // Behavioural check: with per-DOF steps of at most ~10 * dt_init
+        // (<< 1/|lambda_mild|) the mild entries barely decay, while the
+        // stiff entries are damped by more than an order of magnitude
+        // relative to the mild group. Their sign alternates near the
+        // stability edge (R(z) < 0), so compare magnitudes.
+        Real mildMin  = std::numeric_limits<Real>::infinity();
+        Real stiffMax = Real(0);
+        for (int i = 0; i < ode.n; ++i) {
+            const Real ratio = std::abs(uh[static_cast<std::size_t>(i)]) /
+                               ode.u0Host[static_cast<std::size_t>(i)];
+            ok &= std::isfinite(ratio) && ratio > Real(0);
+            if (i % 2 == 0) {
+                mildMin = std::min(mildMin, ratio);
+            } else {
+                stiffMax = std::max(stiffMax, ratio);
+            }
+        }
+        std::cout << "  u/u0 mild_min = " << mildMin
+                  << ", stiff_max = " << stiffMax << "\n";
+        ok &= mildMin > Real(0.5);
+        ok &= stiffMax < Real(0.1);
+    }
+
+    // ---- 5b. Dual time stepping driven by the local-dt pseudo stepper ---
+    {
+        DecayOde ode(device, mem, Real(-1), 11);
+
+        DualStepper::Params beLocal;
+        beLocal.rtol             = kSinglePrecision ? Real(1e-4) : Real(1e-9);
+        beLocal.atol             = kSinglePrecision ? Real(1e-7) : Real(1e-12);
+        beLocal.maxPseudoSteps   = 300;
+        beLocal.rkParams.rtol    = Real(1e-3);
+        beLocal.rkParams.atol    = Real(1e-3);
+        beLocal.rkParams.localDt = true;
+
+        DualStepper::Params ditrLocal      = beLocal;
+        DualStepper::Params decoupledLocal = beLocal;
+        decoupledLocal.decoupled           = true;
+
+        auto makeBE = [&] {
+            return std::make_unique<BackwardEulerResidual>(device, mem,
+                                                           ode.rhs(), ode.n);
+        };
+        auto makeU2R2 = [&] {
+            return std::make_unique<DitrResidual>(device, mem, ode.rhs(), ode.n,
+                                                  DitrResidual::Variant::U2R2);
+        };
+
+        {
+            Real errors[3];
+            for (int k = 0; k < 3; ++k) {
+                errors[k] = dualStepError(device, mem, ode,
+                                          Real(0.1) / std::pow(Real(2), k),
+                                          makeBE, beLocal);
+            }
+            const Real p = measuredOrder(errors);
+            std::cout << "  be+local  errors " << errors[0] << " -> "
+                      << errors[2] << ", order " << p << "\n";
+            ok &= p > Real(0.8) && p < Real(1.2);
+        }
+        {
+            const Real e1 =
+                dualStepError(device, mem, ode, Real(0.1), makeU2R2, ditrLocal);
+            const Real e2    = dualStepError(device, mem, ode, Real(0.05),
+                                             makeU2R2, ditrLocal);
+            const Real e1Dec = dualStepError(device, mem, ode, Real(0.1),
+                                             makeU2R2, decoupledLocal);
+            const Real e2Dec = dualStepError(device, mem, ode, Real(0.05),
+                                             makeU2R2, decoupledLocal);
+            std::cout << "  u2r2+local " << e1 << " -> " << e2 << "\n"
+                      << "  decou+local " << e1Dec << " -> " << e2Dec << "\n";
+            if (kSinglePrecision) {
+                ok &= e1 < Real(1e-3) && e1Dec < Real(1e-3);
+            } else {
+                ok &= e2 < Real(0.4) * e1;
+                ok &= e2Dec < Real(0.4) * e1Dec;
+            }
+        }
+    }
+    return ok;
+}
+
 int main() {
     bool ok = true;
     ok &= testSimpleExplicit();
     ok &= testEmbeddedRkOrders();
     ok &= testAdaptiveMode();
     ok &= testDualTime();
+    ok &= testLocalDtPseudo();
 
     std::cout << (ok ? "ALL TIME STEPPER TESTS PASSED\n"
                      : "TIME STEPPER TESTS FAILED\n");

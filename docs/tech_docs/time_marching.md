@@ -8,7 +8,7 @@
 - **[显式自适应时间推进](time_marching/explicit_adaptive_time_marching.md)** — 嵌入式 RK 对与 PI 步长控制
   - [显式 RK 一般形式](time_marching/explicit_adaptive_time_marching.md#一显式-rk-方法的一般形式)
   - [嵌入式 RK 对](time_marching/explicit_adaptive_time_marching.md#二嵌入式-rk-对)
-  - [PI 步长控制器](time_marching/explicit_adaptive_time_marching.md#三pi-步长控制器)
+  - [PI 步长控制器](time_marching/explicit_adaptive_time_marching.md#三pi-步长控制器)（含 [局部逐自由度控制器](time_marching/explicit_adaptive_time_marching.md#34-局部逐自由度自适应控制器)）
   - [DG-DITR 双时间步中的应用](time_marching/explicit_adaptive_time_marching.md#四在-dg-ditr-双时间步格式中的应用)
 - **[隐式时间推进](time_marching/implicit_time_marching.md)** — DITR 方法与双时间步法
   - [DITR 理论基础](time_marching/implicit_time_marching.md#一ditr-方法理论基础)
@@ -87,11 +87,11 @@ $$
 | `StepperBase.hpp` | 抽象基类：虚接口 `advance(u, t, dt) -> 实际步长` + 公共上下文（device/mem/rhs/Blas）与跨 stepper 共享的 Euler 更新内核 |
 | `SimpleExplicitStepper.{hpp,cpp}` | `EulerStepper`（1 阶）、`SspRk3Stepper`（Shu–Osher 3 阶，自持 `sspConvexCombine` 内核） |
 | `ButcherTable.hpp` | 6 张 constexpr Butcher 表（RK32/RK54/SSPRK221/321/332/432，系数取自原型与本文档） |
-| `RungeKuttaStepper.{hpp,cpp}` | 通用 embedded RK：Butcher 表为运行期数据（一次上传设备，内核运行期读取），FSAL、RMS 缩放误差、PI 控制器、Hairer 初始步长、`advanceFixed`（定步长伪推进），自持 3 个 Butcher 内核 |
+| `RungeKuttaStepper.{hpp,cpp}` | 通用 embedded RK：Butcher 表为运行期数据（一次上传设备，内核运行期读取），FSAL、Hairer 初始步长、双模式步长控制器——全局（RMS 误差 + 标量 PI，`pseudo_dt_mode = "global"` 默认）或局部（逐模态系数 $\Delta\tau_{lkj}$ + 逐 DOF PI，`pseudo_dt_mode = "local"`，仅伪时间步进），`advanceFixed`（定步长伪推进），自持标量与 LocalDt 两套 Butcher 内核及控制器内核 |
 | `ImplicitResidual.{hpp,cpp}` | 抽象类 `TemporalResidual` 与其实现 `BackwardEulerResidual`、`DitrResidual`（U2R2/U2R1/U3R1 单类 + 变体系数）：仅构造时间残差 $\mathcal{F}$（统一签名，单级方案忽略多级参数），含耦合预条件子与解耦每级残差 |
-| `DualStepper.{hpp,cpp}` | `DualStepper`（持有 `unique_ptr<TemporalResidual>`）：伪时间自适应 RK 推进至 $\|\mathcal{F}\|_\infty$ 收敛（REF_STEP = 5 参考范数，范数经 `Blas::amax` 设备端分级归约），耦合/解耦两种模式，内部维护 $u^{n-1}$ 与 $\theta$ |
-| `StepperFactory.{hpp,cpp}` | `StepperFactory` 类型别名与 `makeStepperFactory(const Config&)`：[time_marching] method → 具体 stepper 工厂的唯一运行期分派点（含 Butcher 表选取与容差提取；双时间伪步进器的局部容差默认取自动启发式 1e-3——单精度下比此更松会使伪时间迭代发散——可经 `pseudo_rtol`/`pseudo_atol` 覆盖；`dual_decoupled = true` 配 `method = "be"` 在此于配置期被拒绝——解耦分 stage 求解仅对两 stage 的 DITR 残差有意义） |
-| `okl/time_update.okl` | 向量更新内核（`explicitEulerUpdate`、`sspConvexCombine`、Butcher 阶段/误差内核、`vecCombine4/5/7`） |
+| `DualStepper.{hpp,cpp}` | `DualStepper`（持有 `unique_ptr<TemporalResidual>`）：伪时间自适应 RK 推进至 $\|\mathcal{F}\|_\infty$ 收敛（REF_STEP = 5 参考范数，范数经 `Blas::amax` 设备端分级归约），伪步进器可按 `pseudo_dt_mode` 选全局/局部控制器（局部模式经 `rkParams.localDt` 装配，耦合/解耦模式均支持），耦合/解耦两种模式，内部维护 $u^{n-1}$ 与 $\theta$ |
+| `StepperFactory.{hpp,cpp}` | `StepperFactory` 类型别名与 `makeStepperFactory(const Config&)`：[time_marching] method → 具体 stepper 工厂的唯一运行期分派点（含 Butcher 表选取与容差提取；双时间伪步进器的局部容差默认取自动启发式 1e-3——单精度下比此更松会使伪时间迭代发散——可经 `pseudo_rtol`/`pseudo_atol` 覆盖；伪时间步长模式经 `pseudo_dt_mode`（`"global"` 默认 / `"local"` 逐模态系数）装配，`pseudo_dt > 0` 固定步长优先；`dual_decoupled = true` 配 `method = "be"` 在此于配置期被拒绝——解耦分 stage 求解仅对两 stage 的 DITR 残差有意义） |
+| `okl/time_update.okl` | 向量更新内核（`explicitEulerUpdate`、`sspConvexCombine`、Butcher 阶段/误差内核、`vecCombine4/5/7`，以及局部伪时间步长的 `fillReal` / `*LocalDt` / `rkErrorNormLocal` / `rkDtUpdateLocal` 控制器内核） |
 
 要点：
 
