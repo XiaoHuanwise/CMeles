@@ -300,6 +300,39 @@ const char *outputStrategyName(OutputStrategy t) noexcept {
     }
 }
 
+OutputFormat parseOutputFormat(const std::string &name) {
+    const std::string key = toLower(name);
+    if (key == "hdf5") {
+        return OutputFormat::Hdf5;
+    }
+    if (key == "xdmf") {
+        return OutputFormat::Xdmf;
+    }
+    if (key == "tecplot" || key == "plt") {
+        return OutputFormat::Tecplot;
+    }
+    if (key == "all") {
+        return OutputFormat::All;
+    }
+    throw std::invalid_argument("parseOutputFormat: unknown format name '" +
+                                name + "'");
+}
+
+const char *outputFormatName(OutputFormat t) noexcept {
+    switch (t) {
+        case OutputFormat::Hdf5:
+            return "hdf5";
+        case OutputFormat::Xdmf:
+            return "xdmf";
+        case OutputFormat::Tecplot:
+            return "tecplot";
+        case OutputFormat::All:
+            return "all";
+        default:
+            return "unknown";
+    }
+}
+
 // ============================================================================
 // Config
 // ============================================================================
@@ -364,6 +397,7 @@ void Config::setDefaults() {
 
     output_enable_    = false;
     output_strategy_  = OutputStrategy::Direct;
+    output_format_    = OutputFormat::Hdf5;
     output_interval_  = 100;
     output_directory_ = "./results";
 
@@ -540,6 +574,10 @@ Config::Config(const std::string &path) {
             const std::string name =
                 sIt->second.value_or(std::string("direct"));
             output_strategy_ = parseOutputStrategy(name);
+        }
+        if (const auto fIt = tbl->find("format"); fIt != tbl->end()) {
+            const std::string name = fIt->second.value_or(std::string("hdf5"));
+            output_format_         = parseOutputFormat(name);
         }
         output_interval_  = getInt(*tbl, "interval", output_interval_);
         output_directory_ = getString(*tbl, "directory", output_directory_);

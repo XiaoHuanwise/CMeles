@@ -148,6 +148,20 @@ public:
         return dV2D_s_;
     }
 
+    /// @brief Vandermonde matrix at arbitrary host points, shape
+    ///        points.rows() $\times N_{\text{base}}$.
+    ///
+    /// $V(k, l) = \tilde{P}_{i_l}(r_k) \cdot \tilde{P}_{j_l}(s_k)$, where
+    /// row $k$ of \p points holds the evaluation point $(r_k, s_k)$. Used
+    /// to evaluate the DG polynomial away from the quadrature points on
+    /// the host (e.g. the boundary-inclusive visualization grid); the
+    /// point ordering is the caller's and need not follow the
+    /// column-major quadrature convention of vandermonde().
+    ///
+    /// Guarantees vandermondeAt(quadraturePoints()) == vandermonde()
+    /// (same recurrence, same outer products).
+    MatrixXr vandermondeAt(const MatrixX2r &points) const;
+
     // ---- Modal-nodal transforms ----
 
     /// @brief Modal to nodal: $u = V_{2D} \cdot \hat{u}$.

@@ -1,0 +1,66 @@
+# CMeles 2-D Riemann problem (Lax & Liu configuration 4) with the MR-WENO
+# limiter: four-quadrant initial data on [0, 1]^2 producing two shocks and
+# two contact discontinuities (the classic jet along the diagonal).
+#
+# Free (zero-gradient) boundaries: exactly neutral while the wall-adjacent
+# quadrants stay constant (the fastest signal reaches a wall at t = 0.266,
+# so t_final = 0.2 keeps a 33% margin). Run with:
+#   ./build/CMeles config/riemann2d.toml
+# then open results_riemann2d/solution_0000600.xmf in ParaView (or the
+# .plt files in Tecplot 360 with format = "tecplot"/"all").
+
+[basis]
+order = 2
+nq = 4
+
+[mesh]
+nx = 96
+ny = 96
+x0 = 0.0
+y0 = 0.0
+dx = 0.0104166666666667
+dy = 0.0104166666666667
+
+[bc]
+type = "free"
+
+[riemann]
+flux = "llf"
+
+[gas]
+gamma = 1.4
+
+[flow]
+rho = 1.1
+u = 0.0
+v = 0.0
+p = 1.1
+
+[time_marching]
+method = "ssprk3"
+cfl = 0.18
+t_final = 0.2
+
+[initial_condition]
+type = "expr"
+rho = "(y < 0.5) ? ((x < 0.5) ? 1.1 : 0.5065) : ((x < 0.5) ? 0.5065 : 1.1)"
+u = "(x < 0.5) ? 0.0 : 0.8939"
+v = "(y < 0.5) ? 0.0 : 0.8939"
+p = "(y < 0.5) ? ((x < 0.5) ? 1.1 : 0.35) : ((x < 0.5) ? 0.35 : 1.1)"
+
+[limiter]
+type = "mr-weno"
+
+[occa]
+mode = "OpenMP"
+
+[output]
+enable = true
+strategy = "direct"
+format = "xdmf"
+interval = 300
+directory = "./results_riemann2d"
+
+[log]
+level = 1
+interval = 100

@@ -6,5 +6,7 @@ target_sources(cmeles_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/FieldOutput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/HDF5Writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/SolutionWriter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/VizSampling.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/VizWriter.cpp
 )
 target_include_directories(cmeles_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

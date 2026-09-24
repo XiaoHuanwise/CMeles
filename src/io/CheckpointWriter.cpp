@@ -29,6 +29,7 @@ CheckpointWriter::CheckpointWriter(const Config &cfg, const DgField &field)
       polynomialOrder_(cfg.polynomialOrder()),
       numPoints1D_(field.numPoints1D()),
       elementType_(cfg.meshSplitTriangles() ? "tri" : "quad"),
+      format_(outputFormatName(cfg.outputFormat())),
       directory_(cfg.outputDirectory()) {
     nElem_  = field.numElements();
     nModes_ = field.numModes();
@@ -62,6 +63,10 @@ void CheckpointWriter::writeMesh() {
     writer.writeAttribute("N_q", numPoints1D_);
     writer.writeAttribute("N_modes", nModes_);
     writer.writeAttribute("element_type", elementType_);
+    // Output-format record: CMelesConvert inherits it when --format is not
+    // given (older mesh.h5 files simply lack the attribute and conversion
+    // falls back to the plain hdf5 behaviour).
+    writer.writeAttribute("format", format_);
     writer.writeDataset("x", coordsX_.data(), nTot_);
     writer.writeDataset("y", coordsY_.data(), nTot_);
     writer.flush();

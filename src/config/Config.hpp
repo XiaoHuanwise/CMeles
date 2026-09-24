@@ -178,6 +178,42 @@ OutputStrategy parseOutputStrategy(const std::string &name);
 /// @brief Convert an \p OutputStrategy back to its canonical string name.
 const char *outputStrategyName(OutputStrategy t) noexcept;
 
+/// @brief Solution-file format ([output] format): the plain HDF5 archive
+///        plus the opt-in visualization formats.
+enum class OutputFormat : int {
+    Hdf5 = 0,    ///< Plain solution_<step>.h5 (the previous behaviour).
+    Xdmf = 1,    ///< HDF5 + self-contained XDMF sidecar (ParaView cloud
+                 ///< maps; the pair solution_<step>.h5 / .xmf moves
+                 ///< together).
+    Tecplot = 2, ///< Classic binary PLT solution_<step>.plt (Tecplot 360).
+    All     = 3  ///< HDF5 + XDMF + PLT.
+};
+
+/// @brief Parse an output-format name string into an \p OutputFormat.
+///
+/// Accepted names (case-insensitive): "hdf5", "xdmf", "tecplot", "all".
+/// Throws std::invalid_argument for unknown names.
+OutputFormat parseOutputFormat(const std::string &name);
+
+/// @brief Convert an \p OutputFormat back to its canonical string name.
+const char *outputFormatName(OutputFormat t) noexcept;
+
+/// @brief Whether an \p OutputFormat requests the plain HDF5 file.
+constexpr bool formatWritesHdf5(OutputFormat f) noexcept {
+    return f == OutputFormat::Hdf5 || f == OutputFormat::Xdmf ||
+           f == OutputFormat::All;
+}
+
+/// @brief Whether an \p OutputFormat requests the XDMF sidecar.
+constexpr bool formatWritesXdmf(OutputFormat f) noexcept {
+    return f == OutputFormat::Xdmf || f == OutputFormat::All;
+}
+
+/// @brief Whether an \p OutputFormat requests the Tecplot PLT file.
+constexpr bool formatWritesTecplot(OutputFormat f) noexcept {
+    return f == OutputFormat::Tecplot || f == OutputFormat::All;
+}
+
 /// @brief TOML configuration file parser and parameter store.
 class Config {
 public:
@@ -479,6 +515,11 @@ public:
         return output_strategy_;
     }
 
+    /// @brief Solution-file format (see \p OutputFormat).
+    OutputFormat outputFormat() const noexcept {
+        return output_format_;
+    }
+
     /// @brief Number of time steps between two outputs ($\ge 1$ when
     ///        output is enabled).
     int outputInterval() const noexcept {
@@ -574,6 +615,7 @@ private:
 
     bool output_enable_             = false;
     OutputStrategy output_strategy_ = OutputStrategy::Direct;
+    OutputFormat output_format_     = OutputFormat::Hdf5;
     int output_interval_            = 100;
     std::string output_directory_   = "./results";
 

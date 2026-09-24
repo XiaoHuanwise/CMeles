@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "config/Config.hpp"
 #include "io/CheckpointConvert.hpp"
 
 namespace fs = std::filesystem;
@@ -25,9 +26,16 @@ namespace {
 void printUsage() {
     std::cerr
         << "Usage:\n"
-        << "  CMelesConvert <directory>\n"
+        << "  CMelesConvert [--format <hdf5|xdmf|tecplot|all>] <directory>\n"
         << "      Batch mode: mesh.h5 + checkpoint_*.h5 -> solution_*.h5\n"
-        << "  CMelesConvert <mesh.h5> <checkpoint.h5> [-o <out.h5>]\n";
+        << "  CMelesConvert [--format <...>] <mesh.h5> <checkpoint.h5> "
+           "[-o <out.h5>]\n"
+        << "      Single-file mode: converts one checkpoint; the output "
+           "defaults to\n"
+        << "      solution_<step>.h5 next to the checkpoint.\n"
+        << "  The output format defaults to the one recorded in mesh.h5 at "
+           "run time\n"
+        << "  ([output] format; plain hdf5 for older files).\n";
 }
 
 /// @brief checkpoint_<step>.h5 -> solution_<step>.h5 (same directory).
@@ -40,12 +48,23 @@ fs::path solutionPathFor(const fs::path &checkpoint) {
            ("solution_" + name.substr(std::string("checkpoint_").size()));
 }
 
-int runBatch(const fs::path &directory) {
+/// @brief Resolve the output format: explicit flag, else the mesh.h5
+///        record, else plain hdf5.
+OutputFormat resolveFormat(const std::string &explicitFormat,
+                           const fs::path &mesh) {
+    if (!explicitFormat.empty()) {
+        return parseOutputFormat(explicitFormat);
+    }
+    return convertReadMeshFormat(mesh.string());
+}
+
+int runBatch(const fs::path &directory, const std::string &explicitFormat) {
     const fs::path mesh = directory / "mesh.h5";
     if (!fs::exists(mesh)) {
         std::cerr << "CMelesConvert: no mesh.h5 in " << directory << "\n";
         return 1;
     }
+    const OutputFormat format = resolveFormat(explicitFormat, mesh);
     std::vector<fs::path> checkpoints;
     for (const auto &entry : fs::directory_iterator(directory)) {
         const std::string name = entry.path().filename().string();
@@ -63,7 +82,7 @@ int runBatch(const fs::path &directory) {
     }
     for (const auto &ckpt : checkpoints) {
         const fs::path out = solutionPathFor(ckpt);
-        convertCheckpoint(mesh.string(), ckpt.string(), out.string());
+        convertCheckpoint(mesh.string(), ckpt.string(), out.string(), format);
         std::cout << "CMelesConvert: " << ckpt.filename().string() << " -> "
                   << out.filename().string() << "\n";
     }
@@ -71,10 +90,12 @@ int runBatch(const fs::path &directory) {
 }
 
 int runSingle(const fs::path &mesh, const fs::path &checkpoint,
-              const std::string &explicitOut) {
+              const std::string &explicitOut,
+              const std::string &explicitFormat) {
     const fs::path out = explicitOut.empty() ? solutionPathFor(checkpoint)
                                              : fs::path(explicitOut);
-    convertCheckpoint(mesh.string(), checkpoint.string(), out.string());
+    const OutputFormat format = resolveFormat(explicitFormat, mesh);
+    convertCheckpoint(mesh.string(), checkpoint.string(), out.string(), format);
     std::cout << "CMelesConvert: " << checkpoint.filename().string() << " -> "
               << out.string() << "\n";
     return 0;
@@ -88,16 +109,25 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     try {
-        const fs::path first(argv[1]);
-        if (argc == 2) {
-            if (!fs::is_directory(first)) {
+        // Leading options: --format <name> (repeatable-tolerant: last wins).
+        std::string explicitFormat;
+        int first = 1;
+        while (first + 1 < argc && std::string(argv[first]) == "--format") {
+            explicitFormat = argv[first + 1];
+            // Validate early for a clear error message.
+            parseOutputFormat(explicitFormat);
+            first += 2;
+        }
+        const fs::path firstPath(argv[first]);
+        if (argc == first + 1) {
+            if (!fs::is_directory(firstPath)) {
                 printUsage();
                 return 1;
             }
-            return runBatch(first);
+            return runBatch(firstPath, explicitFormat);
         }
         std::string explicitOut;
-        for (int i = 3; i < argc; ++i) {
+        for (int i = first + 2; i < argc; ++i) {
             if (std::string(argv[i]) == "-o" && i + 1 < argc) {
                 explicitOut = argv[++i];
             } else {
@@ -105,7 +135,8 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
         }
-        return runSingle(argv[1], argv[2], explicitOut);
+        return runSingle(argv[first], argv[first + 1], explicitOut,
+                         explicitFormat);
     } catch (const std::exception &e) {
         std::cerr << "CMelesConvert: error: " << e.what() << "\n";
         return 1;

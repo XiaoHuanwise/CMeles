@@ -44,6 +44,16 @@ public:
     void writeGroupDataset(const std::string &group, const std::string &name,
                            const Real *data, size_t count);
 
+    /// @brief Write a 2-D row-major dataset into a subgroup (used for the
+    ///        interleaved visualization coordinates mesh/xyz).
+    void writeGroupDataset2D(const std::string &group, const std::string &name,
+                             const Real *data, size_t rows, size_t cols);
+
+    /// @brief Write a 1-D int dataset into a subgroup (used for the
+    ///        visualization connectivity mesh/connect).
+    void writeGroupDatasetInt(const std::string &group, const std::string &name,
+                              const int *data, size_t count);
+
     /// @brief Flush pending writes to disk (destruction closes cleanly).
     void flush();
 

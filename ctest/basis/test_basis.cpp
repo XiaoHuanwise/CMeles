@@ -245,6 +245,55 @@ bool testVandermonde2DOrthogonality() {
 // ---------------------------------------------------------------------------
 // Test 6: Modal-nodal round-trip
 // ---------------------------------------------------------------------------
+bool testVandermondeAt() {
+    std::cout << "\n=== Test 7: Vandermonde at arbitrary points ===\n";
+
+    bool allPass       = true;
+    constexpr Real tol = Real(1e3) * RealEpsilon;
+
+    for (int N = 1; N <= 3; ++N) {
+        const int Nq = N + 2;
+        BasisFunctions1D basis1D(N, Nq);
+        BasisFunctions2D basis2D(basis1D, N);
+
+        // At the quadrature points the arbitrary-point Vandermonde must
+        // reproduce the precomputed table (same recurrence, same outer
+        // products).
+        const MatrixXr Vat = basis2D.vandermondeAt(basis2D.quadraturePoints());
+        const Real tabErr = (Vat - basis2D.vandermonde()).cwiseAbs().maxCoeff();
+
+        // At the reference corners the values must match the closed forms
+        // Ptilde_k(1) = sqrt((2k+1)/2), Ptilde_k(-1) = (-1)^k Ptilde_k(1).
+        MatrixX2r corners(4, 2);
+        corners << -1, -1, 1, -1, 1, 1, -1, 1;
+        const MatrixXr Vc = basis2D.vandermondeAt(corners);
+        const auto &ij    = basis2D.indexMap();
+        Real cornerErr    = Real(0);
+        for (int k = 0; k < 4; ++k) {
+            for (int l = 0; l < basis2D.numBases(); ++l) {
+                const int i = ij(l, 0), j = ij(l, 1);
+                const Real p1 = std::sqrt((Real(2) * i + Real(1)) / Real(2));
+                const Real pj = std::sqrt((Real(2) * j + Real(1)) / Real(2));
+                Real expect   = p1 * pj;
+                if (corners(k, 0) < 0 && i % 2 == 1) {
+                    expect = -expect;
+                }
+                if (corners(k, 1) < 0 && j % 2 == 1) {
+                    expect = -expect;
+                }
+                cornerErr = std::max(cornerErr, std::abs(Vc(k, l) - expect));
+            }
+        }
+
+        const bool pass = tabErr < tol && cornerErr < tol;
+        std::cout << "  N=" << N << "  table_err=" << std::scientific << tabErr
+                  << "  corner_err=" << cornerErr << "  "
+                  << (pass ? "PASS" : "FAIL") << "\n";
+        allPass &= pass;
+    }
+    return allPass;
+}
+
 bool testModalNodalRoundtrip() {
     std::cout << "\n=== Test 6: Modal-nodal round-trip ===\n";
 
@@ -351,6 +400,7 @@ int main() {
     ok &= testVandermondeDerivative();
     ok &= testPascalTriangleMapping();
     ok &= testVandermonde2DOrthogonality();
+    ok &= testVandermondeAt();
     ok &= testModalNodalRoundtrip();
     ok &= testSumFactorization();
 

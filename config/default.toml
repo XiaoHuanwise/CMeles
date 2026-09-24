@@ -135,6 +135,13 @@ strategy = "direct"       # "direct" (strategy A: quadrature-point SoA files,
                           # ready for post-processing) | "checkpoint"
                           # (strategy B: modal-coefficient checkpoints +
                           # mesh.h5; convert offline with CMelesConvert).
+format = "hdf5"           # "hdf5" (plain archive, the default) | "xdmf"
+                          # (h5 + self-contained .xmf sidecar: ParaView opens
+                          # the .xmf for filled cloud maps) | "tecplot"
+                          # (classic binary .plt for Tecplot 360) | "all".
+                          # Applies to the direct strategy and to converted
+                          # checkpoint output (CMelesConvert inherits it,
+                          # overridable with --format).
 interval = 100            # Number of time steps between two outputs (>= 1
                           # when enabled).
 directory = "./results"   # Output directory, created if missing.

@@ -36,6 +36,7 @@ private:
     int polynomialOrder_;
     int numPoints1D_;
     std::string elementType_;
+    std::string format_; ///< [output] format name (inherited by conversion).
     std::string directory_;
 
     int nElem_   = 0;

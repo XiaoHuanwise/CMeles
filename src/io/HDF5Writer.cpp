@@ -41,6 +41,23 @@ void HDF5Writer::writeGroupDataset(const std::string &group,
     grp.createDataSet<Real>(name, HighFive::DataSpace({count})).write_raw(data);
 }
 
+void HDF5Writer::writeGroupDataset2D(const std::string &group,
+                                     const std::string &name, const Real *data,
+                                     size_t rows, size_t cols) {
+    auto grp =
+        file_.exist(group) ? file_.getGroup(group) : file_.createGroup(group);
+    grp.createDataSet<Real>(name, HighFive::DataSpace({rows, cols}))
+        .write_raw(data);
+}
+
+void HDF5Writer::writeGroupDatasetInt(const std::string &group,
+                                      const std::string &name, const int *data,
+                                      size_t count) {
+    auto grp =
+        file_.exist(group) ? file_.getGroup(group) : file_.createGroup(group);
+    grp.createDataSet<int>(name, HighFive::DataSpace({count})).write_raw(data);
+}
+
 void HDF5Writer::flush() {
     file_.flush();
 }

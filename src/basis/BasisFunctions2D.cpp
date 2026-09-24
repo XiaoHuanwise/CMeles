@@ -152,6 +152,23 @@ void BasisFunctions2D::buildVandermondeDerivatives2D() {
 // Modal-nodal transforms
 // ============================================================================
 
+MatrixXr BasisFunctions2D::vandermondeAt(const MatrixX2r &points) const {
+    MatrixXr V(points.rows(), N_base_);
+
+    // Evaluate the 1D orthonormal Legendre polynomials per point through
+    // the same three-term recurrence that builds the 1D tables, then take
+    // the outer product indexed by the Pascal-triangle mode map.
+    VectorXr Pr(N_ + 1), dPr(N_ + 1), Ps(N_ + 1), dPs(N_ + 1);
+    for (Eigen::Index k = 0; k < points.rows(); ++k) {
+        BasisFunctions1D::evalPolynomials(points(k, 0), N_, Pr, dPr);
+        BasisFunctions1D::evalPolynomials(points(k, 1), N_, Ps, dPs);
+        for (int l = 0; l < N_base_; ++l) {
+            V(k, l) = Pr(ij_map_(l, 0)) * Ps(ij_map_(l, 1));
+        }
+    }
+    return V;
+}
+
 VectorXr BasisFunctions2D::modalToNodal(const VectorXr &u_hat) const {
     // $u = V_{2D} \cdot \hat{u}$
     assert(u_hat.size() == N_base_ &&
