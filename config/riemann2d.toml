@@ -6,8 +6,9 @@
 # quadrants stay constant (the fastest signal reaches a wall at t = 0.266,
 # so t_final = 0.2 keeps a 33% margin). Run with:
 #   ./build/CMeles config/riemann2d.toml
-# then open results_riemann2d/solution_0000600.xmf in ParaView (or the
-# .plt files in Tecplot 360 with format = "tecplot"/"all").
+# then open results_riemann2d/riemann2d_series.xmf in ParaView for the
+# whole time series (or riemann2d_solution_0000600.xmf for one step; the
+# .plt files go to Tecplot 360 with format = "tecplot"/"all").
 
 [basis]
 order = 2

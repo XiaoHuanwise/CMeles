@@ -18,10 +18,20 @@
 #include "mesh/MeshGeometry.hpp"
 
 namespace {
-/// @brief Zero-padded solution file name with the given extension.
-std::string solutionFileName(long step, const char *ext) {
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "solution_%07ld%s", step, ext);
+/// @brief Zero-padded solution file name with the given extension:
+///        <prefix>_solution_<step><ext> (legacy solution_<step> when the
+///        Config was not built from a file and has no prefix).
+std::string solutionFileName(const std::string &prefix, long step,
+                             const char *ext) {
+    char buf[128];
+    const int n =
+        prefix.empty()
+            ? std::snprintf(buf, sizeof(buf), "solution_%07ld%s", step, ext)
+            : std::snprintf(buf, sizeof(buf), "%s_solution_%07ld%s",
+                            prefix.c_str(), step, ext);
+    if (n < 0 || n >= static_cast<int>(sizeof(buf))) {
+        throw std::runtime_error("solutionFileName: name truncated");
+    }
     return std::string(buf);
 }
 } // namespace
@@ -29,7 +39,9 @@ std::string solutionFileName(long step, const char *ext) {
 SolutionWriter::SolutionWriter(const Config &cfg, const DgField &field)
     : field_(field), gamma_(cfg.gamma()),
       polynomialOrder_(cfg.polynomialOrder()),
-      directory_(cfg.outputDirectory()), format_(cfg.outputFormat()) {
+      directory_(cfg.outputDirectory()), format_(cfg.outputFormat()),
+      prefix_(cfg.outputPrefix()),
+      seriesEnabled_(cfg.outputSeries() && formatWritesXdmf(format_)) {
     nElem_  = field.numElements();
     nModes_ = field.numModes();
 
@@ -127,7 +139,8 @@ void SolutionWriter::write(long step, Real time) {
     // --- HDF5 archive (plain or with the XDMF sidecar's heavy data). ---
     if (formatWritesHdf5(format_) || formatWritesXdmf(format_)) {
         const std::filesystem::path path =
-            std::filesystem::path(directory_) / solutionFileName(step, ".h5");
+            std::filesystem::path(directory_) /
+            solutionFileName(prefix_, step, ".h5");
         HDF5Writer writer(path.string());
         writer.writeAttribute("time", time);
         writer.writeAttribute("step", static_cast<int>(step));
@@ -146,9 +159,20 @@ void SolutionWriter::write(long step, Real time) {
             writer.flush();
             viz::writeXdmf(path.filename().string(),
                            (std::filesystem::path(directory_) /
-                            solutionFileName(step, ".xmf"))
+                            solutionFileName(prefix_, step, ".xmf"))
                                .string(),
                            topo_, time);
+            // Incrementally maintain the temporal-collection index:
+            // append this step and regenerate the (small) index file —
+            // the supported way to open the run as a time series in
+            // ParaView (see writeXdmfSeries).
+            if (seriesEnabled_) {
+                seriesSteps_.push_back({path.filename().string(), time});
+                viz::writeXdmfSeries(
+                    (std::filesystem::path(directory_) / seriesFileName())
+                        .string(),
+                    seriesSteps_, topo_);
+            }
         }
         writer.flush();
     }
@@ -165,9 +189,9 @@ void SolutionWriter::write(long step, Real time) {
         f.u    = u_.data();
         f.v    = v_.data();
         f.p    = p_.data();
-        viz::writeTecplotPlt(
-            (std::filesystem::path(directory_) / solutionFileName(step, ".plt"))
-                .string(),
-            f, topo_, time);
+        viz::writeTecplotPlt((std::filesystem::path(directory_) /
+                              solutionFileName(prefix_, step, ".plt"))
+                                 .string(),
+                             f, topo_, time);
     }
 }

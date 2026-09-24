@@ -57,7 +57,7 @@ std::vector<Real> readDataset(const HighFive::File &file,
 }
 } // namespace
 
-void convertCheckpoint(const std::string &meshPath,
+Real convertCheckpoint(const std::string &meshPath,
                        const std::string &checkpointPath,
                        const std::string &outPath, OutputFormat format) {
     // Step 1: mesh metadata + quadrature-point coordinates.
@@ -228,6 +228,7 @@ void convertCheckpoint(const std::string &meshPath,
             (p.parent_path() / (p.stem().string() + ".plt")).string(), f, topo,
             time);
     }
+    return time;
 }
 
 OutputFormat convertReadMeshFormat(const std::string &meshPath) {
@@ -237,4 +238,11 @@ OutputFormat convertReadMeshFormat(const std::string &meshPath) {
         return OutputFormat::Hdf5;
     }
     return parseOutputFormat(name);
+}
+
+bool convertReadMeshSeries(const std::string &meshPath) {
+    const HighFive::File mesh(meshPath, HighFive::File::ReadOnly);
+    int series = 1;
+    readAttributeOpt<int>(mesh, "series", series);
+    return series != 0;
 }

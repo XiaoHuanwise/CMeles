@@ -239,7 +239,8 @@ static bool testSolutionWriterUniform() {
     writer.write(3, Real(0.25));
 
     const std::string path =
-        (fs::path(kResultsDir) / "solution_0000003.h5").string();
+        (fs::path(kResultsDir) / "test_hdf5_scratch_solution_0000003.h5")
+            .string();
     const HighFive::File file(path, HighFive::File::ReadOnly);
     bool ok = true;
     ok &= checkReal(readAttr<Real>(file, "time"), Real(0.25), "time attr");
@@ -317,15 +318,18 @@ static bool testCheckpointConvertRoundtrip() {
     CheckpointWriter checkpoint(cfg, field);
     checkpoint.writeMesh();
     checkpoint.write(5, Real(0.5));
-    const std::string meshPath = (fs::path(kResultsDir) / "mesh.h5").string();
+    const std::string meshPath =
+        (fs::path(kResultsDir) / "test_hdf5_scratch_mesh.h5").string();
     const std::string ckptPath =
-        (fs::path(kResultsDir) / "checkpoint_0000005.h5").string();
+        (fs::path(kResultsDir) / "test_hdf5_scratch_checkpoint_0000005.h5")
+            .string();
     const std::string convPath =
         (fs::path(kResultsDir) / "converted.h5").string();
     convertCheckpoint(meshPath, ckptPath, convPath);
 
     const HighFive::File direct(
-        (fs::path(kResultsDir) / "solution_0000005.h5").string(),
+        (fs::path(kResultsDir) / "test_hdf5_scratch_solution_0000005.h5")
+            .string(),
         HighFive::File::ReadOnly);
     const HighFive::File converted(convPath, HighFive::File::ReadOnly);
     bool ok = true;
@@ -383,8 +387,9 @@ static bool testSolverEndToEnd() {
     // already covers the final state, so exactly 4 files exist.
     const std::string outDir = kScratchDir + "/e2e";
     for (long step = 0; step <= 3; ++step) {
-        char name[32];
-        std::snprintf(name, sizeof(name), "solution_%07ld.h5", step);
+        char name[64];
+        std::snprintf(name, sizeof(name), "test_hdf5_scratch_solution_%07ld.h5",
+                      step);
         const std::string path = (fs::path(outDir) / name).string();
         ok &= check(fs::exists(path), name);
         if (!fs::exists(path)) {
@@ -598,7 +603,8 @@ static bool testVizOutputFormats() {
 
     // --- HDF5 side: connectivity + attributes.
     const HighFive::File file(
-        (fs::path(kResultsDir) / "solution_0000009.h5").string(),
+        (fs::path(kResultsDir) / "test_hdf5_scratch_solution_0000009.h5")
+            .string(),
         HighFive::File::ReadOnly);
     std::vector<int> connect;
     file.getGroup("mesh").getDataSet("connect").read(connect);
@@ -615,7 +621,8 @@ static bool testVizOutputFormats() {
 
     // --- XDMF sidecar: well-formed references.
     const std::string xmfPath =
-        (fs::path(kResultsDir) / "solution_0000009.xmf").string();
+        (fs::path(kResultsDir) / "test_hdf5_scratch_solution_0000009.xmf")
+            .string();
     ok &= check(fs::exists(xmfPath), "xmf exists");
     std::string xmf;
     {
@@ -639,12 +646,15 @@ static bool testVizOutputFormats() {
                 "xmf xyz geometry");
     ok &= check(xmf.find(".h5:/mesh/xyz") != std::string::npos,
                 "xmf references mesh/xyz");
-    ok &= check(xmf.find("solution_0000009.h5:/mesh/connect") !=
+    ok &=
+        check(xmf.find("test_hdf5_scratch_solution_0000009.h5:/mesh/connect") !=
+                  std::string::npos,
+              "xmf references connect");
+    ok &= check(xmf.find("test_hdf5_scratch_solution_0000009.h5:/mesh/x") !=
                     std::string::npos,
-                "xmf references connect");
-    ok &= check(xmf.find("solution_0000009.h5:/mesh/x") != std::string::npos,
                 "xmf references x");
-    ok &= check(xmf.find("solution_0000009.h5:/rho") != std::string::npos,
+    ok &= check(xmf.find("test_hdf5_scratch_solution_0000009.h5:/rho") !=
+                    std::string::npos,
                 "xmf references rho");
     ok &= check(xmf.find("<Time Value=\"0.75\"/>") != std::string::npos,
                 "xmf time");
@@ -652,14 +662,46 @@ static bool testVizOutputFormats() {
                          "\"") != std::string::npos,
                 "xmf cell count");
 
+    // --- Temporal-collection index (incrementally maintained series). ---
+    const std::string seriesPath =
+        (fs::path(kResultsDir) / "test_hdf5_scratch_series.xmf").string();
+    ok &= check(fs::exists(seriesPath), "series exists");
+    {
+        std::string series;
+        std::FILE *s = std::fopen(seriesPath.c_str(), "r");
+        char sbuf[8192];
+        size_t n;
+        while ((n = std::fread(sbuf, 1, sizeof(sbuf), s)) > 0) {
+            series.append(sbuf, n);
+        }
+        std::fclose(s);
+        ok &= check(series.find("CollectionType=\"Temporal\"") !=
+                        std::string::npos,
+                    "series temporal collection");
+        ok &= check(series.find("test_hdf5_scratch_solution_0000009.h5:/rho") !=
+                        std::string::npos,
+                    "series references step data");
+        ok &= check(series.find("<Time Value=\"0.75\"/>") != std::string::npos,
+                    "series time value");
+        // One write call so far -> exactly one uniform step grid.
+        size_t nGrids = 0;
+        for (size_t p = series.find("GridType=\"Uniform\"");
+             p != std::string::npos;
+             p = series.find("GridType=\"Uniform\"", p + 1)) {
+            ++nGrids;
+        }
+        ok &= checkInt(static_cast<int>(nGrids), 1, "series step count");
+    }
+
     // --- PLT side: parse the file back and cross-check with the HDF5.
     const std::string pltPath =
-        (fs::path(kResultsDir) / "solution_0000009.plt").string();
+        (fs::path(kResultsDir) / "test_hdf5_scratch_solution_0000009.plt")
+            .string();
     ok &= check(fs::exists(pltPath), "plt exists");
     try {
         PltReader plt(pltPath);
         ok &= check(plt.buf.size() >= 8 &&
-                        std::string(plt.buf.data(), 8) == "#!TDV101",
+                        std::string(plt.buf.data(), 8) == "#!TDV112",
                     "plt magic");
         plt.pos = 8;
         ok &= checkInt(plt.int32(), 1, "plt byte order");
@@ -671,10 +713,14 @@ static bool testVizOutputFormats() {
         ok &= check(std::abs(plt.float32() - 299.0f) < 0.5f, "plt zone marker");
         plt.str(); // Zone name.
         ok &= checkInt(plt.int32(), -1, "plt parent zone");
+        ok &= checkInt(plt.int32(), 1, "plt strand id");
+        ok &= checkClose(plt.real64(), Real(0.75), "plt solution time");
+        ok &= checkInt(plt.int32(), -1, "plt zone color");
         ok &= checkInt(plt.int32(), 3, "plt zone type FEQUADRILATERAL");
-        // No data-packing field for V101 (readers assume block packing).
+        // V112 has no data-packing field (readers assume block packing).
         ok &= checkInt(plt.int32(), 0, "plt var locations");
         ok &= checkInt(plt.int32(), 0, "plt face neighbours");
+        ok &= checkInt(plt.int32(), 0, "plt user-defined neighbours");
         ok &= checkInt(plt.int32(), static_cast<int>(topo.nNodes),
                        "plt node count");
         ok &= checkInt(plt.int32(), static_cast<int>(topo.nCells),
@@ -689,8 +735,30 @@ static bool testVizOutputFormats() {
             ok &= checkInt(plt.int32(), (sizeof(Real) == 8) ? 2 : 1,
                            "plt var format");
         }
+        ok &= checkInt(plt.int32(), 0, "plt passive none");
         ok &= checkInt(plt.int32(), 0, "plt sharing none");
         ok &= checkInt(plt.int32(), -1, "plt connectivity sharing");
+        // Version >= 103 data section: per-variable min/max pairs. The
+        // rho pair (variable 2) must match the dataset extrema.
+        Real rhoMin = 0, rhoMax = 0;
+        for (int v = 0; v < 9; ++v) {
+            const Real lo = plt.real64();
+            const Real hi = plt.real64();
+            if (v == 2) {
+                rhoMin = lo;
+                rhoMax = hi;
+            }
+        }
+        {
+            const std::vector<Real> h5r = readDs(file, "rho");
+            Real lo = h5r[0], hi = h5r[0];
+            for (size_t k = 1; k < h5r.size(); ++k) {
+                lo = h5r[k] < lo ? h5r[k] : lo;
+                hi = h5r[k] > hi ? h5r[k] : hi;
+            }
+            ok &= checkClose(rhoMin, lo, "plt rho min/max pair") &&
+                  checkClose(rhoMax, hi, "plt rho min/max pair");
+        }
         // Nine data blocks; cross-check rho (block 2) with the HDF5 file.
         std::vector<Real> rho;
         for (int v = 0; v < 9; ++v) {
@@ -797,7 +865,7 @@ static bool testVizOutputFormats() {
         const std::string triPlt = (fs::path(kResultsDir) / "tri.plt").string();
         viz::writeTecplotPlt(triPlt, f, topo, Real(0));
         PltReader plt(triPlt);
-        ok &= check(std::string(plt.buf.data(), 8) == "#!TDV101",
+        ok &= check(std::string(plt.buf.data(), 8) == "#!TDV112",
                     "tri plt magic");
         plt.pos = 8;
         plt.int32(); // Byte order.
@@ -810,9 +878,13 @@ static bool testVizOutputFormats() {
                     "tri plt zone marker");
         plt.str();   // Zone name.
         plt.int32(); // Parent zone.
+        ok &= checkInt(plt.int32(), 1, "tri plt strand id");
+        ok &= checkClose(plt.real64(), Real(0), "tri plt solution time");
+        plt.int32(); // Zone color.
         ok &= checkInt(plt.int32(), 2, "tri plt zone type FETRIANGLE");
         plt.int32(); // Var locations.
         plt.int32(); // Face neighbours.
+        plt.int32(); // User-defined neighbours.
         ok &= checkInt(plt.int32(), static_cast<int>(topo.nNodes),
                        "tri plt node count");
         ok &= checkInt(plt.int32(), static_cast<int>(topo.nCells),
@@ -826,8 +898,21 @@ static bool testVizOutputFormats() {
         for (int v = 0; v < 9; ++v) {
             plt.int32(); // Format codes.
         }
+        plt.int32(); // Passive variables.
         plt.int32(); // Sharing.
         plt.int32(); // Connectivity sharing.
+        // Min/max pairs: rho (variable 2) is constant 1 on this mesh.
+        Real triRhoMin = -1, triRhoMax = -1;
+        for (int v = 0; v < 9; ++v) {
+            const Real lo = plt.real64();
+            const Real hi = plt.real64();
+            if (v == 2) {
+                triRhoMin = lo;
+                triRhoMax = hi;
+            }
+        }
+        ok &= checkClose(triRhoMin, Real(1), "tri plt rho min") &&
+              checkClose(triRhoMax, Real(1), "tri plt rho max");
         for (int v = 0; v < 9; ++v) {
             plt.block(static_cast<size_t>(topo.nNodes)); // Data blocks.
         }
@@ -874,6 +959,33 @@ static bool testVizOutputFormats() {
     } catch (const std::exception &e) {
         ok &= check(false, e.what());
     }
+
+    // --- [output] series = false suppresses the index file. ---
+    try {
+        const std::string noSeriesDir = kResultsDir + "/noseries";
+        fs::create_directories(noSeriesDir);
+        const Config cfg2(
+            writeToml("[output]\nenable = true\nformat = \"xdmf\"\nseries = "
+                      "false\ndirectory = \"" +
+                      noSeriesDir +
+                      "\"\n\n[initial_condition]\ntype = \"expr\"\n"
+                      "rho = \"1\"\nu = \"0\"\nv = \"0\"\np = \"1\"\n"));
+        occa::device device2({{"mode", "Serial"}});
+        DeviceMemoryManager mem2(device2);
+        DgField field2(cfg2, device2, mem2);
+        field2.setup();
+        solver_detail::applyExprICFromConfig(field2, cfg2);
+        device2.finish();
+        SolutionWriter writer2(cfg2, field2);
+        writer2.write(1, Real(0.1));
+        ok &= check(
+            fs::exists(noSeriesDir + "/test_hdf5_scratch_solution_0000001.xmf"),
+            "noseries xmf written");
+        ok &= check(!fs::exists(noSeriesDir + "/test_hdf5_scratch_series.xmf"),
+                    "series suppressed");
+    } catch (const std::exception &e) {
+        ok &= check(false, e.what());
+    }
     return ok;
 }
 
@@ -912,9 +1024,11 @@ static bool testConvertVizDualPath() {
     checkpoint.writeMesh();
     checkpoint.write(2, Real(0.5));
 
-    const std::string meshPath = (fs::path(kResultsDir) / "mesh.h5").string();
+    const std::string meshPath =
+        (fs::path(kResultsDir) / "test_hdf5_scratch_mesh.h5").string();
     const std::string ckptPath =
-        (fs::path(kResultsDir) / "checkpoint_0000002.h5").string();
+        (fs::path(kResultsDir) / "test_hdf5_scratch_checkpoint_0000002.h5")
+            .string();
     const std::string convH5 =
         (fs::path(kResultsDir) / "converted.h5").string();
 
@@ -935,7 +1049,8 @@ static bool testConvertVizDualPath() {
     std::vector<int> cDirect, cConv;
     {
         const HighFive::File a(
-            (fs::path(kResultsDir) / "solution_0000002.h5").string(),
+            (fs::path(kResultsDir) / "test_hdf5_scratch_solution_0000002.h5")
+                .string(),
             HighFive::File::ReadOnly);
         const HighFive::File b(convH5, HighFive::File::ReadOnly);
         a.getGroup("mesh").getDataSet("connect").read(cDirect);
@@ -948,7 +1063,8 @@ static bool testConvertVizDualPath() {
     // coordinates through the exact bilinear fit (round-off only).
     {
         const HighFive::File a(
-            (fs::path(kResultsDir) / "solution_0000002.h5").string(),
+            (fs::path(kResultsDir) / "test_hdf5_scratch_solution_0000002.h5")
+                .string(),
             HighFive::File::ReadOnly);
         const HighFive::File b(convH5, HighFive::File::ReadOnly);
         const std::vector<Real> ra = readDs(a, "rho");

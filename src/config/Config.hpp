@@ -520,6 +520,26 @@ public:
         return output_format_;
     }
 
+    /// @brief Whether the XDMF temporal-collection index
+    ///        (<prefix>_series.xmf) is maintained ([output] series, default
+    ///        true). Only effective while the format writes XDMF ("xdmf"
+    ///        or "all") — ParaView's Xdmf3 readers do not lift a lone
+    ///        uniform grid's <Time> into the time axis, so the index file
+    ///        is the supported way to open a run as a time series.
+    bool outputSeries() const noexcept {
+        return output_series_;
+    }
+
+    /// @brief File-name prefix derived from the configuration file name
+    ///        (stem, no extension): all output files of a run are named
+    ///        <prefix>_solution_<step>.<ext>, <prefix>_checkpoint_<step>.h5,
+    ///        <prefix>_mesh.h5 and <prefix>_series.xmf, so several configs
+    ///        can share one output directory. Empty when the Config was
+    ///        not built from a file (the legacy "solution_<step>" naming).
+    const std::string &outputPrefix() const noexcept {
+        return output_prefix_;
+    }
+
     /// @brief Number of time steps between two outputs ($\ge 1$ when
     ///        output is enabled).
     int outputInterval() const noexcept {
@@ -616,8 +636,11 @@ private:
     bool output_enable_             = false;
     OutputStrategy output_strategy_ = OutputStrategy::Direct;
     OutputFormat output_format_     = OutputFormat::Hdf5;
-    int output_interval_            = 100;
-    std::string output_directory_   = "./results";
+    bool output_series_             = true;
+    std::string
+        output_prefix_; ///< Config-file stem; empty when not from a file.
+    int output_interval_          = 100;
+    std::string output_directory_ = "./results";
 
     int log_level_    = 1;
     int log_interval_ = 100;

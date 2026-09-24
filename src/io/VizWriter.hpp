@@ -105,31 +105,57 @@ struct Fields {
     const Real *p    = nullptr;
 };
 
-/// @brief Write a classic Tecplot binary PLT file (V101 layout).
+/// @brief One time step of the XDMF temporal-collection index.
+struct SeriesEntry {
+    std::string h5Basename; ///< Solution h5 file name (no directory),
+                            ///< referenced relatively from the series file.
+    Real time = Real(0);    ///< Physical time of the step.
+};
+
+/// @brief (Re)write the XDMF temporal-collection index <prefix>_series.xmf.
 ///
-/// One finite-element zone per file, block (SoA-friendly) packing. The
-/// classic FE zone admits a single cell type: all-quad and all-triangle
-/// meshes use their native zone type (FEQUADRILATERAL / FETRIANGLE);
-/// only genuinely mixed meshes fold the triangle sub-cells into quads
-/// with a repeated node $(n_1, n_2, n_3, n_3)$ — the standard way mixed
-/// cell types enter a classic Tecplot zone. The node ids are identical
-/// to the XDMF connectivity, only the encoding is folded.
+/// ParaView's Xdmf3 readers do NOT lift a lone uniform grid's <Time> into
+/// the time axis (opening the per-step .xmf files individually or as a
+/// name-grouped series yields no time values); the temporal collection is
+/// the supported XDMF time-series form (the analogue of ParaView's own
+/// .pvd). The caller maintains the entry list incrementally — every
+/// output step appends its (h5, time) pair and the whole index file is
+/// regenerated, keeping it consistent by construction (a few KB of XML
+/// referencing the existing heavy data; nothing is copied). Entries from
+/// a previous run in the same directory are replaced by this run's.
+void writeXdmfSeries(const std::string &seriesPath,
+                     const std::vector<SeriesEntry> &entries,
+                     const VizTopology &topo);
+
+/// @brief Write a classic Tecplot binary PLT file (V112 layout, transient).
+///
+/// One finite-element zone per file with StrandID = 1 and the physical
+/// SolutionTime, so a file series carries real time metadata in Tecplot
+/// 360 and ParaView. Block (SoA-friendly) packing. The classic FE zone
+/// admits a single cell type: all-quad and all-triangle meshes use their
+/// native zone type (FEQUADRILATERAL / FETRIANGLE); only genuinely mixed
+/// meshes fold the triangle sub-cells into quads with a repeated node
+/// $(n_1, n_2, n_3, n_3)$ — the standard way mixed cell types enter a
+/// classic Tecplot zone. The node ids are identical to the XDMF
+/// connectivity, only the encoding is folded.
 ///
 /// Byte layout (little-endian, matching the HDF5 default on x86), per
 /// the reader used by ParaView's "VisIt Tecplot Binary Reader" and
-/// legacy Tecplot: magic "#!TDV101", INT4 1, title string, INT4 nVars,
+/// Tecplot 360: magic "#!TDV112", INT4 1, title string, INT4 nVars,
 /// variable-name strings (every string is one INT4 per character plus a
 /// terminating INT4 0); zone header FLOAT32 299.0 marker, zone name,
-/// INT4 parent (-1), zone type (3 = FEQUADRILATERAL or 2 = FETRIANGLE),
-/// INT4 variable locations (0 = all nodal), INT4 face neighbours (0),
-/// INT4 node/cell counts, 3 INT4 cell dims, INT4 0 auxiliary end;
-/// FLOAT32 357.0 end-of-header. There is NO data-packing field for
-/// version <= 102 (readers assume block packing) and no min/max pairs
-/// nor passive/sharing variables in the data section (those exist only
-/// for version >= 103): data section FLOAT32 299.0 marker, per-variable
-/// INT4 format codes (2 = double, 1 = float), INT4 sharing 0, INT4
-/// connectivity-sharing -1, nine block data arrays, 1-based INT4 cell
-/// connectivity.
+/// INT4 parent zone (-1), INT4 StrandID (1), FLOAT64 SolutionTime, INT4
+/// zone color (-1 = none), zone type (3 = FEQUADRILATERAL or 2 =
+/// FETRIANGLE), INT4 variable locations (0 = all nodal), INT4 face
+/// neighbours (0), INT4 user-defined neighbour connections (0), INT4
+/// node/cell counts, 3 INT4 cell dims, INT4 0 auxiliary end; FLOAT32
+/// 357.0 end-of-header. V112 has NO data-packing field (readers assume
+/// block packing) and the version >= 103 data section carries
+/// passive/sharing flags and per-variable min/max pairs: data section
+/// FLOAT32 299.0 marker, per-variable INT4 format codes (2 = double,
+/// 1 = float), INT4 passive 0, INT4 sharing 0, INT4 connectivity-sharing
+/// -1, per-variable FLOAT64 min/max pairs, nine block data arrays,
+/// 1-based INT4 cell connectivity.
 void writeTecplotPlt(const std::string &pltPath, const Fields &f,
                      const VizTopology &topo, Real time);
 

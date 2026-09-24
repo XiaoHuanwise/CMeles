@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <stdexcept>
 
 #include <toml.hpp>
@@ -395,9 +396,11 @@ void Config::setDefaults() {
     ic_p_    = "1";
     ic_symbols_.clear();
 
-    output_enable_    = false;
-    output_strategy_  = OutputStrategy::Direct;
-    output_format_    = OutputFormat::Hdf5;
+    output_enable_   = false;
+    output_strategy_ = OutputStrategy::Direct;
+    output_format_   = OutputFormat::Hdf5;
+    output_series_   = true;
+    output_prefix_.clear();
     output_interval_  = 100;
     output_directory_ = "./results";
 
@@ -411,6 +414,11 @@ Config::Config() {
 
 Config::Config(const std::string &path) {
     setDefaults();
+
+    // Output file-name prefix: the configuration file stem, so several
+    // configs can share one output directory
+    // (<stem>_solution_<step>.<ext>, <stem>_mesh.h5, ...).
+    output_prefix_ = std::filesystem::path(path).stem().string();
 
     const toml::table root = toml::parse_file(path);
 
@@ -579,6 +587,7 @@ Config::Config(const std::string &path) {
             const std::string name = fIt->second.value_or(std::string("hdf5"));
             output_format_         = parseOutputFormat(name);
         }
+        output_series_    = getBool(*tbl, "series", output_series_);
         output_interval_  = getInt(*tbl, "interval", output_interval_);
         output_directory_ = getString(*tbl, "directory", output_directory_);
     }

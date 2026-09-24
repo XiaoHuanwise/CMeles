@@ -16,10 +16,19 @@ namespace {
 /// Conserved-variable names in the canonical order [rho, rho u, rho v, E].
 const char *const kVarNames[kNumVars2D] = {"rho", "rho_u", "rho_v", "E"};
 
-/// @brief Zero-padded checkpoint file name checkpoint_<step>.h5.
-std::string checkpointFileName(long step) {
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "checkpoint_%07ld.h5", step);
+/// @brief Zero-padded checkpoint file name
+///        <prefix>_checkpoint_<step>.h5 (legacy checkpoint_<step>.h5
+///        without a prefix).
+std::string checkpointFileName(const std::string &prefix, long step) {
+    char buf[128];
+    const int n =
+        prefix.empty()
+            ? std::snprintf(buf, sizeof(buf), "checkpoint_%07ld.h5", step)
+            : std::snprintf(buf, sizeof(buf), "%s_checkpoint_%07ld.h5",
+                            prefix.c_str(), step);
+    if (n < 0 || n >= static_cast<int>(sizeof(buf))) {
+        throw std::runtime_error("checkpointFileName: name truncated");
+    }
     return std::string(buf);
 }
 } // namespace
@@ -30,6 +39,7 @@ CheckpointWriter::CheckpointWriter(const Config &cfg, const DgField &field)
       numPoints1D_(field.numPoints1D()),
       elementType_(cfg.meshSplitTriangles() ? "tri" : "quad"),
       format_(outputFormatName(cfg.outputFormat())),
+      series_(cfg.outputSeries()), prefix_(cfg.outputPrefix()),
       directory_(cfg.outputDirectory()) {
     nElem_  = field.numElements();
     nModes_ = field.numModes();
@@ -53,7 +63,8 @@ CheckpointWriter::CheckpointWriter(const Config &cfg, const DgField &field)
 
 void CheckpointWriter::writeMesh() {
     const std::filesystem::path path =
-        std::filesystem::path(directory_) / "mesh.h5";
+        std::filesystem::path(directory_) /
+        (prefix_.empty() ? "mesh.h5" : prefix_ + "_mesh.h5");
     HDF5Writer writer(path.string());
     // Reconstruction metadata: the offline converter rebuilds the basis
     // (and with it the Vandermonde matrix) from these attributes alone.
@@ -63,10 +74,12 @@ void CheckpointWriter::writeMesh() {
     writer.writeAttribute("N_q", numPoints1D_);
     writer.writeAttribute("N_modes", nModes_);
     writer.writeAttribute("element_type", elementType_);
-    // Output-format record: CMelesConvert inherits it when --format is not
-    // given (older mesh.h5 files simply lack the attribute and conversion
-    // falls back to the plain hdf5 behaviour).
+    // Output-format and series records: CMelesConvert inherits them when
+    // --format is not given (older mesh.h5 files simply lack the
+    // attributes and conversion falls back to the plain hdf5 behaviour
+    // with the series index enabled).
     writer.writeAttribute("format", format_);
+    writer.writeAttribute("series", series_);
     writer.writeDataset("x", coordsX_.data(), nTot_);
     writer.writeDataset("y", coordsY_.data(), nTot_);
     writer.flush();
@@ -78,7 +91,7 @@ void CheckpointWriter::write(long step, Real time) {
     field_.o_u().copyTo(modal_.data(), static_cast<occa::dim_t>(modal_.size()));
 
     const std::filesystem::path path =
-        std::filesystem::path(directory_) / checkpointFileName(step);
+        std::filesystem::path(directory_) / checkpointFileName(prefix_, step);
     HDF5Writer writer(path.string());
     writer.writeAttribute("time", time);
     writer.writeAttribute("step", static_cast<int>(step));

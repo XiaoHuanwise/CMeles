@@ -37,6 +37,8 @@ private:
     int numPoints1D_;
     std::string elementType_;
     std::string format_; ///< [output] format name (inherited by conversion).
+    bool series_ = true; ///< [output] series (inherited by batch conversion).
+    std::string prefix_; ///< Config-file stem; empty -> legacy naming.
     std::string directory_;
 
     int nElem_   = 0;

@@ -58,6 +58,18 @@ private:
     int polynomialOrder_;
     std::string directory_;
     OutputFormat format_ = OutputFormat::Hdf5;
+    std::string prefix_;         ///< Config-file stem; empty -> legacy naming.
+    bool seriesEnabled_ = false; ///< [output] series, effective for xdmf.
+
+    /// Steps written so far (h5 basename + time), maintained
+    /// incrementally to regenerate the <prefix>_series.xmf index.
+    std::vector<viz::SeriesEntry> seriesSteps_;
+
+    /// @brief Index-file name: <prefix>_series.xmf (series.xmf without a
+    ///        prefix).
+    std::string seriesFileName() const {
+        return prefix_.empty() ? "series.xmf" : prefix_ + "_series.xmf";
+    }
 
     int nElem_  = 0;
     int nModes_ = 0;

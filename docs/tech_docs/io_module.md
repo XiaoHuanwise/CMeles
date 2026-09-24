@@ -621,15 +621,19 @@ directory = "./results"
 | 取值 | 产物 | 用途 |
 |------|------|------|
 | `"hdf5"` | `solution_<step>.h5` | 纯归档（原有行为） |
-| `"xdmf"` | `solution_<step>.h5`（内含 `mesh/connect`）+ 自包含 `solution_<step>.xmf` | ParaView 直接打开 `.xmf` 生成填充云图（配对可整体移动） |
-| `"tecplot"` | `solution_<step>.plt` | 经典 Tecplot 二进制，Tecplot 360 与 ParaView（VisIt Tecplot Binary Reader）均可直接打开 |
+| `"xdmf"` | `<前缀>_solution_<step>.h5`（内含 `mesh/connect`）+ 自包含 `<前缀>_solution_<step>.xmf` + `<前缀>_series.xmf` | ParaView 直接打开 `.xmf` 生成填充云图；**时间序列打开 `<前缀>_series.xmf`**（配对可整体移动） |
+| `"tecplot"` | `<前缀>_solution_<step>.plt` | 经典 Tecplot 二进制（V112，含 StrandID/SolutionTime），Tecplot 360 与 ParaView（VisIt Tecplot Binary Reader）均可直接打开 |
 | `"all"` | 以上全部 | — |
+
+**文件命名前缀**：输出文件以 config 文件名（去扩展名）为前缀——`<前缀>_solution_<step>.{h5,xmf,plt}`、`<前缀>_checkpoint_<step>.h5`、`<前缀>_mesh.h5`、`<前缀>_series.xmf`——多个 config 可共用同一输出目录；`CMelesConvert` 批量模式从 `<前缀>_mesh.h5` 推断前缀并沿用（旧式 `mesh.h5`/`solution_<step>` 命名完全兼容）。
+
+**时间序列索引 `<前缀>_series.xmf`**（`[output] series`，默认开，仅 xdmf 格式生效）：ParaView 的 Xdmf3 读取器**不会**把独立 Uniform grid 的 `<Time>` 提升为时间轴（逐个/成组打开每步的 `.xmf` 均无时间值），Temporal Collection 索引才是 XDMF 时间序列的标准消费方式（等价于 ParaView 自己的 `.pvd`）。`SolutionWriter` 每步输出后增量重建该索引（纯 XML 引用既有 h5 重数据，不复制数据；本运行的步集覆盖旧索引）；`CMelesConvert` 批量转换同样生成（遵循 mesh.h5 记录的 `series` 属性，旧文件缺省为开）。注意 ParaView 的 PLT 读取器对 `.plt` 序列只用文件索引作时间（VisIt 桥不读取 V112 SolutionTime）——**ParaView 看时间用 xmf 索引，PLT 的时间元数据面向 Tecplot 360**。
 
 **可视化表示法（边界含端点扩展网格）**：可视化节点为每单元的张量网格 $\{-1, \xi_1, \dots, \xi_{N_q}, +1\}^2$（内部高斯点 + 参考元端点，每方向 $N_q+2$ 个）。若只用内部高斯点（不含端点），每单元绘制区距边界约 7% 单元宽（$N_q=4$），相邻单元间会露出背景色带（实测约 26% 的画面面积）。扩展网格上各节点的值由**本单元模态系数精确求值**（`BasisFunctions2D::vandermondeAt`，宿主端 $u = V_{\text{ext}} \hat u$）——**不做任何跨单元插值**：相邻单元的子网格在共享界面处恰好相接、各自持有一排边界节点，DG 间断保留为界面处的颜色突变，外边界也自然闭合；三角形子网格沿固定对角线拆分（坍缩顶点行产生零面积退化子胞，渲染器自动跳过，计数确定）。原积分点数据是扩展网格在张量索引 $(i,j) \in [1,N_q]^2$ 处的子集，可跨步提取恢复。**数据集布局按格式分派**（`SolutionWriter` 构造时一次选定）：`hdf5` 纯归档保持 $N_q^2$ 积分点布局不变；`xdmf`/`all` 的 h5 根数据集（`rho…p`、`mesh/x`、`mesh/y`）与 PLT 变量块**直接就是扩展节点数据**（$(N_q+2)^2$/单元，约为积分点数据的 2.25×（$N_q=4$）至 4×（$N_q=2$））。连接表由 `viz::buildVizConnectivity(N_elem, nPts1D, isTriangle[])` 构造——纯组合函数、不依赖几何（$n=4$ 时首四边形子胞为 $\{0,1,5,4\}$），故离线转换端可从 mesh.h5 属性直接重建。**间接路径的坐标重建**：mesh.h5 只存积分点坐标不存顶点；单元映射为双线性且张量高斯点对 $\{1,r,s,rs\}$ 无差异，`viz::extendedCoordsFromQuadratureCoords` 用最小二乘**精确**恢复双线性系数（舍入级误差）再映射到扩展点——老 checkpoint 零格式改动、开箱可用。**XDMF sidecar 不写 DOCTYPE**（部分 XML 栈会尝试解析其引用的 DTD）。
 
 **XDMF sidecar**（`viz::writeXdmf`）：统一或 Mixed 拓扑引用同文件 `mesh/connect`，`Geometry="XYZ"` 引用交错坐标数据集 `mesh/xyz`（[N][3]，z=0），7 个节点属性 HyperSlab 引用同名数据集，`<Time>` 记录物理时间。**必须用 XYZ 交错几何而非 XY 双数组**：ParaView 5.13 的 Xdmf3 读取器对 `XY` + 两个一维 DataItem 解析出的点数减半，连接表随即越界，Apply/Render 堆损坏闪退（pvbatch 实测复现与验证）。
 
-**Tecplot PLT 二进制**（`viz::writeTecplotPlt`）：经典 V101 布局、单一 FE 区、块式（BLOCK）打包、每文件单时间步（时间写入区名）。布局逐字段对齐 ParaView "VisIt Tecplot Binary Reader" 的解析器（VisIt `databases/Tecplot/TecplotFile.C`，pvbatch 实测四边形/三角形网格均加载、渲染成功）：**字符串编码为每字符一个 INT4 + 终止 INT4 0**（无长度前缀）；区头字段序 `FLOAT32 299.0 标记、区名、父区 −1（≤102 版读取器将其作为 unused int 消费）、区类型、变量定位 0、面邻居 0、节点数/单元数、3×cell-dim、辅助结束 0`——**版本 ≤ 102 没有 data-packing 字段**（读取器默认块打包），多写一个 int 会使后续字段整体错位（节点数落到面邻居标志上，区退化为零节点，ParaView 报 "Unable to find any meshes"）；同理 **≤ 102 的数据区不含 min/max 对与 passive/sharing 变量字段**（≥ 103 才有）。数据区：`FLOAT32 299.0`、每变量 INT4 格式码（2=double/1=float）、共享 0、连接共享 −1、9 个块数据、1-based INT4 连接表。经典 FE 区只允许单一单元类型：全四边形/全三角形网格使用原生 `FEQUADRILATERAL(3)`/`FETRIANGLE(2)` 区类型；仅真混合网格把三角子胞折叠为重复节点四边形 $(n_1,n_2,n_3,n_3)$（节点 id 与 XDMF 连接表一致，仅编码折叠）。
+**Tecplot PLT 二进制**（`viz::writeTecplotPlt`）：经典 **V112** 布局、单一瞬态 FE 区（StrandID=1、FLOAT64 SolutionTime，`.plt` 序列在 Tecplot 360 中携带真实时间）、块式（BLOCK）打包。布局逐字段对齐 ParaView "VisIt Tecplot Binary Reader" 的解析器（VisIt `databases/Tecplot/TecplotFile.C`，pvbatch 实测四边形/三角形网格均加载、渲染成功）：**字符串编码为每字符一个 INT4 + 终止 INT4 0**（无长度前缀）；区头字段序 `FLOAT32 299.0 标记、区名、父区 −1、StrandID 1、SolutionTime、区色 −1、区类型、变量定位 0、面邻居 0、用户定义邻居连接 0、节点数/单元数、3×cell-dim、辅助结束 0`——**V112 没有 data-packing 字段**（读取器默认块打包）；数据区（≥103 形态）：`FLOAT32 299.0`、每变量 INT4 格式码（2=double/1=float）、passive 0、共享 0、连接共享 −1、**每变量 FLOAT64 min/max 对**（块的真实极值）、9 个块数据、1-based INT4 连接表。经典 FE 区只允许单一单元类型：全四边形/全三角形网格使用原生 `FEQUADRILATERAL(3)`/`FETRIANGLE(2)` 区类型；仅真混合网格把三角子胞折叠为重复节点四边形 $(n_1,n_2,n_3,n_3)$（节点 id 与 XDMF 连接表一致，仅编码折叠）。注意：Tecplot/VisIt 读取器会合并**比特级重合**的相邻单元边界节点（DG 不连续子网格的固有特性，显示层面无影响）。
 
 **双路径**：`format` 对 direct 策略（`SolutionWriter`）与 checkpoint→convert 策略（`CheckpointConvert`）同样生效；mesh.h5 记录运行期 `format` 属性供 `CMelesConvert` 继承（旧文件缺省回退 hdf5），`CMelesConvert --format <name>` 可覆盖。
 
@@ -639,7 +643,6 @@ directory = "./results"
 |--------|------|
 | **分片写入（Chunking）** | 对大网格启用 HDF5 chunked dataset 和压缩（如 GZIP level 4），在文件大小和读写性能间取得平衡 |
 | **并行 I/O** | 利用 HDF5 的 MPI-IO 后端，支持多节点并行写入同一个输出文件 |
-| **PLT V112 strand/time** | 升级 PLT 魔数至 TDV112 以写入 StrandID/SolutionTime 元数据（V112 区头字段序已从 VisIt 解析器核实：区名、父区、strandID、double 时刻、区色、区类型、变量定位、面邻居、用户定义邻居连接数 0、FE 计数；数据区需补 passive/sharing 标志与 min/max 对） |
 | **连续化可视化网格** | Lobatto 采样 + 界面平均的无缝连续云图选项（当前为边界含端点扩展网格，如实呈现单元间间断为颜色突变） |
 | **Selective Output** | 按 `output.variables` 列表选择性输出物理量，减少不必要数据的磁盘占用 |
 

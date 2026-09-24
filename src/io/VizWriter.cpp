@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 
 #include "io/HDF5Writer.hpp"
@@ -109,6 +110,56 @@ void writeVizToH5(HDF5Writer &writer, const VizTopology &topo, const Real *x,
 namespace {
 /// @brief Real precision as the XDMF attribute digits (8/4).
 constexpr int kPrecision = (sizeof(Real) == 8) ? 8 : 4;
+
+/// @brief The seven nodal attribute names (dataset names in the h5).
+constexpr const char *const kAttrs[7] = {"rho", "rho_u", "rho_v", "E",
+                                         "u",   "v",     "p"};
+
+/// @brief Emit one uniform-grid step (Time + Topology + Geometry + the
+///        seven nodal attributes referencing the paired h5).
+///
+/// Shared by the per-step sidecar and the temporal-collection index so
+/// both stay byte-identical in their grid blocks.
+void writeUniformGridBlock(std::ostream &out, const std::string &gridName,
+                           const std::string &h5Basename,
+                           const VizTopology &topo, Real time) {
+    char tbuf[32];
+    std::snprintf(tbuf, sizeof(tbuf), "%.12g", static_cast<double>(time));
+    // Uniform topology for single-type meshes (QUADRILATERAL / TRIANGLE)
+    // — the most widely supported reader path; Mixed only for genuinely
+    // mixed meshes. No DOCTYPE: some XML stacks try to resolve the
+    // referenced DTD.
+    const char *topoType =
+        topo.mixed ? "Mixed"
+                   : (topo.cellType == 5 ? "QUADRILATERAL" : "TRIANGLE");
+    out << "  <Grid Name=\"" << gridName << "\" GridType=\"Uniform\">\n"
+        << "    <Time Value=\"" << tbuf << "\"/>\n"
+        << "    <Topology TopologyType=\"" << topoType
+        << "\" NumberOfElements=\"" << topo.nCells << "\">\n"
+        << "      <DataItem Dimensions=\"" << topo.connect.size()
+        << "\" NumberType=\"Int\" Precision=\"4\" Format=\"HDF\">\n"
+        << "        " << h5Basename << ":/mesh/connect\n"
+        << "      </DataItem>\n"
+        << "    </Topology>\n"
+        << "    <Geometry GeometryType=\"XYZ\">\n"
+        << "      <DataItem Dimensions=\"" << topo.nNodes
+        << " 3\" NumberType=\"Float\" Precision=\"" << kPrecision
+        << "\" Format=\"HDF\">\n"
+        << "        " << h5Basename << ":/mesh/xyz\n"
+        << "      </DataItem>\n"
+        << "    </Geometry>\n";
+    for (int i = 0; i < 7; ++i) {
+        out << "    <Attribute Name=\"" << kAttrs[i]
+            << "\" AttributeType=\"Scalar\" Center=\"Node\">\n"
+            << "      <DataItem Dimensions=\"" << topo.nNodes
+            << "\" NumberType=\"Float\" Precision=\"" << kPrecision
+            << "\" Format=\"HDF\">\n"
+            << "        " << h5Basename << ":/" << kAttrs[i] << "\n"
+            << "      </DataItem>\n"
+            << "    </Attribute>\n";
+    }
+    out << "  </Grid>\n";
+}
 } // namespace
 
 void writeXdmf(const std::string &h5Basename, const std::string &xmfPath,
@@ -117,45 +168,37 @@ void writeXdmf(const std::string &h5Basename, const std::string &xmfPath,
     if (!out) {
         throw std::runtime_error("writeXdmf: cannot open " + xmfPath);
     }
-    char tbuf[32];
-    std::snprintf(tbuf, sizeof(tbuf), "%.12g", static_cast<double>(time));
+    out << "<?xml version=\"1.0\" ?>\n"
+        << "<Xdmf Version=\"2.0\">\n"
+        << "  <Domain Name=\"CMeles\">\n";
+    writeUniformGridBlock(out, "solution", h5Basename, topo, time);
+    out << "  </Domain>\n"
+        << "</Xdmf>\n";
+}
 
-    const char *const attrs[7] = {"rho", "rho_u", "rho_v", "E", "u", "v", "p"};
-    // Uniform topology for single-type meshes (QUADRILATERAL / TRIANGLE)
-    // — the most widely supported reader path; Mixed only for genuinely
-    // mixed meshes. No DOCTYPE: some XML stacks try to resolve the
-    // referenced DTD.
-    const char *topoType =
-        topo.mixed ? "Mixed"
-                   : (topo.cellType == 5 ? "QUADRILATERAL" : "TRIANGLE");
+void writeXdmfSeries(const std::string &seriesPath,
+                     const std::vector<SeriesEntry> &entries,
+                     const VizTopology &topo) {
+    std::ofstream out(seriesPath);
+    if (!out) {
+        throw std::runtime_error("writeXdmfSeries: cannot open " + seriesPath);
+    }
     out << "<?xml version=\"1.0\" ?>\n"
         << "<Xdmf Version=\"2.0\">\n"
         << "  <Domain Name=\"CMeles\">\n"
-        << "    <Grid Name=\"solution\" GridType=\"Uniform\">\n"
-        << "      <Time Value=\"" << tbuf << "\"/>\n"
-        << "      <Topology TopologyType=\"" << topoType
-        << "\" NumberOfElements=\"" << topo.nCells << "\">\n"
-        << "        <DataItem Dimensions=\"" << topo.connect.size()
-        << "\" NumberType=\"Int\" Precision=\"4\" Format=\"HDF\">\n"
-        << "          " << h5Basename << ":/mesh/connect\n"
-        << "        </DataItem>\n"
-        << "      </Topology>\n"
-        << "      <Geometry GeometryType=\"XYZ\">\n"
-        << "        <DataItem Dimensions=\"" << topo.nNodes
-        << " 3\" NumberType=\"Float\" Precision=\"" << kPrecision
-        << "\" Format=\"HDF\">\n"
-        << "          " << h5Basename << ":/mesh/xyz\n"
-        << "        </DataItem>\n"
-        << "      </Geometry>\n";
-    for (int i = 0; i < 7; ++i) {
-        out << "      <Attribute Name=\"" << attrs[i]
-            << "\" AttributeType=\"Scalar\" Center=\"Node\">\n"
-            << "        <DataItem Dimensions=\"" << topo.nNodes
-            << "\" NumberType=\"Float\" Precision=\"" << kPrecision
-            << "\" Format=\"HDF\">\n"
-            << "          " << h5Basename << ":/" << attrs[i] << "\n"
-            << "        </DataItem>\n"
-            << "      </Attribute>\n";
+        << "    <Grid Name=\"TimeSeries\" GridType=\"Collection\" "
+           "CollectionType=\"Temporal\">\n";
+    for (const SeriesEntry &e : entries) {
+        // Indent the shared grid block one level deeper inside the
+        // collection wrapper.
+        std::ostringstream block;
+        writeUniformGridBlock(block, "step_" + e.h5Basename, e.h5Basename, topo,
+                              e.time);
+        std::istringstream lines(block.str());
+        std::string line;
+        while (std::getline(lines, line)) {
+            out << "  " << line << "\n";
+        }
     }
     out << "    </Grid>\n"
         << "  </Domain>\n"
@@ -187,6 +230,9 @@ void putPltString(std::ofstream &f, const std::string &s) {
     }
     putInt32(f, 0);
 }
+void putFloat64(std::ofstream &f, double v) {
+    f.write(reinterpret_cast<const char *>(&v), 8);
+}
 } // namespace
 
 void writeTecplotPlt(const std::string &pltPath, const Fields &f,
@@ -200,7 +246,7 @@ void writeTecplotPlt(const std::string &pltPath, const Fields &f,
     const int formatCode = (sizeof(Real) == 8) ? 2 : 1;
 
     // --- File header ---
-    const char magic[8] = {'#', '!', 'T', 'D', 'V', '1', '0', '1'};
+    const char magic[8] = {'#', '!', 'T', 'D', 'V', '1', '1', '2'};
     out.write(magic, 8);
     putInt32(out, 1); // Byte-order check.
     putPltString(out, "CMeles solution");
@@ -211,19 +257,19 @@ void writeTecplotPlt(const std::string &pltPath, const Fields &f,
         putPltString(out, name);
     }
 
-    // --- Zone header (single finite-element zone, block packing) ---
-    // Field order for V101 as consumed by ParaView's "VisIt Tecplot Binary
-    // Reader" (VisIt databases/Tecplot/TecplotFile.C) and legacy Tecplot:
-    // marker, name, parent zone, zone type, variable locations, face
-    // neighbours, FE counts. There is NO data-packing field for version
-    // <= 102 — readers assume block packing — and version <= 102 readers
-    // consume the parent-zone int as an "unused -1"; writing an extra
-    // packing int shifts every later field (numPts would land on the
-    // face-neighbour flag and the zone degenerates to zero nodes).
-    // The classic FE zone admits a single cell type: all-quad and
-    // all-triangle meshes get their native zone type; genuinely mixed
-    // meshes use FEQUADRILATERAL with triangles folded to a repeated
-    // node $(n_1, n_2, n_3, n_3)$.
+    // --- Zone header (single finite-element transient zone, block
+    //     packing) ---
+    // Field order for V112 as consumed by ParaView's "VisIt Tecplot
+    // Binary Reader" (VisIt databases/Tecplot/TecplotFile.C) and Tecplot
+    // 360: marker, name, parent zone, StrandID, SolutionTime (FLOAT64),
+    // zone color, zone type, variable locations, face neighbours,
+    // user-defined neighbour connections, FE counts. V112 has NO
+    // data-packing field (readers assume block packing). StrandID = 1
+    // marks the zone transient, so a file series carries real time
+    // metadata. The classic FE zone admits a single cell type: all-quad
+    // and all-triangle meshes get their native zone type; genuinely
+    // mixed meshes use FEQUADRILATERAL with triangles folded to a
+    // repeated node $(n_1, n_2, n_3, n_3)$.
     const int zoneType   = topo.mixed || topo.cellType == 5 ? 3 : 2;
     const int idsPerCell = (zoneType == 3) ? 4 : 3;
     char zname[64];
@@ -231,10 +277,14 @@ void writeTecplotPlt(const std::string &pltPath, const Fields &f,
                   static_cast<double>(time));
     putFloat32(out, 299.0f); // Zone marker.
     putPltString(out, zname);
-    putInt32(out, -1); // Parent zone: none.
+    putInt32(out, -1);                          // Parent zone: none.
+    putInt32(out, 1);                           // StrandID: transient zone.
+    putFloat64(out, static_cast<double>(time)); // Solution time.
+    putInt32(out, -1);                          // Zone color: none.
     putInt32(out, zoneType);
     putInt32(out, 0); // Variable locations: all nodal.
     putInt32(out, 0); // Face-neighbour connections: none.
+    putInt32(out, 0); // User-defined neighbour connections: none.
     putInt32(out, static_cast<int32_t>(topo.nNodes));
     putInt32(out, static_cast<int32_t>(topo.nCells));
     putInt32(out, 0);        // iCellDim (unused).
@@ -243,11 +293,13 @@ void writeTecplotPlt(const std::string &pltPath, const Fields &f,
     putInt32(out, 0);        // End of auxiliary name/value pairs.
     putFloat32(out, 357.0f); // End-of-header marker.
 
-    // --- Data section ---
+    // --- Data section (version >= 103 form: passive/sharing flags and
+    //     per-variable min/max pairs precede the blocks) ---
     putFloat32(out, 299.0f); // Zone data marker.
     for (int v = 0; v < 9; ++v) {
         putInt32(out, formatCode);
     }
+    putInt32(out, 0);  // Passive variables: none.
     putInt32(out, 0);  // Variable sharing: none.
     putInt32(out, -1); // Connectivity sharing: none.
 
@@ -257,6 +309,21 @@ void writeTecplotPlt(const std::string &pltPath, const Fields &f,
         if (b == nullptr) {
             throw std::runtime_error("writeTecplotPlt: missing field");
         }
+    }
+    // Per-variable min/max pairs (metadata consumed by readers; the
+    // values themselves are honest extrema of the blocks below).
+    for (const Real *b : blocks) {
+        Real lo = b[0];
+        Real hi = b[0];
+        for (size_t k = 1; k < nNodes; ++k) {
+            lo = b[k] < lo ? b[k] : lo;
+            hi = b[k] > hi ? b[k] : hi;
+        }
+        putFloat64(out, static_cast<double>(lo));
+        putFloat64(out, static_cast<double>(hi));
+    }
+
+    for (const Real *b : blocks) {
         putBlock(out, b, nNodes);
     }
 

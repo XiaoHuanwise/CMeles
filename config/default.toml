@@ -142,6 +142,11 @@ format = "hdf5"           # "hdf5" (plain archive, the default) | "xdmf"
                           # Applies to the direct strategy and to converted
                           # checkpoint output (CMelesConvert inherits it,
                           # overridable with --format).
+series = true             # Maintain the <prefix>_series.xmf temporal-
+                          # collection index (XDMF formats only): opening it
+                          # in ParaView gives the real physical-time axis
+                          # (per-step .xmf files alone carry no time values
+                          # in ParaView's Xdmf3 readers).
 interval = 100            # Number of time steps between two outputs (>= 1
                           # when enabled).
 directory = "./results"   # Output directory, created if missing.
