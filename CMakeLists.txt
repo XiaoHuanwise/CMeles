@@ -47,7 +47,8 @@ file(GLOB_RECURSE CMELES_OKL_KERNELS CONFIGURE_DEPENDS
      "${CMAKE_SOURCE_DIR}/src/math/okl/*.okl"
      "${CMAKE_SOURCE_DIR}/src/riemann/okl/*.okl"
      "${CMAKE_SOURCE_DIR}/src/dg/okl/*.okl"
-     "${CMAKE_SOURCE_DIR}/src/time/okl/*.okl")
+     "${CMAKE_SOURCE_DIR}/src/time/okl/*.okl"
+     "${CMAKE_SOURCE_DIR}/src/limiter/okl/*.okl")
 add_custom_target(okl_kernels ALL
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMELES_OKL_KERNELS}
             ${CMAKE_BINARY_DIR}/occa/okl
@@ -121,6 +122,7 @@ endif()
 foreach(_tgt CMeles test_blas test_basis test_device_memory test_config
                 test_dg_field test_dg_periodic test_math test_mesh_geometry
                 test_mesh_device_memory test_riemann test_euler_vortex
-                test_vortex_methods test_time_stepper test_hdf5_output)
+                test_vortex_methods test_time_stepper test_hdf5_output
+                test_mr_weno test_sod test_riemann2d)
     add_dependencies(${_tgt} okl_kernels)
 endforeach()

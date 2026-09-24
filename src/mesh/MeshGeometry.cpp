@@ -81,6 +81,7 @@ void MeshGeometry::buildElementGeometry() {
     minv_.resize(N_elem_ * N_base_ * N_base_);
     jacobian_constant_.resize(N_elem_);
     minv_diag_.resize(N_elem_);
+    elem_affine_.resize(N_elem_);
 
     // Parallelogram condition: P1 + P3 == P2 + P4 (within tolerance).
     is_orthogonal_ = true;
@@ -143,6 +144,11 @@ void MeshGeometry::buildElementGeometry() {
                             std::abs(y[2]) + std::abs(y[3]) + Real(1));
         const Real condX = (x[0] + x[2]) - (x[1] + x[3]);
         const Real condY = (y[0] + y[2]) - (y[1] + y[3]);
+        // Per-element parallelogram (affine-map) flag; triangles have
+        // P3 = P4 and fail the condition unless P1 = P2 (degenerate), so
+        // they are always classified as non-affine.
+        elem_affine_(e) =
+            (std::abs(condX) <= tol && std::abs(condY) <= tol) ? 1 : 0;
         if (std::abs(condX) > tol || std::abs(condY) > tol) {
             is_orthogonal_ = false;
         }
@@ -229,6 +235,8 @@ void MeshGeometry::allocateDeviceMemory(DeviceMemoryManager &mgr) {
     o_faceTypes_  = mgr.wrapOrMallocInt(faceTypes.data(), N_face_);
     o_elemFaces_  = mgr.wrapOrMallocInt(
         elemFaces.data(), static_cast<occa::dim_t>(elemFaces.size()));
+    o_elemAffine_ = mgr.wrapOrMallocInt(
+        elem_affine_.data(), static_cast<occa::dim_t>(elem_affine_.size()));
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,215 @@
+// kxrcf_flag.okl — Modified KXRCF troubled-cell indicator (per element).
+//
+// An element Omega_0 is flagged troubled when
+//
+//   | int_{dOmega^-} (rho|Omega0 - rho|OmegaL) dGamma |
+//   ---------------------------------------------------  >= C_k,
+//        h^R * |dOmega^-| * || rho_h ||_{dOmega0}
+//
+// where dOmega^- is the inflow part of the element boundary (faces whose
+// outward normal has a negative dot product with the cell-mean velocity),
+// h is the element length scale (max centroid-to-vertex distance), R is
+// the Fu & Shu exponent (min(N,2)+1)/2 and || rho_h ||_{dOmega0} is the
+// boundary trace of the density reduced by min/max/mean over the boundary
+// quadrature points (min is the Zhu & Shu conservative default).
+//
+// Boundary handling: domain-boundary inflow edges have no neighbour to
+// compare against and contribute to neither the numerator nor |dOmega^-|
+// (faceTypes == Boundary is skipped). Periodic faces are pseudo-interior
+// and treated like interior faces. All-outflow elements take indicator 0
+// (not troubled).
+//
+// Inputs: the per-face signed jump integrals from kxrcf_face_jump.okl.
+// Output: troubled[elem] in {0, 1}.
+//
+// See docs/tech_docs/mr_weno_limiter.md, "问题单元检测" section.
+
+@kernel void kxrcfFlag(const int N_elem, const int N_vars, const int N_modes,
+                       const int N_q, const int Nq2, const Real hPow,
+                       const Real ckc, const int shockNorm, const int force,
+                       const Real *u, const Real *V2D, const Real *lambdaWJ,
+                       const Real *Vface, const int *elemFaces,
+                       const int *faceKL, const int *faceFL,
+                       const int *faceKR, const int *faceFR,
+                       const int *faceTypes, const Real *faceN,
+                       const Real *faceJump, const Real *vertices,
+                       const Real gammaGas, int *troubled) {
+    for (int elem = 0; elem < N_elem; ++elem;
+         @tile(TILE_SIZE, @outer, @inner)) {
+        // --- True cell means of (rho, rho u, rho v) via the volume
+        //     quadrature: mean = sum_q Lambda_wJ u_h(q) / sum_q Lambda_wJ.
+        //     phi_0 is the constant 1/2, so this quadrature is exactly the
+        //     (M u)_0 row of the general mean formula 2 (M u)_0 / |Omega|
+        //     — it stays correct on non-affine elements, where u^{(0)}
+        //     alone is NOT proportional to the mean.
+        //     The same pass tracks the pointwise minimum of rho and p for
+        //     the positivity trigger below.
+        const int eOff = elem * Nq2;
+        const int uOff = elem * N_vars * N_modes;
+        Real area = 0.0;
+        Real meanRho = 0.0, meanRhou = 0.0, meanRhov = 0.0;
+        Real minRhoP = 1.0e300;
+        Real minPP = 1.0e300;
+        for (int q = 0; q < Nq2; ++q) {
+            const Real lam = lambdaWJ[eOff + q];
+            const int vRow = q * N_modes;
+            Real rh = 0.0, ru = 0.0, rv = 0.0, en = 0.0;
+            for (int m = 0; m < N_modes; ++m) {
+                const Real v0 = V2D[vRow + m];
+                rh += v0 * u[uOff + m];
+                ru += v0 * u[uOff + N_modes + m];
+                rv += v0 * u[uOff + 2 * N_modes + m];
+                en += v0 * u[uOff + 3 * N_modes + m];
+            }
+            const Real pQ =
+                (gammaGas - 1.0) *
+                (en - 0.5 * (ru * ru + rv * rv) / rh);
+            if (rh < minRhoP) {
+                minRhoP = rh;
+            }
+            if (pQ < minPP) {
+                minPP = pQ;
+            }
+            area += lam;
+            meanRho += lam * rh;
+            meanRhou += lam * ru;
+            meanRhov += lam * rv;
+        }
+        meanRho /= area;
+        meanRhou /= area;
+        meanRhov /= area;
+
+        // --- Face loop: inflow/outflow classification, |jump|
+        //     accumulation, and the boundary density trace. The
+        //     un-normalised face normal (magnitude = edge length) points
+        //     KL -> KR; the outward normal of this element is its
+        //     negation when elem is KL. The inflow test uses the sign of
+        //     the mean mass flux (mean rho u) . n_out, which equals the
+        //     sign of (mean u) . n_out for positive density.
+        Real numerator = 0.0;
+        Real inflowLen = 0.0;
+        Real traceMin = 1.0e300;
+        Real traceMax = -1.0e300;
+        Real traceSum = 0.0;
+        int nTrace = 0;
+        for (int f = 0; f < 4; ++f) {
+            const int F = elemFaces[elem * 4 + f];
+            if (F < 0) {
+                continue; // collapsed (triangle) face slot
+            }
+            const int KL = faceKL[F];
+            const int KR = faceKR[F];
+            const int isLeft = (elem == KL) ? 1 : 0;
+            const Real nxo =
+                isLeft ? -faceN[F * 2] : faceN[F * 2];
+            const Real nyo =
+                isLeft ? -faceN[F * 2 + 1] : faceN[F * 2 + 1];
+            const int side = isLeft ? 0 : 1;
+            const int fOwn = isLeft ? faceFL[F] : faceFR[F];
+
+            // (a) Own density trace at the boundary quadrature points of
+            //     this face (contributes to the normalisation scale; the
+            //     trace exists on domain-boundary edges as well) and the
+            //     positivity trigger's face-point check.
+            const int vBase = (side * 4 + fOwn) * (N_q * N_modes);
+            for (int i = 0; i < N_q; ++i) {
+                Real rhoI = 0.0;
+                Real ruI = 0.0, rvI = 0.0, enI = 0.0;
+                const int vRowF = vBase + i * N_modes;
+                for (int m = 0; m < N_modes; ++m) {
+                    rhoI += Vface[vRowF + m] * u[uOff + m];
+                    ruI += Vface[vRowF + m] * u[uOff + N_modes + m];
+                    rvI += Vface[vRowF + m] * u[uOff + 2 * N_modes + m];
+                    enI += Vface[vRowF + m] * u[uOff + 3 * N_modes + m];
+                }
+                if (rhoI < traceMin) {
+                    traceMin = rhoI;
+                }
+                if (rhoI > traceMax) {
+                    traceMax = rhoI;
+                }
+                traceSum += rhoI;
+                ++nTrace;
+                if (rhoI < minRhoP) {
+                    minRhoP = rhoI;
+                }
+                const Real pI = (gammaGas - 1.0) *
+                                (enI -
+                                 0.5 * (ruI * ruI + rvI * rvI) / rhoI);
+                if (pI < minPP) {
+                    minPP = pI;
+                }
+            }
+
+            // (b) Inflow jump accumulation on interior / periodic faces.
+            if (KR >= 0 && faceTypes[F] != 1) {
+                if (meanRhou * nxo + meanRhov * nyo < 0.0) {
+                    const Real jump = faceJump[F];
+                    numerator += (jump >= 0.0) ? jump : -jump;
+                    inflowLen += sqrt(faceN[F * 2] * faceN[F * 2] +
+                                      faceN[F * 2 + 1] * faceN[F * 2 + 1]);
+                }
+            }
+        }
+
+        // --- Normalisation scale from the boundary trace reduction.
+        Real rhoScale;
+        if (shockNorm == 0) {
+            rhoScale = traceMin;
+        } else if (shockNorm == 1) {
+            rhoScale = traceMax;
+        } else {
+            rhoScale = (nTrace > 0) ? traceSum / (Real)nTrace : 0.0;
+        }
+
+        // --- Element length scale: max centroid-to-vertex distance (the
+        //     quadrilateral analogue of the circumradius; triangles have
+        //     P3 = P4 counted twice, which only biases the centroid
+        //     mildly and keeps a valid characteristic length).
+        const int vOff = elem * 8;
+        const Real cx = (vertices[vOff + 0] + vertices[vOff + 2] +
+                         vertices[vOff + 4] + vertices[vOff + 6]) /
+                        4.0;
+        const Real cy = (vertices[vOff + 1] + vertices[vOff + 3] +
+                         vertices[vOff + 5] + vertices[vOff + 7]) /
+                        4.0;
+        Real h = 0.0;
+        for (int k = 0; k < 4; ++k) {
+            const Real dx = vertices[vOff + 2 * k] - cx;
+            const Real dy = vertices[vOff + 2 * k + 1] - cy;
+            const Real d = sqrt(dx * dx + dy * dy);
+            if (d > h) {
+                h = d;
+            }
+        }
+
+        // --- Indicator comparison. |rhoScale| guards against
+        //     non-physical states: a zero boundary trace makes the
+        //     indicator infinite, which flags the cell (the right call for
+        //     a broken state). All-outflow elements are never troubled.
+        int flag = 0;
+        if (force) {
+            flag = 1;
+        } else if (inflowLen > 0.0) {
+            const Real scale = (rhoScale >= 0.0) ? rhoScale : -rhoScale;
+            const Real denom = pow(h, hPow) * inflowLen * scale;
+            if (denom <= 0.0) {
+                flag = 1;
+            } else if (numerator / denom >= ckc) {
+                flag = 1;
+            }
+        }
+        // Positivity trigger: a non-positive pointwise density or
+        // pressure anywhere on the element (volume or face quadrature
+        // points) flags the cell regardless of the KXRCF criterion —
+        // such states feed sqrt() inside the LLF flux and are the
+        // one-step NaN path; the MR-WENO reconstruction's positivity
+        // scaling repairs them. This closes the detection gap for
+        // all-outflow cells (KXRCF numerator zero) whose polynomial
+        // overshoots have already gone non-physical.
+        if (minRhoP <= 0.0 || minPP <= 0.0) {
+            flag = 1;
+        }
+        troubled[elem] = flag;
+    }
+}

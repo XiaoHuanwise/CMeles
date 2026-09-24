@@ -1,0 +1,70 @@
+# CMeles 2-D Sod shock tube with the MR-WENO limiter.
+#
+# Domain [0, 2] x [0, 1], periodic in both directions, with the primary
+# discontinuity at x = 1.0. The periodic seam (x = 0 = 2) carries a second
+# (mirrored) Sod Riemann problem; at t_final = 0.2 the two wave systems
+# have not yet interacted (they collide at t ~ 0.42), so the exact
+# solution is the superposition of the two independent Riemann problems.
+#
+# P2 / 256 x 64 / SSPRK3 at the limiter CFL 0.18 (Zhu & Shu
+# recommendation for P2). Run with: ./build/CMeles config/sod_2d.toml
+
+[basis]
+order = 2
+nq = 4
+
+[mesh]
+nx = 256
+ny = 64
+x0 = 0.0
+y0 = 0.0
+dx = 0.0078125
+dy = 0.015625
+
+[bc]
+type = "periodic"
+
+[riemann]
+flux = "llf"
+
+[gas]
+gamma = 1.4
+
+[flow]
+rho = 1.0
+u = 0.0
+v = 0.0
+p = 1.0
+
+[time_marching]
+method = "ssprk3"
+cfl = 0.18
+t_final = 0.2
+
+[initial_condition]
+type = "expr"
+rho = "x < 1.0 ? 1.0 : 0.125"
+u = "0"
+v = "0"
+p = "x < 1.0 ? 1.0 : 0.1"
+
+[limiter]
+type = "mr-weno"
+ckc = 1.0
+shock_norm = "min"
+gamma_low = 0.01
+gamma_high = 0.99
+epsilon = 1.0e-6
+
+[occa]
+mode = "OpenMP"
+
+[output]
+enable = true
+strategy = "direct"
+interval = 200
+directory = "./results_sod"
+
+[log]
+level = 1
+interval = 100

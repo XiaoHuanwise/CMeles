@@ -87,16 +87,25 @@ void RungeKuttaStepper::rkStep(occa::memory &o_u, occa::memory &o_uNew,
         } else {
             rkStageCombine_(n, dt_, stage, s, o_A_, o_u, o_K_, o_uStage_);
         }
+        // Filter contract: the stage state feeds the RHS line below. In the
+        // pseudo-stepping role (inside DualStepper) no filter is ever
+        // installed, so this is a no-op there — pseudo iterates must stay
+        // unfiltered (see StepperBase::setPostStageFilter).
+        applyPostStageFilter(o_uStage_);
         occa::memory kS =
             o_K_.slice(nSz * static_cast<std::size_t>(stage), nSz);
         rhs_(o_uStage_, kS);
     }
 
     if (useLocalDt) {
-        rkFinalUpdateLocalDt_(n, o_dt_, s, o_B_, o_u, o_K_, o_uNew);
+        rkFinalUpdateLocalDt_(n, o_dt_, s, o_B_, o_u, o_K_, o_uNew_);
     } else {
-        rkFinalUpdate_(n, dt_, s, o_B_, o_u, o_K_, o_uNew);
+        rkFinalUpdate_(n, dt_, s, o_B_, o_u, o_K_, o_uNew_);
     }
+    // Filter contract: the candidate state feeds the FSAL RHS below and is
+    // published to the caller on accept. A rejected attempt retries from
+    // the untouched o_u, so the stages (and the filter) simply re-run.
+    applyPostStageFilter(o_uNew_);
     rhs_(o_uNew_, o_fNew);
 
     // FSAL row: K[s] = f_new (consumed by the error estimate).
@@ -170,7 +179,11 @@ Real RungeKuttaStepper::selectInitialStep(occa::memory &o_u) {
     const Real h0 = (d0 < Real(1e-5) || d1 < Real(1e-5)) ? Real(1e-6)
                                                          : Real(0.01) * d0 / d1;
 
-    // Trial step: f1 = R(u + h0 * f).
+    // Trial step: f1 = R(u + h0 * f). Discarded heuristic probe for the
+    // step-size guess only — the trial state is never a stage state of the
+    // accepted trajectory, so it is intentionally not passed through the
+    // post-stage filter (filtering it would bias the guess without any
+    // contract benefit).
     eulerUpdate(o_u, h0, o_f_, o_uStage_);
     rhs_(o_uStage_, o_scratch_);
 

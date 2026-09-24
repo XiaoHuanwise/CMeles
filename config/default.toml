@@ -47,7 +47,10 @@ mach = 0.1                # Reference Mach number (used for non-dimensionalisati
 [bc]
 type = "farfield"          # "farfield" (free-stream exterior state) | "periodic"
                            # (translation-paired periodic boundaries; requires
-                           #  the mesh boundaries to match under (Lx,0)/(0,Ly)).
+                           #  the mesh boundaries to match under (Lx,0)/(0,Ly))
+                           # | "free" (zero-gradient: exterior copies the
+                           #  interior trace; neutral while the wall-adjacent
+                           #  flow is constant, e.g. 2-D Riemann tests).
 
 # ---- Time marching ----
 [time_marching]
@@ -80,6 +83,25 @@ pseudo_dt_mode = "global"  # Adaptive pseudo-dt granularity (dual time):
                            # coefficient (per-DOF PI controller).
 pseudo_reject = false      # Allow pseudo-step retry on rejection (default: forced accept).
 dual_decoupled = false     # Decoupled per-stage pseudo steppers (DITR only; rejected with "be").
+
+# ---- Discontinuity limiter ----
+[limiter]
+type = "none"              # "none" (the default; unlimited) | "mr-weno"
+                           # (multi-resolution WENO limiter, applied after
+                           # every RK stage state / implicit stage publish —
+                           # see docs/tech_docs/mr_weno_limiter.md).
+ckc = 1.0                  # KXRCF troubled-cell threshold C_k.
+shock_norm = "min"         # KXRCF boundary-value normalisation: "min" | "max"
+                           # | "mean" (min is the conservative Zhu & Shu
+                           # choice — larger indicator, more flagging).
+gamma_low = 0.01           # Linear weight of the low-order candidate
+                           # (gamma_low + gamma_high must equal 1).
+gamma_high = 0.99          # Linear weight of the high-order (detail)
+                           # candidate.
+epsilon = 1.0e-6           # WENO-Z anti-zero epsilon.
+force_troubled = false     # Diagnostic: flag every element as troubled
+                           # (accuracy-acceptance tests only; never enable in
+                           # production).
 
 # ---- Initial condition ----
 [initial_condition]

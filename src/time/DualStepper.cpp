@@ -197,5 +197,18 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
         occa::memory stage1 = pseudoState.slice(nDof_, nDof_);
         blas_.copy(nDof_, stage1, o_u);
     }
+
+    // Filter contract (implicit family): project the converged stage state
+    // once, OUTSIDE the implicit solve — $u^{n+1} = \pi(u^*)$ with $u^*$ the
+    // solution of the limiter-free temporal residual. The pseudo iterates
+    // above were deliberately not filtered: embedding the projection in the
+    // iteration would stall the residual in a limit cycle and fake
+    // convergence (rationale in StepperBase::setPostStageFilter). The data
+    // of the NEXT physical step — R(u^n), the temporal-residual operands
+    // and u^{n-1} for U3R1 (copied above from the already-filtered o_u) —
+    // therefore sees limited physics by construction. The decoupled mode's
+    // internal u^{n+c_2} belongs to the implicit solve as well and is
+    // likewise not filtered.
+    applyPostStageFilter(o_u);
     return dt;
 }

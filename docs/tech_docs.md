@@ -19,5 +19,6 @@
 - [网格与几何](tech_docs/mesh_and_geometry.md) - 一维面单元、二维体单元、法向量、雅可比矩阵、邻接关系、边界处理
 - [控制方程与 DG 场](tech_docs/governed_equations_and_DG_field.md) - 可压缩 Navier-Stokes 方程、无量纲化、DG 空间离散、DG 场数据结构和函数设置
   - [黎曼求解器与数值通量](tech_docs/riemann_solver.md) - 数值通量 FDS 方案（LLF/Rusanov、Roe、带熵修正 Roe）与 FVS 方案（Steger-Warming、van Leer），一维 Euler 方程特征结构，统一代数框架与 CMeles 嵌入方式
+  - [MR-WENO 限制器](tech_docs/mr_weno_limiter.md) - 多分辨率 WENO 限制器原理（层级候选、telescoping 递推、WENO-Z 权重、光滑度指示器）、KXRCF 问题单元检测、仿射/非仿射单元分类与 L2 投影修正、面法向特征场分解，以及 OKL 内核、时间推进挂载点与配置项的实现方案
 - [时间推进](tech_docs/time_marching.md) - 定步长显式方法（Euler、SSPRK3）、嵌入式 RK 对自适应步长控制（PI 控制器）、DITR 隐式方法（U2R2/U2R1/U3R1）与双时间步法
 - [输入输出模块](tech_docs/io_module.md) - TOML 配置文件解析（读入模块）与 HDF5 流场数据写入（输出模块）的架构设计、数据格式和代码实现

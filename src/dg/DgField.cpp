@@ -414,7 +414,8 @@ void DgField::computeRHS(occa::memory o_u, occa::memory o_res) {
     computeFaceFlux_(N_face, N_vars_, N_modes_, N_q_, o_u, o_faceVandermonde_,
                      o_faceWeights_, geo_->o_faceKL(), geo_->o_faceFL(),
                      geo_->o_faceKR(), geo_->o_faceFR(), geo_->o_faceNormals(),
-                     geo_->o_faceJac(), o_free, gam, o_faceFlux_);
+                     geo_->o_faceJac(), o_free, static_cast<int>(cfg_.bcType()),
+                     gam, o_faceFlux_);
 
     // 3. Assembly: res = M^-1 (R_vol - G), with the surface contribution G
     //    gathered in-place from the face-flux slots inside the kernel

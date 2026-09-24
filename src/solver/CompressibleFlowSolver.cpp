@@ -18,6 +18,7 @@
 #include "common/Log.hpp"
 #include "common/Timer.hpp"
 #include "io/FieldOutput.hpp"
+#include "limiter/MrWenoLimiter.hpp"
 #include "time/StepperFactory.hpp"
 
 namespace solver_detail {
@@ -106,6 +107,18 @@ int CompressibleFlowSolver::run() {
         f->computeRHS(u, res);
     };
     stepper_ = makeStepperFactory(cfg_)(device_, *mem_, rhs, nDof);
+
+    // Discontinuity limiter ([limiter] type != "none"): installed as the
+    // stepper's post-stage filter, so it acts on every RK stage state /
+    // implicit stage publish for ALL time-marching methods (filtering
+    // contract in StepperBase::setPostStageFilter). With the default
+    // type = "none" nothing is created and the behaviour is unchanged.
+    if (cfg_.limiterType() != LimiterType::None) {
+        limiter_ =
+            std::make_unique<MrWenoLimiter>(cfg_, device_, *mem_, *field_);
+        stepper_->setPostStageFilter(
+            [this](occa::memory u) { limiter_->apply(u); });
+    }
 
     applyInitialCondition();
     device_.finish();

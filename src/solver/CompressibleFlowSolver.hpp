@@ -29,6 +29,7 @@
 #include "time/StepperBase.hpp"
 
 class FieldOutput;
+class LimiterBase;
 
 namespace solver_detail {
 /// Defined in CompressibleFlowSolver.cpp: overrides the OpenMP thread
@@ -101,6 +102,11 @@ private:
     std::unique_ptr<Blas> blas_;
     std::unique_ptr<DgField> field_;
     std::unique_ptr<StepperBase> stepper_;
+
+    /// Discontinuity limiter; null unless [limiter] type != "none".
+    /// Declared after the stepper so it is destroyed first (it only
+    /// borrows the field/device/mem handles, all of which outlive it).
+    std::unique_ptr<LimiterBase> limiter_;
 
     /// Output facade; null unless [output] enable is true (the default),
     /// so a default configuration produces no files at all.

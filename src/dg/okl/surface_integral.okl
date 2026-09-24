@@ -45,8 +45,8 @@
                              const int *faceKL, const int *faceFL,
                              const int *faceKR, const int *faceFR,
                              const Real *faceN, const Real *faceJ,
-                             const Real *freeState, const Real gamma,
-                             Real *faceFlux) {
+                             const Real *freeState, const int bcType,
+                             const Real gamma, Real *faceFlux) {
     for (int F = 0; F < N_face; ++F; @tile(TILE_SIZE, @outer, @inner)) {
         const int KL = faceKL[F];
         const int fL = faceFL[F];
@@ -78,7 +78,12 @@
                     qL[var] = acc;
                 }
 
-                // Interpolate right state; boundary faces use the free-stream state.
+                // Interpolate right state; boundary faces take an exterior
+                // state from the boundary-condition type: farfield uses the
+                // constant free-stream state, the free (zero-gradient)
+                // boundary copies the interior trace — the numerical flux
+                // of (q, q) is the pure physical flux, exactly neutral
+                // while the wall-adjacent flow is constant.
                 Real qR[N_VARS];
                 if (KR >= 0) {
                     for (int var = 0; var < N_VARS; ++var) {
@@ -93,6 +98,11 @@
                             acc += Vface[vBase + m] * u[uBase + m];
                         }
                         qR[var] = acc;
+                    }
+                } else if (bcType == 2) {
+                    // BcType::Free.
+                    for (int var = 0; var < N_VARS; ++var) {
+                        qR[var] = qL[var];
                     }
                 } else {
                     for (int var = 0; var < N_VARS; ++var) {

@@ -151,8 +151,26 @@ public:
     /// parallelogram_assumption.md). The per-point arrays are still filled
     /// for data completeness; the constant-quantity accessors below provide
     /// the cheap path.
+    ///
+    /// NOTE: this is a *global* flag (false if any element deviates). Code
+    /// that must branch per element (e.g. the MR-WENO limiter's truncation
+    /// vs projection path) uses elemAffine() instead.
     bool isOrthogonal() const noexcept {
         return is_orthogonal_;
+    }
+
+    /// @brief Per-element affine (parallelogram) flag, size
+    ///        $N_{\text{elem}}$, values 1/0.
+    ///
+    /// 1 when this element satisfies $P_1 + P_3 = P_2 + P_4$ within
+    /// tolerance: the bilinear map degenerates to an affine map, the mass
+    /// matrix is diagonal ($M = |J_e| I$) and an $L^2$ projection onto a
+    /// lower-degree space reduces to modal truncation. Triangles
+    /// (degenerate quadrilaterals) are always flagged 0. Unlike
+    /// isOrthogonal() this is a per-element classification, usable for
+    /// mixed meshes.
+    const Eigen::VectorXi &elemAffine() const noexcept {
+        return elem_affine_;
     }
 
     /// @brief Per-element constant Jacobian determinant $|J_e|$ (only valid
@@ -211,6 +229,9 @@ public:
     occa::memory o_faceTypes() const {
         return o_faceTypes_;
     }
+    occa::memory o_elemAffine() const {
+        return o_elemAffine_;
+    }
     occa::memory o_faceKL() const {
         return o_faceKL_;
     }
@@ -249,13 +270,14 @@ private:
     bool is_orthogonal_ = false;
     VectorXr jacobian_constant_;
     VectorXr minv_diag_;
+    Eigen::VectorXi elem_affine_; ///< Per-element parallelogram flag (1/0).
 
     occa::memory o_vertices_, o_absJ_;
     occa::memory o_Jinv11_, o_Jinv12_, o_Jinv21_, o_Jinv22_;
     occa::memory o_lambdaWJ_, o_minv_;
     occa::memory o_faceNormals_, o_faceJac_;
     occa::memory o_faceTypes_, o_faceKL_, o_faceFL_, o_faceKR_, o_faceFR_;
-    occa::memory o_elemFaces_;
+    occa::memory o_elemFaces_, o_elemAffine_;
 
     /// @brief Per-element geometry: bilinear coefficients, per-point
     ///        Jacobian quantities and the inverse mass matrix.

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <stdexcept>
 
 #include <toml.hpp>
@@ -110,6 +111,9 @@ BcType parseBcType(const std::string &name) {
     if (key == "periodic") {
         return BcType::Periodic;
     }
+    if (key == "free" || key == "zero-gradient" || key == "zero_gradient") {
+        return BcType::Free;
+    }
     throw std::invalid_argument("parseBcType: unknown bc name '" + name + "'");
 }
 
@@ -119,6 +123,8 @@ const char *bcTypeName(BcType t) noexcept {
             return "farfield";
         case BcType::Periodic:
             return "periodic";
+        case BcType::Free:
+            return "free";
         default:
             return "unknown";
     }
@@ -209,6 +215,57 @@ PseudoDtMode parsePseudoDtMode(const std::string &name) {
                                 name + "'");
 }
 
+LimiterType parseLimiterType(const std::string &name) {
+    const std::string key = toLower(name);
+    if (key == "none") {
+        return LimiterType::None;
+    }
+    if (key == "mr-weno" || key == "mr_weno" || key == "mrweno") {
+        return LimiterType::MrWeno;
+    }
+    throw std::invalid_argument("parseLimiterType: unknown limiter name '" +
+                                name + "'");
+}
+
+const char *limiterTypeName(LimiterType t) noexcept {
+    switch (t) {
+        case LimiterType::None:
+            return "none";
+        case LimiterType::MrWeno:
+            return "mr-weno";
+        default:
+            return "unknown";
+    }
+}
+
+ShockNorm parseShockNorm(const std::string &name) {
+    const std::string key = toLower(name);
+    if (key == "min") {
+        return ShockNorm::Min;
+    }
+    if (key == "max") {
+        return ShockNorm::Max;
+    }
+    if (key == "mean") {
+        return ShockNorm::Mean;
+    }
+    throw std::invalid_argument("parseShockNorm: unknown norm name '" + name +
+                                "'");
+}
+
+const char *shockNormName(ShockNorm t) noexcept {
+    switch (t) {
+        case ShockNorm::Min:
+            return "min";
+        case ShockNorm::Max:
+            return "max";
+        case ShockNorm::Mean:
+            return "mean";
+        default:
+            return "unknown";
+    }
+}
+
 IcType parseIcType(const std::string &name) {
     const std::string key = toLower(name);
     if (key == "uniform") {
@@ -289,6 +346,14 @@ void Config::setDefaults() {
     time_pseudo_dt_mode_   = PseudoDtMode::Global;
     time_pseudo_reject_    = false;
     time_dual_decoupled_   = false;
+
+    limiter_type_           = LimiterType::None;
+    limiter_ckc_            = Real(1);
+    limiter_shock_norm_     = ShockNorm::Min;
+    limiter_gamma_low_      = Real(0.01);
+    limiter_gamma_high_     = Real(0.99);
+    limiter_epsilon_        = Real(1e-6);
+    limiter_force_troubled_ = false;
 
     ic_type_ = IcType::Uniform;
     ic_rho_  = "1";
@@ -419,6 +484,25 @@ Config::Config(const std::string &path) {
             getBool(*tbl, "dual_decoupled", time_dual_decoupled_);
     }
 
+    // [limiter]
+    if (const auto it = root.find("limiter"); it != root.end()) {
+        const auto &tbl = it->second.as_table();
+        if (const auto tIt = tbl->find("type"); tIt != tbl->end()) {
+            const std::string name = tIt->second.value_or(std::string("none"));
+            limiter_type_          = parseLimiterType(name);
+        }
+        limiter_ckc_ = getReal(*tbl, "ckc", limiter_ckc_);
+        if (const auto nIt = tbl->find("shock_norm"); nIt != tbl->end()) {
+            const std::string name = nIt->second.value_or(std::string("min"));
+            limiter_shock_norm_    = parseShockNorm(name);
+        }
+        limiter_gamma_low_  = getReal(*tbl, "gamma_low", limiter_gamma_low_);
+        limiter_gamma_high_ = getReal(*tbl, "gamma_high", limiter_gamma_high_);
+        limiter_epsilon_    = getReal(*tbl, "epsilon", limiter_epsilon_);
+        limiter_force_troubled_ =
+            getBool(*tbl, "force_troubled", limiter_force_troubled_);
+    }
+
     // [initial_condition]
     if (const auto it = root.find("initial_condition"); it != root.end()) {
         const auto &tbl = it->second.as_table();
@@ -497,6 +581,23 @@ Config::Config(const std::string &path) {
     if (time_pseudo_rtol_ < Real(0) || time_pseudo_atol_ < Real(0)) {
         throw std::invalid_argument(
             "Config: pseudo_rtol and pseudo_atol must be >= 0 (0 = auto)");
+    }
+    if (limiter_ckc_ <= Real(0)) {
+        throw std::invalid_argument("Config: limiter ckc must be > 0");
+    }
+    if (limiter_gamma_low_ <= Real(0) || limiter_gamma_high_ <= Real(0)) {
+        throw std::invalid_argument(
+            "Config: limiter gamma_low and gamma_high must be > 0");
+    }
+    if (std::abs(limiter_gamma_low_ + limiter_gamma_high_ - Real(1)) >
+        Real(1e-12)) {
+        throw std::invalid_argument(
+            "Config: limiter gamma_low + gamma_high must equal 1 (the "
+            "telescoping identity gamma_low*p_low + gamma_high*p_high = q "
+            "requires it)");
+    }
+    if (limiter_epsilon_ <= Real(0)) {
+        throw std::invalid_argument("Config: limiter epsilon must be > 0");
     }
     if (occa_threads_ < 0) {
         throw std::invalid_argument("Config: threads must be >= 0");

@@ -8,3 +8,11 @@ add_test(NAME euler_vortex COMMAND test_euler_vortex)
 add_executable(test_vortex_methods test_vortex_methods.cpp)
 target_link_libraries(test_vortex_methods PRIVATE cmeles_core)
 add_test(NAME vortex_methods COMMAND test_vortex_methods)
+
+add_executable(test_sod test_sod.cpp)
+target_link_libraries(test_sod PRIVATE cmeles_core)
+add_test(NAME sod COMMAND test_sod)
+
+add_executable(test_riemann2d test_riemann2d.cpp)
+target_link_libraries(test_riemann2d PRIVATE cmeles_core)
+add_test(NAME riemann2d COMMAND test_riemann2d)

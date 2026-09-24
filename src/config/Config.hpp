@@ -49,13 +49,18 @@ const char *fluxTypeName(FluxType t) noexcept;
 /// @brief Boundary-condition type.
 enum class BcType : int {
     Farfield = 0, ///< Far-field free-stream exterior state (implemented).
-    Periodic = 1  ///< Translation-paired periodic boundaries (implemented).
+    Periodic = 1, ///< Translation-paired periodic boundaries (implemented).
+    Free     = 2  ///< Zero-gradient (free) boundary: the exterior state
+                  ///< copies the interior trace; exactly neutral while the
+                  ///< flow near the wall is constant (e.g. the 2-D Riemann
+                  ///< tests before any wave reaches the boundary).
 };
 
 /// @brief Parse a boundary-condition name string into a \p BcType.
 ///
 /// Accepted names (case-insensitive): "farfield", "far-field", "far_field",
-/// "periodic". Throws std::invalid_argument for unknown names.
+/// "periodic", "free", "zero-gradient", "zero_gradient". Throws
+/// std::invalid_argument for unknown names.
 BcType parseBcType(const std::string &name);
 
 /// @brief Convert a \p BcType back to its canonical string name.
@@ -109,6 +114,40 @@ enum class PseudoDtMode : int {
 /// Accepted names (case-insensitive): "global", "local". Throws
 /// std::invalid_argument for unknown names.
 PseudoDtMode parsePseudoDtMode(const std::string &name);
+
+/// @brief Discontinuity limiter family ([limiter] section).
+enum class LimiterType : int {
+    None   = 0, ///< No limiter (the default; preserves unlimited behaviour).
+    MrWeno = 1  ///< Multi-resolution WENO limiter (Zhu & Shu).
+};
+
+/// @brief Parse a limiter name string into a \p LimiterType.
+///
+/// Accepted names (case-insensitive): "none", "mr-weno", "mr_weno",
+/// "mrweno". Throws std::invalid_argument for unknown names.
+LimiterType parseLimiterType(const std::string &name);
+
+/// @brief Convert a \p LimiterType back to its canonical string name.
+const char *limiterTypeName(LimiterType t) noexcept;
+
+/// @brief Normalisation of the KXRCF boundary-value scale ([limiter]
+///        shock_norm): the trace of the indicator variable (density) along
+///        the element boundary is reduced by min / max / mean over the
+///        boundary quadrature points.
+enum class ShockNorm : int {
+    Min  = 0, ///< Minimum trace (Zhu & Shu; larger indicator, conservative).
+    Max  = 1, ///< Maximum trace.
+    Mean = 2  ///< Arithmetic mean of the trace.
+};
+
+/// @brief Parse a shock-norm name string into a \p ShockNorm.
+///
+/// Accepted names (case-insensitive): "min", "max", "mean". Throws
+/// std::invalid_argument for unknown names.
+ShockNorm parseShockNorm(const std::string &name);
+
+/// @brief Convert a \p ShockNorm back to its canonical string name.
+const char *shockNormName(ShockNorm t) noexcept;
 
 /// @brief Initial-condition type.
 enum class IcType : int {
@@ -355,6 +394,48 @@ public:
         return time_dual_decoupled_;
     }
 
+    // ---- Limiter ----
+
+    /// @brief Limiter family (see \p LimiterType). None by default.
+    LimiterType limiterType() const noexcept {
+        return limiter_type_;
+    }
+
+    /// @brief KXRCF troubled-cell threshold $C_k$.
+    Real limiterCkc() const noexcept {
+        return limiter_ckc_;
+    }
+
+    /// @brief KXRCF boundary-value normalisation (see \p ShockNorm).
+    ShockNorm limiterShockNorm() const noexcept {
+        return limiter_shock_norm_;
+    }
+
+    /// @brief MR-WENO linear weight of the low-order candidate,
+    ///        $\gamma_{\ell_2-1,\ell_2}$.
+    Real limiterGammaLow() const noexcept {
+        return limiter_gamma_low_;
+    }
+
+    /// @brief MR-WENO linear weight of the high-order (detail) candidate,
+    ///        $\gamma_{\ell_2,\ell_2}$.
+    Real limiterGammaHigh() const noexcept {
+        return limiter_gamma_high_;
+    }
+
+    /// @brief WENO-Z anti-zero epsilon $\varepsilon_w$.
+    Real limiterEpsilon() const noexcept {
+        return limiter_epsilon_;
+    }
+
+    /// @brief Force every element to be flagged as troubled (diagnostic
+    ///        switch for the accuracy-acceptance tests: with the whole mesh
+    ///        flagged, a smooth solution must be recovered to round-off on
+    ///        affine elements). Never enable for production runs.
+    bool limiterForceTroubled() const noexcept {
+        return limiter_force_troubled_;
+    }
+
     // ---- Initial condition ----
 
     IcType icType() const noexcept {
@@ -475,6 +556,14 @@ private:
     PseudoDtMode time_pseudo_dt_mode_ = PseudoDtMode::Global;
     bool time_pseudo_reject_          = false;
     bool time_dual_decoupled_         = false;
+
+    LimiterType limiter_type_     = LimiterType::None;
+    Real limiter_ckc_             = Real(1);
+    ShockNorm limiter_shock_norm_ = ShockNorm::Min;
+    Real limiter_gamma_low_       = Real(0.01);
+    Real limiter_gamma_high_      = Real(0.99);
+    Real limiter_epsilon_         = Real(1e-6);
+    bool limiter_force_troubled_  = false;
 
     IcType ic_type_     = IcType::Uniform;
     std::string ic_rho_ = "1";

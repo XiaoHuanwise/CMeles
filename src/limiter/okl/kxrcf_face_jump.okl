@@ -1,0 +1,61 @@
+// kxrcf_face_jump.okl — Per-face signed density-jump boundary integral for
+// the modified KXRCF troubled-cell indicator.
+//
+// One thread per face, two-pass structure mirroring surface_integral.okl:
+//
+//   jump[F] = \int_{e_F} (rho_L - rho_R) dGamma
+//           = sum_i w_i |J_f| (rho_L(t_i) - rho_R(t_i))
+//
+// with the left/right density traces interpolated from the modal
+// coefficients of the face's left/right elements via the face Vandermonde
+// matrices. The sign convention follows the face normal (KL -> KR).
+//
+// Output semantics for the special faces (consumed by kxrcf_flag):
+//   - boundary faces (KR < 0): dummy 0 (the flag kernel skips domain
+//     boundary inflow edges — no neighbour to compare against);
+//   - collapsed (triangle) faces (fL < 0): dummy 0.
+//
+// See docs/tech_docs/mr_weno_limiter.md, "问题单元检测" section.
+
+@kernel void kxrcfFaceJump(const int N_face, const int N_vars,
+                           const int N_modes, const int N_q, const Real *u,
+                           const Real *Vface, const Real *faceW,
+                           const int *faceKL, const int *faceFL,
+                           const int *faceKR, const int *faceFR,
+                           const Real *faceJ, Real *faceJump) {
+    for (int F = 0; F < N_face; ++F; @tile(TILE_SIZE, @outer, @inner)) {
+        const int KL = faceKL[F];
+        const int fL = faceFL[F];
+        const int KR = faceKR[F];
+        const int fR = faceFR[F];
+
+        if (fL >= 0 && KR >= 0) {
+            // Pass 1: density traces at every face quadrature point.
+            Real rL[NQ_MAX], rR[NQ_MAX];
+            const int uL = KL * N_vars * N_modes;
+            const int uR = KR * N_vars * N_modes;
+            for (int i = 0; i < N_q; ++i) {
+                const int vL = (0 * 4 + fL) * (N_q * N_modes) + i * N_modes;
+                const int vR = (1 * 4 + fR) * (N_q * N_modes) + i * N_modes;
+                Real accL = 0.0;
+                Real accR = 0.0;
+                for (int m = 0; m < N_modes; ++m) {
+                    accL += Vface[vL + m] * u[uL + m];
+                    accR += Vface[vR + m] * u[uR + m];
+                }
+                rL[i] = accL;
+                rR[i] = accR;
+            }
+
+            // Pass 2: weighted quadrature of the signed jump.
+            Real acc = 0.0;
+            for (int i = 0; i < N_q; ++i) {
+                acc += faceW[i] * faceJ[F] * (rL[i] - rR[i]);
+            }
+            faceJump[F] = acc;
+        } else {
+            // Boundary / degenerate face: dummy value.
+            faceJump[F] = 0.0;
+        }
+    }
+}

@@ -53,6 +53,36 @@ public:
     /// @brief Canonical method name.
     virtual const char *name() const = 0;
 
+    /// @brief Install a post-stage state filter (e.g. the MR-WENO limiter).
+    ///
+    /// Filtering contract — binding for every stepper, current and future:
+    ///
+    ///   1. Every stage state that will subsequently be used as data by an
+    ///      RHS evaluation, and the state published to the caller at the
+    ///      end of advance(), must have passed through the filter first
+    ///      (an SSP framework requirement: the limiter acts on the state
+    ///      between the stage update and the next RHS evaluation).
+    ///
+    ///   2. States internal to an implicit solve iteration (dual-time
+    ///      pseudo iterates) must NOT be filtered. The limiter acts as a
+    ///      projection on the converged stage state instead:
+    ///      $u^{n+1} = \pi(u^*)$ where $u^*$ solves the smooth equation
+    ///      $G(u^*; u^n) = 0$ that contains no limiter. Embedding the
+    ///      projection inside the iteration would (a) make the iterated
+    ///      operator piecewise discontinuous (WENO weights / troubled
+    ///      flags switch at O(1) magnitude when iterates cross the KXRCF
+    ///      threshold), stalling the residual in a limit cycle, and
+    ///      (b) fake convergence (the projection pushes states back into
+    ///      the admissible set, lowering the residual norm without solving
+    ///      the equation). The equation data ($u^n$, $R(u^n)$, $u^{n-1}$)
+    ///      always comes from published — hence already filtered — states,
+    ///      so the implicit residual sees limited physics by construction.
+    ///
+    /// An empty filter (the default) disables limiting.
+    void setPostStageFilter(StateFilter filter) {
+        postStageFilter_ = std::move(filter);
+    }
+
 protected:
     /// @param device  OCCA device (lifetime must exceed this object).
     /// @param mem     Device memory manager (lifetime must exceed this
@@ -90,6 +120,17 @@ protected:
         explicitEulerUpdate_(static_cast<int>(nDof_), dt, o_un, o_res, o_unp1);
     }
 
+    /// @brief Apply the installed post-stage filter to \p o_state (a no-op
+    ///        when no filter is installed).
+    ///
+    /// Steppers call this at the stage-state write-back points defined by
+    /// the setPostStageFilter() contract.
+    void applyPostStageFilter(occa::memory o_state) {
+        if (postStageFilter_) {
+            postStageFilter_(o_state);
+        }
+    }
+
     // ---- Shared context
     // --------------------------------------------------------
 
@@ -103,4 +144,7 @@ protected:
 private:
     /// Shared Euler-update kernel (lazily built by eulerUpdate()).
     occa::kernel explicitEulerUpdate_;
+
+    /// Post-stage state filter (limiter); empty = no limiting.
+    StateFilter postStageFilter_;
 };
