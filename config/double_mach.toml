@@ -1,0 +1,108 @@
+# CMeles double Mach reflection (Woodward & Colella 1984), 480x120
+# order-3 production run on [0, 4] x [0, 1] (dx = 1/120): a Mach 10 shock
+# initially at x = 1/6 whose front makes 60 degrees with the x-axis
+# (x - y*tan(pi/6) = 1/6, i.e. x_s = 1/6 + y/sqrt(3)) propagates into
+# quiescent gas (rho, u, v, p) = (1.4, 0, 0, 1). The shock translates
+# rigidly with velocity 10*(cos(pi/6), -sin(pi/6)) — the post-shock state
+# (8, 8.25*cos(pi/6), -8.25*sin(pi/6), 116.5) = (8, 7.1447, -4.125,
+# 116.5) is perpendicular to the front. Along any FIXED horizontal line
+# (e.g. the top boundary y = 1) the tilted front therefore sweeps at
+# 10/sin(pi/3) = 20/sqrt(3) = 11.547: the rigid translation
+# (8.660, -5.0) plus the front-slope contribution 5*tan(pi/6) = 2.887 of
+# the downward drift. The top-boundary Dirichlet data follows Woodward &
+# Colella's exact shock position x_s = 1/6 + (1 + 20t)/sqrt(3), so the
+# initial condition and the boundary classifier read
+#   (x - 1/6 - 20*t/sqrt(3)) < y/sqrt(3).
+# SSPRK3 + LLF + MR-WENO limiter, 10 OpenMP threads, integrated to
+# T = 0.2 (the presentation time of the reference figures).
+#
+# Boundaries (Woodward & Colella):
+#   x_low : post-shock inflow (constant Dirichlet, supersonic inflow);
+#   x_high: free outflow (supersonic, exactly neutral);
+#   y_high: exact moving-shock Dirichlet (post/pre shock by the front
+#           position at time t — no spurious reflection of the incident
+#           shock as a fixed-inflow boundary would produce);
+#   y_low : x < 1/6 post-shock inflow | x >= 1/6 slip (reflection) wall —
+#           the Mach reflection forms along the wall right of the shock
+#           foot (the front extension sweeps x = 1/6 + 20*t/sqrt(3)).
+#
+#   OMP_NUM_THREADS=10 /home/wise_world/CMeles/build/CMeles double_mach.toml
+# then open results_double_mach/double_mach_series.pvd in ParaView.
+
+[basis]
+order = 3
+# N+1 = 4 quadrature points per direction (the 2-D Riemann production
+# configuration; cfl 0.1 keeps the strong shock footprint stable under
+# this under-integrated quadrature).
+nq = 4
+
+[mesh]
+nx = 480
+ny = 120
+x0 = 0.0
+y0 = 0.0
+dx = 0.008333333333333333
+dy = 0.008333333333333333
+
+[bc]
+type = "free"
+# Dirichlet expressions shared by every "expr" face (x, y, t available):
+# the moving-shock classifier covers x_low (always post-shock) and the
+# y_low inflow segment (post-shock while x < 1/6) automatically.
+rho = "(x - 1/6 - 20*t/sqrt(3)) < y/sqrt(3) ? 8.0 : 1.4"
+u = "(x - 1/6 - 20*t/sqrt(3)) < y/sqrt(3) ? 8.25*cos(pi/6) : 0.0"
+v = "(x - 1/6 - 20*t/sqrt(3)) < y/sqrt(3) ? -8.25*sin(pi/6) : 0.0"
+p = "(x - 1/6 - 20*t/sqrt(3)) < y/sqrt(3) ? 116.5 : 1.0"
+
+[bc.x_low]
+type = "expr"
+
+[bc.y_high]
+type = "expr"
+
+[bc.y_low]
+type = "slip"
+split_x = 0.16666666666666666
+split_type = "expr"
+
+[riemann]
+flux = "llf"
+
+[gas]
+gamma = 1.4
+
+[flow]
+rho = 1.4
+u = 0.0
+v = 0.0
+p = 1.0
+
+[time_marching]
+method = "ssprk3"
+cfl = 0.1
+t_final = 0.2
+
+[initial_condition]
+type = "expr"
+rho = "(x - 1/6) < y/sqrt(3) ? 8.0 : 1.4"
+u = "(x - 1/6) < y/sqrt(3) ? 8.25*cos(pi/6) : 0.0"
+v = "(x - 1/6) < y/sqrt(3) ? -8.25*sin(pi/6) : 0.0"
+p = "(x - 1/6) < y/sqrt(3) ? 116.5 : 1.0"
+
+[limiter]
+type = "mr-weno"
+
+[occa]
+mode = "OpenMP"
+threads = 10
+
+[output]
+enable = true
+strategy = "direct"
+format = "vtu"
+interval = 500
+directory = "./results_double_mach"
+
+[log]
+level = 1
+interval = 100

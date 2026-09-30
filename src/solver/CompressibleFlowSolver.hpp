@@ -35,6 +35,9 @@ namespace solver_detail {
 /// Defined in CompressibleFlowSolver.cpp: overrides the OpenMP thread
 /// count (no-op for threads <= 0).
 void applyOmpThreads(int threads);
+
+/// ExprBoundaryCondition.hpp: compiled [bc] Dirichlet expressions.
+class ExprBoundaryCondition;
 } // namespace solver_detail
 
 /// @brief Run a complete computation for the configured time-marching
@@ -107,6 +110,10 @@ private:
     /// Declared after the stepper so it is destroyed first (it only
     /// borrows the field/device/mem handles, all of which outlive it).
     std::unique_ptr<LimiterBase> limiter_;
+
+    /// Compiled [bc] Dirichlet expressions; null unless any boundary face
+    /// resolved to type "expr". Refreshed once per physical time step.
+    std::unique_ptr<solver_detail::ExprBoundaryCondition> exprBc_;
 
     /// Output facade; null unless [output] enable is true (the default),
     /// so a default configuration produces no files at all.

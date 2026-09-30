@@ -3,6 +3,7 @@
 ///        the residual pipeline for the 2D inviscid Euler equations.
 
 #include "dg/DgField.hpp"
+#include <cstdio>
 
 #include <algorithm>
 #include <cmath>
@@ -13,6 +14,7 @@
 #include "basis/BasisFunctions1D.hpp"
 #include "basis/BasisFunctions2D.hpp"
 #include "common/KernelProps.hpp"
+#include "dg/QuadratureCoords.hpp"
 #include "math/MathOps.hpp"
 #include "mesh/Mesh.hpp"
 #include "mesh/MeshGeometry.hpp"
@@ -86,6 +88,7 @@ void DgField::setup() {
 
     buildFaceQuadratureData();
     allocateDeviceMemory();
+    buildBoundaryData();
     buildKernels();
 }
 
@@ -217,8 +220,12 @@ void DgField::allocateDeviceMemory() {
     const occa::dim_t nFaceEvm =
         static_cast<occa::dim_t>(geo_->numFaces()) * N_vars_ * 2 * N_modes_;
 
-    o_u_        = mem_.wrapOrMalloc(nEvm);
-    o_res_      = mem_.wrapOrMalloc(nEvm);
+    o_u_   = mem_.wrapOrMalloc(nEvm);
+    o_res_ = mem_.wrapOrMalloc(nEvm);
+    // Initial-field snapshot for the "ic" Riemann reference target. Filled
+    // by setInitialFieldSnapshot() (zero-initialised allocation here keeps
+    // it well-defined even if the target path never selects it).
+    o_u0_       = mem_.wrapOrMalloc(nEvm);
     o_faceFlux_ = mem_.wrapOrMalloc(nFaceEvm);
     // Scratch for the residual pipeline: R_vol is contracted by the fused
     // assembleRHS together with the gathered face flux.
@@ -234,6 +241,147 @@ void DgField::allocateDeviceMemory() {
     dt_elem_.assign(static_cast<std::size_t>(geo_->numElements()), Real(0));
     o_dtElem_ = mem_.wrapOrMalloc(dt_elem_.data(),
                                   static_cast<occa::dim_t>(dt_elem_.size()));
+}
+
+void DgField::setInitialFieldSnapshot() {
+    // Device-to-device copy (backend-portable; the whole buffer). The
+    // unified-memory backends get a memcpy over the distinct host buffers,
+    // the separate-memory backends a device-side transfer.
+    o_u_.copyTo(o_u0_);
+}
+
+// ============================================================================
+// Boundary data
+// ============================================================================
+
+void DgField::buildBoundaryData() {
+    // Face quadrature points in the reference frame of the left element's
+    // own face map: (r_i, s_i) = (cr * t_i + dr, cs * t_i + ds), gathered
+    // for all four local faces.
+    MatrixX2r facePts(static_cast<Eigen::Index>(4) * N_q_, 2);
+    for (int f = 0; f < 4; ++f) {
+        const FaceRefMap &map = faceRefMapLeft(f);
+        for (int i = 0; i < N_q_; ++i) {
+            const Real t = basis1D_->points()(i);
+            facePts(static_cast<Eigen::Index>(f) * N_q_ + i, 0) =
+                map.cr * t + map.dr;
+            facePts(static_cast<Eigen::Index>(f) * N_q_ + i, 1) =
+                map.cs * t + map.ds;
+        }
+    }
+
+    const auto &faceElems = mesh_->faceElements();
+    const auto &meshVerts = mesh_->vertices();
+    const auto &normals   = geo_->faceNormals();
+    const int N_face      = geo_->numFaces();
+
+    face_bc_type_.assign(static_cast<std::size_t>(N_face), 0);
+    bf_map_.assign(static_cast<std::size_t>(N_face), -1);
+
+    n_boundary_faces_ = 0;
+    n_expr_faces_     = 0;
+
+    // Pass 1: classify every domain-boundary face (KR < 0; periodic faces
+    // are glued and act interior). The stored face normal is the left
+    // element's outward normal, which at a boundary face points out of the
+    // domain — its dominant axis assigns the side. A per-side table with a
+    // split_x switches faces whose centroid x lies left of split_x to the
+    // split type (e.g. the Double-Mach floor: post-shock inflow ahead of
+    // the shock foot, slip wall behind it).
+    for (int F = 0; F < N_face; ++F) {
+        const int KL = faceElems(F, 0);
+        const int fL = faceElems(F, 1);
+        const int KR = faceElems(F, 2);
+        if (fL < 0 || KR >= 0) {
+            continue; // collapsed (triangle) or interior / periodic face
+        }
+
+        const Real nx = normals(F, 0);
+        const Real ny = normals(F, 1);
+        BcSide side;
+        if (std::abs(nx) >= std::abs(ny)) {
+            side = (nx > Real(0)) ? BcSide::XHigh : BcSide::XLow;
+        } else {
+            side = (ny > Real(0)) ? BcSide::YHigh : BcSide::YLow;
+        }
+
+        const SideBc &sb = cfg_.bcSide(side);
+        BcType type      = sb.hasType ? sb.type : cfg_.bcType();
+        if (sb.hasSplit) {
+            const auto [vA, vB] = mesh_->faceVertices(KL, fL);
+            const Real cx = Real(0.5) * (meshVerts(vA, 0) + meshVerts(vB, 0));
+            if (cx < sb.splitX) {
+                type = sb.splitType;
+            }
+        }
+
+        bf_map_[static_cast<std::size_t>(F)]       = n_boundary_faces_;
+        face_bc_type_[static_cast<std::size_t>(F)] = static_cast<int>(type);
+        if (type == BcType::Expr) {
+            ++n_expr_faces_;
+        }
+        ++n_boundary_faces_;
+    }
+
+    // Pass 2: physical coordinates of every boundary-face quadrature point
+    // via the left element's bilinear map (the Dirichlet evaluation
+    // points), plus the zero-initialised ghost buffer.
+    bc_face_xy_.assign(static_cast<std::size_t>(n_boundary_faces_) * N_q_ * 2,
+                       Real(0));
+    bc_ghost_.assign(static_cast<std::size_t>(n_boundary_faces_) * N_q_ * 4,
+                     Real(0));
+    for (int F = 0; F < N_face; ++F) {
+        const int bf = bf_map_[static_cast<std::size_t>(F)];
+        if (bf < 0) {
+            continue;
+        }
+        const int KL       = faceElems(F, 0);
+        const int fL       = faceElems(F, 1);
+        const MatrixX2r xy = bilinearPhysicalCoords(
+            geo_->vertices().middleRows(static_cast<Eigen::Index>(KL), 1),
+            facePts.middleRows(static_cast<Eigen::Index>(fL) * N_q_, N_q_));
+        for (int i = 0; i < N_q_; ++i) {
+            bc_face_xy_[(static_cast<std::size_t>(bf) * N_q_ +
+                         static_cast<std::size_t>(i)) *
+                            2 +
+                        0] = xy(i, 0);
+            bc_face_xy_[(static_cast<std::size_t>(bf) * N_q_ +
+                         static_cast<std::size_t>(i)) *
+                            2 +
+                        1] = xy(i, 1);
+        }
+    }
+
+    // Expression faces need the [bc] rho/u/v/p Dirichlet expressions; the
+    // evaluator lives in the solver layer, so fail fast here.
+    if (n_expr_faces_ > 0 && (cfg_.bcRho().empty() || cfg_.bcU().empty() ||
+                              cfg_.bcV().empty() || cfg_.bcP().empty())) {
+        throw std::invalid_argument(
+            "DgField: boundary type \"expr\" requires the [bc] rho/u/v/p "
+            "Dirichlet expressions");
+    }
+
+    o_faceBcType_ = mem_.wrapOrMallocInt(
+        face_bc_type_.data(), static_cast<occa::dim_t>(face_bc_type_.size()));
+    o_bfMap_   = mem_.wrapOrMallocInt(bf_map_.data(),
+                                      static_cast<occa::dim_t>(bf_map_.size()));
+    o_bcGhost_ = mem_.wrapOrMalloc(bc_ghost_.data(),
+                                   static_cast<occa::dim_t>(bc_ghost_.size()));
+}
+
+void DgField::uploadBcGhost(const std::vector<Real> &ghost) {
+    if (ghost.size() != bc_ghost_.size()) {
+        throw std::invalid_argument("DgField::uploadBcGhost: expected " +
+                                    std::to_string(bc_ghost_.size()) +
+                                    " entries, received " +
+                                    std::to_string(ghost.size()));
+    }
+    // bc_ghost_ backs the wrap handle on unified backends (assignment keeps
+    // the buffer, so the alias stays valid); separate backends need the
+    // host-to-device copy.
+    bc_ghost_ = ghost;
+    mem_.copyFromHost(o_bcGhost_, bc_ghost_.data(),
+                      static_cast<occa::dim_t>(bc_ghost_.size()));
 }
 
 // ============================================================================
@@ -398,10 +546,13 @@ void DgField::computeRHS(occa::memory o_u, occa::memory o_res) {
                     geo_->o_Jinv21(), geo_->o_Jinv22(), cfg_.gamma(),
                     o_volScratch_);
 
-    // 2. Face flux: per-face accumulated numerical flux. The free-stream
-    //    state provides the exterior state on boundary faces (KR = -1).
-    //    Stored in a member (free_state_) so the wrapped handle stays valid
-    //    on unified memory backends and asynchronous GPU backends.
+    // 2. Face flux: per-face accumulated numerical flux. On boundary faces
+    //    (KR = -1) the exterior state comes from the per-face resolved
+    //    boundary type (free-stream state for farfield, mirrored trace for
+    //    the slip wall, expression-evaluated ghost states for the
+    //    Dirichlet boundary); the free-stream conserved state is stored in
+    //    a member (free_state_) so the wrapped handle stays valid on
+    //    unified memory backends and asynchronous GPU backends.
     const Real rho = cfg_.flowRho();
     const Real uu  = cfg_.flowU();
     const Real vv  = cfg_.flowV();
@@ -414,7 +565,8 @@ void DgField::computeRHS(occa::memory o_u, occa::memory o_res) {
     computeFaceFlux_(N_face, N_vars_, N_modes_, N_q_, o_u, o_faceVandermonde_,
                      o_faceWeights_, geo_->o_faceKL(), geo_->o_faceFL(),
                      geo_->o_faceKR(), geo_->o_faceFR(), geo_->o_faceNormals(),
-                     geo_->o_faceJac(), o_free, static_cast<int>(cfg_.bcType()),
+                     geo_->o_faceJac(), o_free, o_faceBcType_, o_bfMap_,
+                     o_bcGhost_, o_u0_, static_cast<int>(cfg_.riemannTarget()),
                      gam, o_faceFlux_);
 
     // 3. Assembly: res = M^-1 (R_vol - G), with the surface contribution G

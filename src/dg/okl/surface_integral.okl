@@ -45,7 +45,9 @@
                              const int *faceKL, const int *faceFL,
                              const int *faceKR, const int *faceFR,
                              const Real *faceN, const Real *faceJ,
-                             const Real *freeState, const int bcType,
+                             const Real *freeState, const int *faceBcType,
+                             const int *bfMap, const Real *bcGhost,
+                             const Real *u0, const int riemannTarget,
                              const Real gamma, Real *faceFlux) {
     for (int F = 0; F < N_face; ++F; @tile(TILE_SIZE, @outer, @inner)) {
         const int KL = faceKL[F];
@@ -79,12 +81,24 @@
                 }
 
                 // Interpolate right state; boundary faces take an exterior
-                // state from the boundary-condition type: farfield uses the
-                // constant free-stream state, the free (zero-gradient)
-                // boundary copies the interior trace — the numerical flux
-                // of (q, q) is the pure physical flux, exactly neutral
-                // while the wall-adjacent flow is constant.
+                // state from the per-face boundary-condition type
+                // (faceBcType, resolved host-side from the global [bc] type,
+                // per-side overrides and the split_x classification):
+                // farfield uses the constant free-stream state, the free
+                // (zero-gradient) boundary copies the interior trace — the
+                // numerical flux of (q, q) is the pure physical flux,
+                // exactly neutral while the wall-adjacent flow is constant —
+                // the slip wall mirrors the interior trace with the normal
+                // momentum negated (zero wall-normal mass flux), the expr
+                // (Dirichlet) boundary reads a conserved ghost state
+                // evaluated host-side from the [bc] expressions at
+                // (x, y, t), and the characteristic (Riemann /
+                // pressure far-field) boundary builds the state from the
+                // normal acoustic invariants.
                 Real qR[N_VARS];
+                // Per-face resolved boundary type (BcType as int); consulted
+                // only on boundary faces (KR < 0), a dummy on the rest.
+                const int bct = faceBcType[F];
                 if (KR >= 0) {
                     for (int var = 0; var < N_VARS; ++var) {
                         Real acc = 0.0;
@@ -99,12 +113,133 @@
                         }
                         qR[var] = acc;
                     }
-                } else if (bcType == 2) {
+                } else if (bct == 2) {
                     // BcType::Free.
                     for (int var = 0; var < N_VARS; ++var) {
                         qR[var] = qL[var];
                     }
+                } else if (bct == 4) {
+                    // BcType::Slip — reflection (slip) wall: mirror the
+                    // interior trace, negating the normal momentum
+                    // $$ m_{\mathrm{ghost}} = m - 2 (m \cdot \hat n)\,
+                    //    \hat n, \qquad \rho_{\mathrm{ghost}} = \rho,
+                    //    \; E_{\mathrm{ghost}} = E. $$
+                    // Any consistent numerical flux then produces
+                    // exactly zero wall-normal mass flux (the symmetric
+                    // Riemann solution has $v_n = 0$ at the wall).
+                    const Real mn = qL[1] * nUx + qL[2] * nUy;
+                    qR[0] = qL[0];
+                    qR[1] = qL[1] - 2.0 * mn * nUx;
+                    qR[2] = qL[2] - 2.0 * mn * nUy;
+                    qR[3] = qL[3];
+                } else if (bct == 5) {
+                    // BcType::Expr — Dirichlet state from the [bc]
+                    // expressions, evaluated host-side at (x, y, t) on
+                    // this face point and uploaded once per time step.
+                    const int bf = bfMap[F];
+                    for (int var = 0; var < N_VARS; ++var) {
+                        qR[var] = bcGhost[(bf * N_q + i) * N_VARS + var];
+                    }
+                } else if (bct == 3) {
+                // BcType::Riemann — characteristic (Riemann-invariant /
+                // pressure far-field) non-reflecting boundary state.
+                // The outgoing acoustic invariant carries the interior,
+                // the incoming one the reference state (the pressure
+                // anchoring mechanism):
+                //
+                // $$ R^+_b = V_{n,i} + \frac{2 c_i}{\gamma - 1} \;\;(\text{outgoing, interior}), \qquad R^-_b = V_{n,\infty} - \frac{2 c_\infty}{\gamma - 1} \;\;(\text{incoming, reference}). $$
+                //
+                // Entropy and the tangential velocity follow the flow
+                // direction (interior on the outflow side, reference on
+                // the inflow side), so a subsonic outflow anchors only
+                // the pressure: outgoing waves leave without
+                // reflection, unlike the zero-gradient branch whose
+                // acoustic Neumann behaviour reflects them back.
+                Real qT[N_VARS];
+                if (riemannTarget == 1) {
+                    // "ic" target: trace of the initial field at this
+                    // face point (same side-0 face-Vandermonde rows
+                    // the left-state interpolation uses).
+                    const int vBase0 =
+                        (0 * 4 + fL) * (N_q * N_modes) + i * N_modes;
+                    const int u0Base = KL * N_vars * N_modes;
+                    for (int var = 0; var < N_VARS; ++var) {
+                        Real acc = 0.0;
+                        for (int m = 0; m < N_modes; ++m) {
+                            acc += Vface[vBase0 + m] *
+                                   u0[u0Base + var * N_modes + m];
+                        }
+                        qT[var] = acc;
+                    }
                 } else {
+                    // "flow" target: the constant free-stream state.
+                    for (int var = 0; var < N_VARS; ++var) {
+                        qT[var] = freeState[var];
+                    }
+                }
+                const Real gm1  = gamma - 1.0;
+                const Real rhoI = qL[0];
+                const Real pI   = gm1 * (qL[3] - 0.5 * (qL[1] * qL[1] +
+                                                       qL[2] * qL[2]) /
+                                                    rhoI);
+                const Real rhoT = qT[0];
+                const Real pT   = gm1 * (qT[3] - 0.5 * (qT[1] * qT[1] +
+                                                       qT[2] * qT[2]) /
+                                                    rhoT);
+                if (rhoI <= 0.0 || pI <= 0.0 || rhoT <= 0.0 ||
+                    pT <= 0.0) {
+                    // Degenerate primitives: fall back to the free
+                    // branch rather than feeding sqrt a negative.
+                    for (int var = 0; var < N_VARS; ++var) {
+                        qR[var] = qL[var];
+                    }
+                } else {
+                    const Real cI  = sqrt(gamma * pI / rhoI);
+                    const Real cT  = sqrt(gamma * pT / rhoT);
+                    const Real vnI = (qL[1] * nUx + qL[2] * nUy) / rhoI;
+                    const Real vtI = (-qL[1] * nUy + qL[2] * nUx) / rhoI;
+                    const Real vnT = (qT[1] * nUx + qT[2] * nUy) / rhoT;
+                    const Real vtT = (-qT[1] * nUy + qT[2] * nUx) / rhoT;
+                    if (vnI >= cI || vnI <= -cI) {
+                        // Supersonic guard: a pure outflow reflects
+                        // nothing (interior state); a pure inflow is
+                        // imposed entirely by the reference state.
+                        const bool out = (vnI > 0.0);
+                        for (int var = 0; var < N_VARS; ++var) {
+                            qR[var] = out ? qL[var] : qT[var];
+                        }
+                    } else {
+                        // Invariant mixing (subsonic).
+                        const Real rp  = vnI + 2.0 * cI / gm1;
+                        const Real rm  = vnT - 2.0 * cT / gm1;
+                        const Real vnB = 0.5 * (rp + rm);
+                        const Real cB  = 0.25 * gm1 * (rp - rm);
+                        const bool out = (vnI > 0.0);
+                        const Real rhoS = out ? rhoI : rhoT;
+                        const Real cS   = out ? cI : cT;
+                        const Real vtB  = out ? vtI : vtT;
+                        if (cB <= 0.0) {
+                            for (int var = 0; var < N_VARS; ++var) {
+                                qR[var] = qL[var];
+                            }
+                        } else {
+                            // Isentropic density from the mixed sound
+                            // speed, then the boundary conserved state.
+                            const Real rhoB =
+                                rhoS * pow(cB / cS, 2.0 / gm1);
+                            const Real pB = rhoB * cB * cB / gamma;
+                            const Real uB = vnB * nUx - vtB * nUy;
+                            const Real vB = vnB * nUy + vtB * nUx;
+                            qR[0] = rhoB;
+                            qR[1] = rhoB * uB;
+                            qR[2] = rhoB * vB;
+                            qR[3] = pB / gm1 +
+                                    0.5 * rhoB * (uB * uB + vB * vB);
+                        }
+                    }
+                }
+            } else {
+                    // BcType::Farfield (0).
                     for (int var = 0; var < N_VARS; ++var) {
                         qR[var] = freeState[var];
                     }

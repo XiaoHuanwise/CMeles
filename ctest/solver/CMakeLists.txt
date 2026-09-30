@@ -16,3 +16,7 @@ add_test(NAME sod COMMAND test_sod)
 add_executable(test_riemann2d test_riemann2d.cpp)
 target_link_libraries(test_riemann2d PRIVATE cmeles_core)
 add_test(NAME riemann2d COMMAND test_riemann2d)
+
+add_executable(test_bc test_bc.cpp)
+target_link_libraries(test_bc PRIVATE cmeles_core)
+add_test(NAME bc COMMAND test_bc)

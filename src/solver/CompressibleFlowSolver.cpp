@@ -14,6 +14,7 @@
 #include <omp.h>
 #endif
 
+#include "ExprBoundaryCondition.hpp"
 #include "ExprInitialCondition.hpp"
 #include "common/Log.hpp"
 #include "common/Timer.hpp"
@@ -121,6 +122,32 @@ int CompressibleFlowSolver::run() {
     }
 
     applyInitialCondition();
+    // Limit the projected initial field once before stepping: the modal
+    // projection of a strong discontinuity (e.g. the Double-Mach shock,
+    // pressure ratio > 100) carries Gibbs undershoots that drive the
+    // pressure negative at quadrature points — the LLF flux would take
+    // the square root of a negative number in the very first RHS
+    // evaluation. The post-stage filter only sees RK stage states, so the
+    // initial state must be filtered explicitly (the "ic" Riemann snapshot
+    // below then references the limited, physical field).
+    if (limiter_) {
+        limiter_->apply(field_->o_u());
+    }
+    // Characteristic boundary with the "ic" reference target: freeze the
+    // initial field as the boundary reference state (the kernel evaluates
+    // its trace on the boundary faces).
+    if (cfg_.bcType() == BcType::Riemann &&
+        cfg_.riemannTarget() == RiemannTarget::Ic) {
+        field_->setInitialFieldSnapshot();
+    }
+    // Expression (Dirichlet) boundary faces: compile the [bc] expressions
+    // once and seed the ghost states at t = 0; the run loop refreshes them
+    // once per physical time step.
+    if (field_->hasExprBoundary()) {
+        exprBc_ = std::make_unique<solver_detail::ExprBoundaryCondition>(
+            cfg_, *field_);
+        exprBc_->refresh(Real(0));
+    }
     device_.finish();
 
     // Output stays completely dormant unless [output] enable is true.
@@ -143,6 +170,12 @@ int CompressibleFlowSolver::run() {
     loopTimer.start();
     intervalTimer.start();
     while (time_ < cfg_.timeFinal() - Real(1e-12) * cfg_.timeFinal()) {
+        // Expression (Dirichlet) boundary data moves with the physical
+        // time (e.g. the Double-Mach shock front on the top boundary):
+        // refresh the ghost states at the step's start time.
+        if (exprBc_) {
+            exprBc_->refresh(time_);
+        }
         const Real dt    = computeDt(time_);
         const Real taken = stepper_->advance(field_->o_u(), time_, dt);
         time_ += taken;

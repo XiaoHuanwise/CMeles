@@ -91,6 +91,23 @@ public:
         return o_res_;
     }
 
+    /// @brief Snapshot of the initial field ($N_e \cdot N_v \cdot N_m$),
+    ///        backing the "ic" reference target of the characteristic
+    ///        (Riemann) boundary condition. Valid only after
+    ///        \p setInitialFieldSnapshot() has been called.
+    occa::memory o_u0() const {
+        return o_u0_;
+    }
+
+    /// @brief Copy the current field into the initial-field snapshot
+    ///        (\p o_u0). Called once by the solver right after the initial
+    ///        condition is applied, when the characteristic boundary
+    ///        condition uses the "ic" reference target. When the snapshot
+    ///        has not been taken, \p o_u0() is an uninitialised buffer and
+    ///        is never dereferenced by the kernel (the "flow" target path
+    ///        is used instead).
+    void setInitialFieldSnapshot();
+
     /// @brief Per-face accumulated modal flux,
     ///        $N_f \cdot N_v \cdot 2 \cdot N_m$ (side 0 = left, 1 = right).
     occa::memory o_faceFlux() const {
@@ -108,6 +125,35 @@ public:
     occa::memory o_faceWeights() const {
         return o_faceWeights_;
     }
+
+    // ---- Boundary-condition data ----
+
+    /// @brief Whether any boundary face resolved to the expression
+    ///        (Dirichlet) type and needs per-step ghost refreshes.
+    bool hasExprBoundary() const noexcept {
+        return n_expr_faces_ > 0;
+    }
+
+    /// @brief Number of domain-boundary faces (compact ghost indexing).
+    int numBoundaryFaces() const noexcept {
+        return n_boundary_faces_;
+    }
+
+    /// @brief Physical $(x, y)$ of every boundary-face quadrature point,
+    ///        layout $[\mathrm{bf} \cdot N_q + i] \cdot 2 + \{0, 1\}$ with
+    ///        \p bf the compact boundary-face index — the evaluation
+    ///        points for the host-side Dirichlet expressions.
+    const std::vector<Real> &bcFacePoints() const noexcept {
+        return bc_face_xy_;
+    }
+
+    /// @brief Replace the Dirichlet ghost states and upload them.
+    ///
+    /// @param ghost  Conserved states, layout
+    ///               $[\mathrm{bf} \cdot N_q + i] \cdot 4 + \mathrm{var}$
+    ///               (size $N_{\mathrm{bf}} \cdot N_q \cdot 4$; entries of
+    ///               non-expr faces are ignored by the kernel).
+    void uploadBcGhost(const std::vector<Real> &ghost);
 
     /// @brief Reserved gradient array (viscous path), unused in this stage.
     occa::memory o_gradU() const {
@@ -204,6 +250,13 @@ private:
     ///        face Vandermonde, weights).
     void allocateDeviceMemory();
 
+    /// @brief Resolve the per-face boundary types from the configuration
+    ///        (global [bc] type, per-side overrides, split_x
+    ///        classification), compact-index the domain-boundary faces and
+    ///        tabulate their quadrature-point physical coordinates for the
+    ///        host-side Dirichlet expression evaluation.
+    void buildBoundaryData();
+
     // ---- Members ----
 
     const Config &cfg_;
@@ -234,10 +287,26 @@ private:
     // Device buffers.
     occa::memory o_u_;
     occa::memory o_res_;
+    occa::memory o_u0_; ///< Initial-field snapshot ("ic" Riemann target).
     occa::memory o_faceFlux_;
     occa::memory o_gradU_; ///< Reserved for the viscous path.
     occa::memory o_faceVandermonde_;
     occa::memory o_faceWeights_;
+
+    // Boundary-condition data: per-face resolved type (consumed by
+    // computeFaceFlux on KR < 0 faces), compact boundary-face index and the
+    // Dirichlet ghost states. The host vectors back the wrap handles on
+    // unified backends and must stay members.
+    std::vector<int>
+        face_bc_type_; ///< Resolved BcType per face (0 dummy on interior).
+    std::vector<int> bf_map_; ///< Compact boundary index; -1 on interior faces.
+    std::vector<Real> bc_face_xy_; ///< Boundary point coords, [bf*Nq+i]*2.
+    std::vector<Real> bc_ghost_;   ///< Dirichlet ghost states, [bf*Nq+i]*4.
+    int n_boundary_faces_ = 0;     ///< Compact boundary-face count.
+    int n_expr_faces_     = 0;     ///< Faces resolved to BcType::Expr.
+    occa::memory o_faceBcType_;
+    occa::memory o_bfMap_;
+    occa::memory o_bcGhost_;
 
     // Scratch buffer for the residual pipeline (R_vol is contracted by
     // the fused assembleRHS together with the gathered face flux).

@@ -87,6 +87,7 @@ void applyExprInitialCondition(DgField &field, Real gamma,
 
     field.setInitialConditionNodal(field.o_u(), nodal);
 }
+
 } // namespace
 
 namespace solver_detail {

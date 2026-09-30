@@ -1,42 +1,42 @@
 /// @file test_riemann2d.cpp
-/// @brief Two-dimensional Riemann problem (Lax & Liu configuration 4)
-///        with the MR-WENO limiter under the free (zero-gradient)
-///        boundary condition.
+/// @brief Two-dimensional Riemann problem (Lax & Liu configuration 3,
+///        Liska & Wendroff Table 4.3 case 3) with the MR-WENO limiter
+///        under the characteristic (Riemann-invariant / pressure
+///        far-field) non-reflecting boundary condition.
 ///
 /// Setup: [0, 1]^2 with the four-quadrant initial data
-///   LL = (1.1,    0,      0,      1.1 )
-///   LR = (0.5065, 0.8939, 0,      0.35)
-///   UR = (1.1,    0.8939, 0.8939, 1.1 )
-///   UL = (0.5065, 0,      0.8939, 0.35)
-/// (rho, u, v, p; the classic "jet along the diagonal" configuration with
-/// two shocks and two contact discontinuities).
+///   LL = (0.138,  1.206, 1.206, 0.029)
+///   LR = (0.5323, 0,     1.206, 0.3  )
+///   UR = (1.5,    0,     0,     1.5  )
+///   UL = (0.5323, 1.206, 0,     0.3  )
+/// (rho, u, v, p). All four quadrant-interface 1-D Riemann problems are
+/// single shocks (Liska & Wendroff class "S, S, S, S"); everything
+/// converges toward the heavy upper-right quadrant and the interaction
+/// rolls the shear layers into the classic double spiral.
 ///
-/// Boundary handling: the free (zero-gradient) BC is exactly neutral
-/// while the wall-adjacent flow is constant. The fastest signal of the
-/// quadrant Riemann problems travels at u + a = 0.8939 + 0.9837 = 1.878
-/// from the quadrant interfaces (x = 0.5 / y = 0.5) and reaches the walls
-/// at t = 0.5 / 1.878 = 0.266 — t_final = 0.2 keeps a 33% margin, so the
-/// boundary-adjacent quadrants stay EXACTLY in their initial constant
-/// states (DG free-stream preservation).
+/// Boundary handling: the characteristic boundary with the initial-field
+/// reference target ("ic" — the ambient environment of the quadrant data
+/// varies along the walls, so a single constant target would anchor the
+/// wrong pressure on part of the boundary). The fastest signal (the
+/// lower-left diagonal stream, |u| = 1.706 plus a = 0.543) travels at up
+/// to 2.25 from the quadrant interfaces and reaches the walls at
+/// t = 0.222 — t_final = 0.3 therefore exercises the boundary as an
+/// ACTIVE participant: outgoing waves must leave without the acoustic
+/// reflection of the zero-gradient variant, whose wall pile-up (rho ~ 30
+/// at the (0.5, 1) and (1, 0.5) wall points on the 256^2 production
+/// grid) motivated this boundary condition.
 ///
 /// Acceptance criteria:
 ///   - the run completes with a finite residual;
-///   - the total mass follows the analytic balance with the constant
-///     wall outflow: M(t) = M0 - 2 t uR (rho_LR + rho_UR)/2 with the right
-///     and top walls carrying the outflow (left/bottom are quiescent) —
-///     this simultaneously verifies the free-BC implementation, the DG
-///     boundary flux and the limiter's conservation;
 ///   - density/pressure positivity and a loose non-oscillatory bound;
-///   - the exact x <-> y symmetry of the configuration (Q2 <-> Q4, Q1/Q3
+///   - the exact x <-> y symmetry of the configuration (UL <-> LR, LL/UR
 ///     self-symmetric) is preserved by the scheme + limiter on a square
-///     mesh: the cell-mean field equals its transpose to round-off.
-/// Triangle variants (P1, 32x32, t = 0.1): the free-boundary run covers
-/// the full chain (non-affine projection-path limiter + free boundary)
-/// and relies on the limiter's positivity-triggered detection and
-/// Zhang-Shu-type scaling at the wall x interface corner cells
-/// (all-outflow cells that the KXRCF criterion alone does not flag); the
-/// periodic twin adds the exact mass-conservation check of the closed
-/// domain.
+///     mesh: the cell-mean field equals its transpose up to the chaotic
+///     amplification of transposed-pair rounding differences.
+/// The triangle variant (P1, 32x32) covers the full chain (non-affine
+/// projection-path limiter + characteristic boundary on split
+/// triangulations); the free-BC neutrality of quiescent walls is checked
+/// exactly by the confined-bump case below.
 
 #include <Eigen/Dense>
 #include <occa.hpp>
@@ -60,14 +60,6 @@
 namespace {
 
 constexpr bool kSinglePrecision = std::is_same<Real, float>::value;
-
-// Lax & Liu configuration 4 quadrant states (rho, u, v, p).
-constexpr Real kRhoLL = Real(1.1), kULL = Real(0), kVLL = Real(0),
-               kPLL   = Real(1.1);
-constexpr Real kRhoLR = Real(0.5065), kULR = Real(0.8939), kVLR = Real(0),
-               kPLR   = Real(0.35);
-constexpr Real kRhoUL = Real(0.5065), kUUL = Real(0), kVUL = Real(0.8939),
-               kPUL = Real(0.35);
 
 int g_failures = 0;
 
@@ -95,31 +87,32 @@ std::vector<Real> readModal(DgField &field, DeviceMemoryManager &mem) {
 
 /// @brief Run one configuration of the 2-D Riemann problem and verify.
 /// \p symmetric enables the x <-> y transpose check (square quad mesh).
-/// \p periodic selects periodic boundaries (closed domain: exact mass)
-///        instead of the free boundary (analytic outflow balance).
+/// Boundary: characteristic (Riemann) non-reflecting condition with the
+///        initial-field reference target — the ambient environment of the
+///        four-quadrant data varies along the walls.
 void runRiemann2d(const std::string &label, int order, int n, Real cfl,
-                  Real tFinal, bool splitTriangles, bool symmetric,
-                  bool periodic) {
+                  Real tFinal, bool splitTriangles, bool symmetric) {
     std::cout << label << "\n";
     const char *tri = splitTriangles ? "\nsplit_triangles = true" : "";
-    const char *bc  = periodic ? "periodic" : "free";
     const std::string toml =
         std::string("") + "[basis]\norder = " + std::to_string(order) +
-        "\nnq = 4\n\n[mesh]\nnx = " + std::to_string(n) +
+        "\nnq = " + std::to_string(order + 1) +
+        "\n\n[mesh]\nnx = " + std::to_string(n) +
         "\nny = " + std::to_string(n) +
         "\nx0 = 0.0\ny0 = 0.0\ndx = " + std::to_string(1.0 / n) +
-        "\ndy = " + std::to_string(1.0 / n) + tri + "\n\n[bc]\ntype = \"" + bc +
-        "\"\n\n[flow]\nrho = 1.1\nu = 0.0\nv = 0.0\n"
-        "p = 1.1\n\n[time_marching]\nmethod = \"ssprk3\"\ncfl = " +
+        "\ndy = " + std::to_string(1.0 / n) + tri +
+        "\n\n[bc]\ntype = \"riemann\"\nriemann_target = \"ic\"\n"
+        "\n[flow]\nrho = 1.5\nu = 0.0\nv = 0.0\n"
+        "p = 1.5\n\n[time_marching]\nmethod = \"ssprk3\"\ncfl = " +
         std::to_string(static_cast<double>(cfl)) +
         "\nt_final = " + std::to_string(static_cast<double>(tFinal)) +
         "\n\n[initial_condition]\ntype = \"expr\"\n"
-        "rho = \"(y < 0.5) ? ((x < 0.5) ? 1.1 : 0.5065) : "
-        "((x < 0.5) ? 0.5065 : 1.1)\"\n"
-        "u = \"(x < 0.5) ? 0.0 : 0.8939\"\n"
-        "v = \"(y < 0.5) ? 0.0 : 0.8939\"\n"
-        "p = \"(y < 0.5) ? ((x < 0.5) ? 1.1 : 0.35) : "
-        "((x < 0.5) ? 0.35 : 1.1)\"\n\n[limiter]\ntype = \"mr-weno\"\n";
+        "rho = \"(y < 0.5) ? ((x < 0.5) ? 0.138 : 0.5323) : "
+        "((x < 0.5) ? 0.5323 : 1.5)\"\n"
+        "u = \"(x < 0.5) ? 1.206 : 0.0\"\n"
+        "v = \"(y < 0.5) ? 1.206 : 0.0\"\n"
+        "p = \"(y < 0.5) ? ((x < 0.5) ? 0.029 : 0.3) : "
+        "((x < 0.5) ? 0.3 : 1.5)\"\n\n[limiter]\ntype = \"mr-weno\"\n";
 
     const std::string path = "/tmp/cmeles_riemann2d.toml";
     std::FILE *f           = std::fopen(path.c_str(), "w");
@@ -176,27 +169,22 @@ void runRiemann2d(const std::string &label, int order, int n, Real cfl,
         yc[e] = (e8(e, 1) + e8(e, 3) + e8(e, 5) + e8(e, 7)) / Real(4);
     }
 
-    // --- Mass: with periodic boundaries the domain is closed and the
-    //     conservation is exact. With the free boundary no closed-form
-    //     balance exists here — the quadrant interfaces x = 0.5 / y = 0.5
-    //     extend all the way to the walls, so the wall-adjacent states
-    //     near those lines evolve from t = 0. The free-BC conservation
-    //     itself is verified exactly by the confined-bump case below
-    //     (quiescent constant walls).
-    if (periodic) {
-        const Real m0      = Real(0.25) * (kRhoLL + kRhoLR + kRhoLR + kRhoLL);
-        const Real massTol = kSinglePrecision ? Real(5e-4) : Real(1e-10);
-        check(std::abs(mass - m0) <= massTol,
-              "mass exactly conserved (periodic; M0 " + std::to_string(m0) +
-                  ", got " + std::to_string(mass) + ")");
-    } else {
-        check(mass > Real(0) && std::isfinite(mass), "mass finite/positive");
-    }
+    // --- Mass: the characteristic boundary is open (outflow through the
+    //     walls once the waves arrive), so no closed-form balance exists —
+    //     finiteness only. Exact conservation of the closed domain is
+    //     covered by the periodic DG field tests; the free-BC neutrality
+    //     is verified exactly by the confined-bump case below.
+    check(mass > Real(0) && std::isfinite(mass), "mass finite/positive");
     check(rhoMin > Real(0) && pMin > Real(0),
           "density/pressure positive (min rho " + std::to_string(rhoMin) +
               ", min p " + std::to_string(pMin) + ")");
-    check(rhoMin >= Real(0.15) && rhoMax <= Real(2.2),
-          "density in [0.15, 2.2] (got [" + std::to_string(rhoMin) + ", " +
+    // Loose physical bracket across the quad/triangle variants: the
+    // untouched lower-left quadrant starts at rho = 0.138 and the contact
+    // roll-up undershoots it slightly at P1/triangle resolution (measured
+    // min ~0.05), while the converging shocks compress the upper-right
+    // gas (rho0 = 1.5) up to ~2.8 there.
+    check(rhoMin >= Real(0.04) && rhoMax <= Real(3.0),
+          "density in [0.04, 3.0] (got [" + std::to_string(rhoMin) + ", " +
               std::to_string(rhoMax) + "])");
 
     // --- x <-> y symmetry: bin the cell means on the square grid and
@@ -226,7 +214,14 @@ void runRiemann2d(const std::string &label, int order, int n, Real cfl,
                 }
             }
         }
-        const Real symTol = kSinglePrecision ? Real(1e-3) : Real(1e-8);
+        // Tolerance: configuration 3's double spiral is a chaotic
+        // amplifier — transposed cell pairs meet identical math but
+        // different tensor-quadrature summation orders, so 1e-16-level
+        // rounding differences grow to ~3e-6 (absolute, on cell-mean
+        // bins of scale ~1e-4) by t = 0.15. A systematic asymmetry bug
+        // (e.g. a y-biased flux) shows up at O(1), three orders above
+        // this tolerance.
+        const Real symTol = kSinglePrecision ? Real(1e-2) : Real(1e-4);
         check(binned && asym <= symTol,
               "x<->y symmetry (asymmetry " + std::to_string(asym) + ")");
     }
@@ -318,22 +313,19 @@ void runFreeBoundaryNeutrality() {
 } // namespace
 
 int main() {
-    // t_final = 0.15 keeps a 56% margin to the earliest wall-arrival time
-    // of the wave systems (the shock entering the LR/UL quadratures
-    // travels at up to ~2.1, reaching a wall at t ~ 0.234), so the
-    // wall-adjacent states away from the interface lines stay in their
-    // constant quadrant values.
-    runRiemann2d("2D Riemann (Lax-Liu 4) / quad / P2", 2, 64, Real(0.18),
-                 Real(0.15), false, true, false);
-    // t = 0.05 for the free triangle variant: the positivity fix is
-    // exercised from the first steps (the pre-fix run died at t ~ 0.004),
-    // while the wall-interface corner cells only develop their heavy
-    // limiting compression spike later — the tight physical bounds below
-    // stay meaningful throughout.
-    runRiemann2d("2D Riemann (Lax-Liu 4) / triangles / P1 / free", 1, 32,
-                 Real(0.3), Real(0.05), true, false, false);
-    runRiemann2d("2D Riemann (Lax-Liu 4) / triangles / P1 / periodic", 1, 32,
-                 Real(0.3), Real(0.1), true, false, true);
+    // t_final = 0.3 (the presentation time of Liska & Wendroff's case-3
+    // figure) exceeds the earliest wall-arrival time of the wave systems
+    // (~0.222 for the lower-left diagonal stream at |u| + a ~ 2.25): the
+    // boundary is an ACTIVE participant of the solution, which is exactly
+    // what the characteristic (non-reflecting) boundary must handle — the
+    // zero-gradient variant reflects the outgoing acoustic waves and lets
+    // a non-physical compression band pile up against the slip-flow walls
+    // (rho ~ 30 at the (0.5, 1) and (1, 0.5) wall points on the 256^2
+    // production grid).
+    runRiemann2d("2D Riemann (Lax-Liu 3) / quad / P2 / riemann bc", 2, 64,
+                 Real(0.1), Real(0.3), false, true);
+    runRiemann2d("2D Riemann (Lax-Liu 3) / triangles / P1 / riemann bc", 1, 32,
+                 Real(0.1), Real(0.3), true, false);
     runFreeBoundaryNeutrality();
 
     if (g_failures == 0) {
