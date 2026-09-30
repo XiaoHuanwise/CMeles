@@ -50,21 +50,82 @@ const char *fluxTypeName(FluxType t) noexcept;
 enum class BcType : int {
     Farfield = 0, ///< Far-field free-stream exterior state (implemented).
     Periodic = 1, ///< Translation-paired periodic boundaries (implemented).
-    Free     = 2  ///< Zero-gradient (free) boundary: the exterior state
+    Free     = 2, ///< Zero-gradient (free) boundary: the exterior state
                   ///< copies the interior trace; exactly neutral while the
                   ///< flow near the wall is constant (e.g. the 2-D Riemann
                   ///< tests before any wave reaches the boundary).
+    Riemann = 3,  ///< Characteristic (Riemann-invariant / pressure
+                  ///< far-field) non-reflecting boundary: the boundary
+                  ///< state mixes the interior trace with a reference
+                  ///< state through the normal acoustic invariants, so
+                  ///< outgoing waves leave without reflection and the
+                  ///< pressure is anchored to the reference value at
+                  ///< subsonic outflow (see \p RiemannTarget).
+    Slip = 4,     ///< Slip (reflection) wall: the exterior state mirrors
+                  ///< the interior trace with the normal momentum negated,
+                  ///< $\rho$ and $E$ unchanged. Any consistent numerical
+                  ///< flux then produces exactly zero wall-normal mass
+                  ///< flux — the inviscid (Euler) wall condition.
+    Expr = 5      ///< Dirichlet boundary from primitive-variable
+                  ///< expressions ([bc] rho / u / v / p evaluated at
+                  ///< x, y, t on every boundary quadrature point; the
+                  ///< values are refreshed once per physical time step).
+};
+
+/// @brief Per-side boundary-condition override ([bc.x_low] etc.). Faces are
+///        assigned to a side by their outward normal; a side table missing
+///        \p type falls back to the global [bc] type. The optional
+///        \p split_x / \p split_type switch classifies boundary faces by
+///        their centroid x (faces with centroid x < split_x take
+///        \p splitType) — e.g. the Double-Mach floor (inflow segment ahead
+///        of the shock foot, reflection wall behind it).
+struct SideBc {
+    bool hasType     = false;        ///< Side table with a type key present.
+    BcType type      = BcType::Free; ///< Side type (valid when \p hasType).
+    bool hasSplit    = false;        ///< split_x / split_type present.
+    Real splitX      = Real(0);      ///< Split abscissa.
+    BcType splitType = BcType::Slip; ///< Type for faces left of splitX.
+};
+
+/// @brief Boundary side index for the per-side [bc] override tables.
+enum class BcSide : int {
+    XLow  = 0, ///< Left boundary (x = x_min).
+    XHigh = 1, ///< Right boundary (x = x_max).
+    YLow  = 2, ///< Bottom boundary (y = y_min).
+    YHigh = 3  ///< Top boundary (y = y_max).
+};
+
+/// @brief Reference-state source for the characteristic (Riemann)
+///        boundary condition ([bc] riemann_target).
+enum class RiemannTarget : int {
+    Flow = 0, ///< Constant [flow] (rho, u, v, p): user-provided operating
+              ///< condition — the standard far-field / pressure-outlet
+              ///< interface (cf. Fluent pressure-outlet, SU2 far-field).
+    Ic = 1    ///< Trace of the initial field at each boundary quadrature
+              ///< point: for benchmark problems whose ambient environment
+              ///< varies along the wall (the four-quadrant 2-D Riemann
+              ///< data), where a single constant target would anchor the
+              ///< wrong pressure on part of the boundary.
 };
 
 /// @brief Parse a boundary-condition name string into a \p BcType.
 ///
 /// Accepted names (case-insensitive): "farfield", "far-field", "far_field",
-/// "periodic", "free", "zero-gradient", "zero_gradient". Throws
-/// std::invalid_argument for unknown names.
+/// "periodic", "free", "zero-gradient", "zero_gradient", "riemann",
+/// "characteristic", "pressure-farfield", "slip", "slip-wall", "slip_wall",
+/// "wall", "expr", "dirichlet". Throws std::invalid_argument for unknown
+/// names.
 BcType parseBcType(const std::string &name);
 
 /// @brief Convert a \p BcType back to its canonical string name.
 const char *bcTypeName(BcType t) noexcept;
+
+/// @brief Parse a Riemann-target name ("flow" | "ic") into a
+///        \p RiemannTarget. Throws std::invalid_argument otherwise.
+RiemannTarget parseRiemannTarget(const std::string &name);
+
+/// @brief Convert a \p RiemannTarget back to its canonical string name.
+const char *riemannTargetName(RiemannTarget t) noexcept;
 
 /// @brief Time-marching method.
 ///
@@ -186,13 +247,18 @@ enum class OutputFormat : int {
                  ///< maps; the pair solution_<step>.h5 / .xmf moves
                  ///< together).
     Tecplot = 2, ///< Classic binary PLT solution_<step>.plt (Tecplot 360).
-    All     = 3  ///< HDF5 + XDMF + PLT.
+    All     = 3, ///< HDF5 + XDMF + PLT + VTU.
+    Vtu     = 4, ///< HDF5 + VTK XML UnstructuredGrid solution_<step>.vtu
+                 ///< whose cells are the DG elements as high-order
+                 ///< Lagrange cells (ParaView renders the actual
+                 ///< polynomial with adaptive subdivision; the PVD
+                 ///< <prefix>_series.pvd carries the time axis).
 };
 
 /// @brief Parse an output-format name string into an \p OutputFormat.
 ///
-/// Accepted names (case-insensitive): "hdf5", "xdmf", "tecplot", "all".
-/// Throws std::invalid_argument for unknown names.
+/// Accepted names (case-insensitive): "hdf5", "xdmf", "tecplot", "plt",
+/// "vtu", "all". Throws std::invalid_argument for unknown names.
 OutputFormat parseOutputFormat(const std::string &name);
 
 /// @brief Convert an \p OutputFormat back to its canonical string name.
@@ -212,6 +278,11 @@ constexpr bool formatWritesXdmf(OutputFormat f) noexcept {
 /// @brief Whether an \p OutputFormat requests the Tecplot PLT file.
 constexpr bool formatWritesTecplot(OutputFormat f) noexcept {
     return f == OutputFormat::Tecplot || f == OutputFormat::All;
+}
+
+/// @brief Whether an \p OutputFormat requests the high-order VTU file.
+constexpr bool formatWritesVtu(OutputFormat f) noexcept {
+    return f == OutputFormat::Vtu || f == OutputFormat::All;
 }
 
 /// @brief TOML configuration file parser and parameter store.
@@ -324,6 +395,44 @@ public:
 
     BcType bcType() const noexcept {
         return bc_type_;
+    }
+
+    /// @brief Reference-state source for the characteristic (Riemann)
+    ///        boundary ([bc] riemann_target, default "flow"). Only
+    ///        consulted when \p bcType() is \p BcType::Riemann.
+    RiemannTarget riemannTarget() const noexcept {
+        return riemann_target_;
+    }
+
+    /// @brief Per-side [bc] override table for side \p side (see \p BcSide).
+    ///        Sides without a table fall back to the global \p bcType();
+    ///        periodic sides are not overridable (pairing is mesh-global).
+    const SideBc &bcSide(BcSide side) const noexcept {
+        return bc_side_[static_cast<int>(side)];
+    }
+
+    /// @brief Dirichlet density expression for \p BcType::Expr faces
+    ///        ([bc] rho; empty unless configured).
+    const std::string &bcRho() const noexcept {
+        return bc_rho_;
+    }
+
+    /// @brief Dirichlet x-velocity expression for \p BcType::Expr faces
+    ///        ([bc] u; empty unless configured).
+    const std::string &bcU() const noexcept {
+        return bc_u_;
+    }
+
+    /// @brief Dirichlet y-velocity expression for \p BcType::Expr faces
+    ///        ([bc] v; empty unless configured).
+    const std::string &bcV() const noexcept {
+        return bc_v_;
+    }
+
+    /// @brief Dirichlet pressure expression for \p BcType::Expr faces
+    ///        ([bc] p; empty unless configured).
+    const std::string &bcP() const noexcept {
+        return bc_p_;
     }
 
     // ---- Time marching ----
@@ -530,6 +639,16 @@ public:
         return output_series_;
     }
 
+    /// @brief Whether the HDF5 archive is written ([output] archive,
+    ///        default true). The archive is the storage backbone of the
+    ///        "hdf5"/"xdmf" formats and the archival companion of "vtu";
+    ///        with archive = false only the self-contained formats
+    ///        (vtu / plt) are produced, and a format that cannot exist
+    ///        without its heavy data ("hdf5", "xdmf") is ignored.
+    bool outputArchive() const noexcept {
+        return output_archive_;
+    }
+
     /// @brief File-name prefix derived from the configuration file name
     ///        (stem, no extension): all output files of a run are named
     ///        <prefix>_solution_<step>.<ext>, <prefix>_checkpoint_<step>.h5,
@@ -598,6 +717,12 @@ private:
     int occa_device_       = 0;
 
     BcType bc_type_ = BcType::Farfield;
+    SideBc bc_side_[4];  ///< Per-side [bc] overrides (empty by default).
+    std::string bc_rho_; ///< Expr-face Dirichlet density expression.
+    std::string bc_u_;   ///< Expr-face Dirichlet x-velocity expression.
+    std::string bc_v_;   ///< Expr-face y-velocity expression.
+    std::string bc_p_;   ///< Expr-face Dirichlet pressure expression.
+    RiemannTarget riemann_target_ = RiemannTarget::Flow;
 
     TimeMethod time_method_           = TimeMethod::SspRk3;
     Real time_cfl_                    = Real(0.2);
@@ -637,6 +762,7 @@ private:
     OutputStrategy output_strategy_ = OutputStrategy::Direct;
     OutputFormat output_format_     = OutputFormat::Hdf5;
     bool output_series_             = true;
+    bool output_archive_            = true;
     std::string
         output_prefix_; ///< Config-file stem; empty when not from a file.
     int output_interval_          = 100;

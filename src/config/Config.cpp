@@ -115,6 +115,17 @@ BcType parseBcType(const std::string &name) {
     if (key == "free" || key == "zero-gradient" || key == "zero_gradient") {
         return BcType::Free;
     }
+    if (key == "riemann" || key == "characteristic" ||
+        key == "pressure-farfield" || key == "pressure_farfield") {
+        return BcType::Riemann;
+    }
+    if (key == "slip" || key == "slip-wall" || key == "slip_wall" ||
+        key == "wall") {
+        return BcType::Slip;
+    }
+    if (key == "expr" || key == "dirichlet") {
+        return BcType::Expr;
+    }
     throw std::invalid_argument("parseBcType: unknown bc name '" + name + "'");
 }
 
@@ -126,6 +137,35 @@ const char *bcTypeName(BcType t) noexcept {
             return "periodic";
         case BcType::Free:
             return "free";
+        case BcType::Riemann:
+            return "riemann";
+        case BcType::Slip:
+            return "slip";
+        case BcType::Expr:
+            return "expr";
+        default:
+            return "unknown";
+    }
+}
+
+RiemannTarget parseRiemannTarget(const std::string &name) {
+    const std::string key = toLower(name);
+    if (key == "flow") {
+        return RiemannTarget::Flow;
+    }
+    if (key == "ic") {
+        return RiemannTarget::Ic;
+    }
+    throw std::invalid_argument("parseRiemannTarget: unknown target '" + name +
+                                "' (expected \"flow\" or \"ic\")");
+}
+
+const char *riemannTargetName(RiemannTarget t) noexcept {
+    switch (t) {
+        case RiemannTarget::Flow:
+            return "flow";
+        case RiemannTarget::Ic:
+            return "ic";
         default:
             return "unknown";
     }
@@ -312,6 +352,9 @@ OutputFormat parseOutputFormat(const std::string &name) {
     if (key == "tecplot" || key == "plt") {
         return OutputFormat::Tecplot;
     }
+    if (key == "vtu") {
+        return OutputFormat::Vtu;
+    }
     if (key == "all") {
         return OutputFormat::All;
     }
@@ -329,6 +372,8 @@ const char *outputFormatName(OutputFormat t) noexcept {
             return "tecplot";
         case OutputFormat::All:
             return "all";
+        case OutputFormat::Vtu:
+            return "vtu";
         default:
             return "unknown";
     }
@@ -363,6 +408,14 @@ void Config::setDefaults() {
     occa_mode_ = "Serial";
 
     bc_type_ = BcType::Farfield;
+    for (auto &side : bc_side_) {
+        side = SideBc{};
+    }
+    bc_rho_.clear();
+    bc_u_.clear();
+    bc_v_.clear();
+    bc_p_.clear();
+    riemann_target_ = RiemannTarget::Flow;
 
     time_method_           = TimeMethod::SspRk3;
     time_cfl_              = Real(0.2);
@@ -400,6 +453,7 @@ void Config::setDefaults() {
     output_strategy_ = OutputStrategy::Direct;
     output_format_   = OutputFormat::Hdf5;
     output_series_   = true;
+    output_archive_  = true;
     output_prefix_.clear();
     output_interval_  = 100;
     output_directory_ = "./results";
@@ -486,6 +540,53 @@ Config::Config(const std::string &path) {
                 bcIt->second.value_or(std::string("farfield"));
             bc_type_ = parseBcType(name);
         }
+        // Spelling always validated; only consulted when type = "riemann".
+        if (const auto tIt = tbl->find("riemann_target"); tIt != tbl->end()) {
+            const std::string name = tIt->second.value_or(std::string("flow"));
+            riemann_target_        = parseRiemannTarget(name);
+        }
+        // Per-side override tables. Periodic is rejected: periodic pairing
+        // is global (mesh-level face gluing), not per-side.
+        static const char *sideKeys[4] = {"x_low", "x_high", "y_low", "y_high"};
+        for (int s = 0; s < 4; ++s) {
+            const auto sIt = tbl->find(sideKeys[s]);
+            if (sIt == tbl->end()) {
+                continue;
+            }
+            const auto &st = sIt->second.as_table();
+            SideBc &side   = bc_side_[s];
+            if (const auto tIt2 = st->find("type"); tIt2 != st->end()) {
+                side.type =
+                    parseBcType(tIt2->second.value_or(std::string("free")));
+                if (side.type == BcType::Periodic) {
+                    throw std::invalid_argument(
+                        std::string("Config [bc.") + sideKeys[s] +
+                        "]: per-side 'periodic' is not supported (periodic "
+                        "pairing is configured globally)");
+                }
+                side.hasType = true;
+            }
+            if (const auto xIt = st->find("split_x"); xIt != st->end()) {
+                side.splitX   = xIt->second.value_or(Real(0));
+                side.hasSplit = true;
+                if (const auto dIt = st->find("split_type"); dIt != st->end()) {
+                    side.splitType =
+                        parseBcType(dIt->second.value_or(std::string("slip")));
+                } else {
+                    side.splitType = BcType::Slip;
+                }
+                if (side.splitType == BcType::Periodic) {
+                    throw std::invalid_argument(
+                        std::string("Config [bc.") + sideKeys[s] +
+                        "]: split_type 'periodic' is not supported");
+                }
+            }
+        }
+        // Dirichlet expressions for "expr" faces (x, y, t available).
+        bc_rho_ = getString(*tbl, "rho", bc_rho_);
+        bc_u_   = getString(*tbl, "u", bc_u_);
+        bc_v_   = getString(*tbl, "v", bc_v_);
+        bc_p_   = getString(*tbl, "p", bc_p_);
     }
 
     // [time_marching]
@@ -588,6 +689,7 @@ Config::Config(const std::string &path) {
             output_format_         = parseOutputFormat(name);
         }
         output_series_    = getBool(*tbl, "series", output_series_);
+        output_archive_   = getBool(*tbl, "archive", output_archive_);
         output_interval_  = getInt(*tbl, "interval", output_interval_);
         output_directory_ = getString(*tbl, "directory", output_directory_);
     }

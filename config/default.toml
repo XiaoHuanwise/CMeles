@@ -50,7 +50,49 @@ type = "farfield"          # "farfield" (free-stream exterior state) | "periodic
                            #  the mesh boundaries to match under (Lx,0)/(0,Ly))
                            # | "free" (zero-gradient: exterior copies the
                            #  interior trace; neutral while the wall-adjacent
-                           #  flow is constant, e.g. 2-D Riemann tests).
+                           #  flow is constant — but acoustically reflective:
+                           #  outgoing pressure waves bounce back and tangential
+                           #  wall flows can pile up non-physical compression)
+                           # | "riemann" (characteristic / pressure far-field
+                           #  non-reflecting boundary, aliases "characteristic",
+                           #  "pressure-farfield": the boundary state mixes the
+                           #  interior trace with a reference state through the
+                           #  normal acoustic invariants — outgoing waves leave
+                           #  without reflection, subsonic outflow anchors only
+                           #  the pressure to the reference; supersonic flows
+                           #  pass through unchanged). General workloads set
+                           #  the reference via [flow] (rho, u, v, p), exactly
+                           #  like a Fluent pressure-outlet / SU2 far-field.
+riemann_target = "flow"    # Reference state of the "riemann" bc: "flow" (the
+                           # constant [flow] state — the standard usage) |
+                           # "ic" (the trace of the initial field at each
+                           # boundary point, for benchmark problems whose
+                           # ambient environment varies along the walls, e.g.
+                           # the four-quadrant 2-D Riemann data; a frozen
+                           # snapshot of the initial solution).
+# Two more boundary types: "slip" (aliases "slip-wall", "wall" — reflection
+# wall: the exterior state mirrors the interior trace with the normal
+# momentum negated, giving exactly zero wall-normal mass flux; the inviscid
+# wall condition) and "expr" (alias "dirichlet" — Dirichlet boundary from
+# the rho/u/v/p expressions below, evaluated at (x, y, t) on every boundary
+# quadrature point and refreshed once per time step; exact inflow / moving
+# analytic boundary data).
+#
+# Per-side overrides (optional): boundary faces are assigned to a side by
+# their outward normal; a side table's type replaces the global type there
+# (periodic is global and cannot be overridden per side). The optional
+# split_x / split_type switch the type for faces whose centroid x lies
+# left of split_x — e.g. the Double-Mach floor:
+#   [bc.y_low]
+#   type = "slip"              # reflection wall behind the shock foot
+#   split_x = 0.16666666666666666
+#   split_type = "expr"        # post-shock inflow ahead of it
+# Expressions for "expr" faces (x, y, t and gamma available; required when
+# any side resolves to "expr"):
+#rho = "1.4"
+#u = "0.0"
+#v = "0.0"
+#p = "1.0"
 
 # ---- Time marching ----
 [time_marching]
@@ -138,7 +180,15 @@ strategy = "direct"       # "direct" (strategy A: quadrature-point SoA files,
 format = "hdf5"           # "hdf5" (plain archive, the default) | "xdmf"
                           # (h5 + self-contained .xmf sidecar: ParaView opens
                           # the .xmf for filled cloud maps) | "tecplot"
-                          # (classic binary .plt for Tecplot 360) | "all".
+                          # (classic binary .plt for Tecplot 360) | "vtu"
+                          # (HIGH-ORDER .vtu plus the h5 archive unless
+                          # archive = false: each DG element becomes a
+                          # degree-N VTK Lagrange cell carrying the exact
+                          # polynomial — ParaView renders it with adaptive
+                          # subdivision, smoother contours than the fixed
+                          # linear sub-grid at (N+1)^2 instead of (N_q+2)^2
+                          # nodes per element; open the <prefix>_series.pvd
+                          # for the time axis) | "all" (all of the above).
                           # Applies to the direct strategy and to converted
                           # checkpoint output (CMelesConvert inherits it,
                           # overridable with --format).
@@ -146,7 +196,19 @@ series = true             # Maintain the <prefix>_series.xmf temporal-
                           # collection index (XDMF formats only): opening it
                           # in ParaView gives the real physical-time axis
                           # (per-step .xmf files alone carry no time values
-                          # in ParaView's Xdmf3 readers).
+                          # in ParaView's Xdmf3 readers). Note ParaView's
+                          # PLT readers likewise never lift the V112
+                          # SolutionTime into the time axis — that metadata
+                          # targets Tecplot 360.
+archive = true            # Write the HDF5 archive solution_<step>.h5. It is
+                          # the storage backbone of "hdf5"/"xdmf" (an .xmf
+                          # sidecar without its heavy data is unreadable) and
+                          # the archival companion of "vtu" (whose files are
+                          # self-contained). false = only the self-contained
+                          # formats (vtu / plt) are produced, saving ~60%
+                          # disk; a format that cannot exist without its
+                          # heavy data ("hdf5", "xdmf") is then ignored with
+                          # a warning at startup.
 interval = 100            # Number of time steps between two outputs (>= 1
                           # when enabled).
 directory = "./results"   # Output directory, created if missing.

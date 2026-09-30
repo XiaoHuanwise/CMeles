@@ -339,6 +339,131 @@ static bool testFluxTypeNames() {
 }
 
 // ---------------------------------------------------------------------------
+// 6b. BcType / RiemannTarget name mapping
+// ---------------------------------------------------------------------------
+
+static bool testBcTypeNames() {
+    std::cout << "Test 6b: bc type names\n";
+    bool ok = true;
+    ok &=
+        check(parseBcType("farfield") == BcType::Farfield, "parse 'farfield'");
+    ok &=
+        check(parseBcType("periodic") == BcType::Periodic, "parse 'periodic'");
+    ok &= check(parseBcType("free") == BcType::Free, "parse 'free'");
+    ok &= check(parseBcType("RIEMANN") == BcType::Riemann,
+                "parse 'RIEMANN' (upper)");
+    ok &= check(parseBcType("characteristic") == BcType::Riemann,
+                "parse 'characteristic' (alias)");
+    ok &= check(parseBcType("pressure-farfield") == BcType::Riemann,
+                "parse 'pressure-farfield' (alias)");
+    ok &= checkStr(bcTypeName(BcType::Riemann), "riemann", "name 'riemann'");
+    ok &= check(parseBcType("slip") == BcType::Slip, "parse 'slip'");
+    ok &= check(parseBcType("slip-wall") == BcType::Slip,
+                "parse 'slip-wall' (alias)");
+    ok &= check(parseBcType("wall") == BcType::Slip, "parse 'wall' (alias)");
+    ok &= checkStr(bcTypeName(BcType::Slip), "slip", "name 'slip'");
+    ok &= check(parseBcType("expr") == BcType::Expr, "parse 'expr'");
+    ok &= check(parseBcType("dirichlet") == BcType::Expr,
+                "parse 'dirichlet' (alias)");
+    ok &= checkStr(bcTypeName(BcType::Expr), "expr", "name 'expr'");
+    ok &= check(parseRiemannTarget("flow") == RiemannTarget::Flow,
+                "target 'flow'");
+    ok &= check(parseRiemannTarget("ic") == RiemannTarget::Ic, "target 'ic'");
+    ok &= checkStr(riemannTargetName(RiemannTarget::Ic), "ic",
+                   "target name 'ic'");
+
+    bool threw = false;
+    try {
+        (void)parseBcType("no-slip");
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    ok &= check(threw, "unknown bc name throws");
+    threw = false;
+    try {
+        (void)parseRiemannTarget("ghost");
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    ok &= check(threw, "unknown riemann_target throws");
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// 6c. Per-side [bc] override tables + Dirichlet expressions
+// ---------------------------------------------------------------------------
+
+static bool testBcSideTables() {
+    std::cout << "Test 6c: per-side [bc] override tables\n";
+    bool ok = true;
+
+    const std::string toml     = R"(
+[bc]
+type = "free"
+rho = "1.4"
+u = "0.0"
+v = "0.0"
+p = "1.0"
+
+[bc.y_low]
+type = "slip"
+split_x = 0.16666666666666666
+split_type = "expr"
+
+[bc.x_low]
+type = "expr"
+)";
+    const std::string tomlPath = writeTempToml(toml);
+    try {
+        const Config cfg(tomlPath);
+        ok &= check(cfg.bcType() == BcType::Free, "global type free");
+
+        const SideBc &yLow = cfg.bcSide(BcSide::YLow);
+        ok &= check(yLow.hasType && yLow.type == BcType::Slip,
+                    "y_low override slip");
+        ok &= check(yLow.hasSplit, "y_low split present");
+        ok &= checkReal(yLow.splitX, Real(1.0 / 6.0), "y_low split_x 1/6");
+        ok &= check(yLow.splitType == BcType::Expr, "y_low split_type expr");
+
+        const SideBc &xLow = cfg.bcSide(BcSide::XLow);
+        ok &= check(xLow.hasType && xLow.type == BcType::Expr,
+                    "x_low override expr");
+        ok &= check(!xLow.hasSplit, "x_low no split");
+
+        ok &= check(!cfg.bcSide(BcSide::XHigh).hasType &&
+                        !cfg.bcSide(BcSide::YHigh).hasType,
+                    "x_high/y_high fall back to the global type");
+
+        ok &= checkStr(cfg.bcRho(), "1.4", "bc expression rho");
+        ok &= checkStr(cfg.bcP(), "1.0", "bc expression p");
+    } catch (const std::exception &e) {
+        std::cout << "  FAIL side tables threw: " << e.what() << "\n";
+        ok = false;
+    }
+    std::remove(tomlPath.c_str());
+
+    // Per-side periodic is rejected (pairing is mesh-global).
+    const std::string periodic     = R"(
+[bc]
+type = "free"
+
+[bc.x_low]
+type = "periodic"
+)";
+    const std::string periodicPath = writeTempToml(periodic);
+    bool threw                     = false;
+    try {
+        const Config cfg(periodicPath);
+        (void)cfg;
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    ok &= check(threw, "per-side periodic throws");
+    std::remove(periodicPath.c_str());
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
 // 7. [log] section validation
 // ---------------------------------------------------------------------------
 
@@ -561,6 +686,8 @@ int main() {
         {"testOcaThreadsValidation", testOcaThreadsValidation},
         {"testPseudoToleranceKeys", testPseudoToleranceKeys},
         {"testFluxTypeNames", testFluxTypeNames},
+        {"testBcTypeNames", testBcTypeNames},
+        {"testBcSideTables", testBcSideTables},
         {"testLogValidation", testLogValidation},
         {"testControllerKeys", testControllerKeys},
         {"testPseudoDtModeKey", testPseudoDtModeKey},
