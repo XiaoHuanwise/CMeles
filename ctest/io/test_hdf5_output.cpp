@@ -12,7 +12,9 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -167,16 +169,19 @@ static bool testConfigOutput() {
                 "default strategy is direct");
     ok &= check(def.outputFormat() == OutputFormat::Hdf5,
                 "default format is hdf5");
+    ok &= check(def.outputArchive(), "default archive is true");
     ok &= checkInt(def.outputInterval(), 100, "default interval");
     ok &= checkStr(def.outputDirectory(), "./results", "default directory");
 
     const Config cfg(writeToml("[output]\nenable = true\nstrategy = "
                                "\"checkpoint\"\nformat = \"all\"\ninterval = "
-                               "7\ndirectory = \"./out_xyz\"\n"));
+                               "7\ndirectory = \"./out_xyz\"\n"
+                               "archive = false\n"));
     ok &= check(cfg.outputEnable(), "enable parsed");
     ok &= check(cfg.outputStrategy() == OutputStrategy::Checkpoint,
                 "strategy parsed");
     ok &= check(cfg.outputFormat() == OutputFormat::All, "format parsed");
+    ok &= check(!cfg.outputArchive(), "archive = false parsed");
     ok &= checkInt(cfg.outputInterval(), 7, "interval parsed");
     ok &= checkStr(cfg.outputDirectory(), "./out_xyz", "directory parsed");
 
@@ -705,6 +710,7 @@ static bool testVizOutputFormats() {
                     "plt magic");
         plt.pos = 8;
         ok &= checkInt(plt.int32(), 1, "plt byte order");
+        ok &= checkInt(plt.int32(), 0, "plt FileType FULL");
         plt.str(); // Title.
         ok &= checkInt(plt.int32(), 9, "plt nVars");
         for (int v = 0; v < 9; ++v) {
@@ -773,16 +779,16 @@ static bool testVizOutputFormats() {
             same &= checkClose(rho[k], h5rho[k], "plt rho matches h5");
         }
         ok &= check(same, "plt rho block equals h5 dataset");
-        // Connectivity: 1-based quads, matches the sub-grid. (One read
+        // Connectivity: 0-based quads (V112), matches the sub-grid. (One read
         // per id — a short-circuit comparison would consume two.)
         bool connOk = true;
         for (long long c = 0; c < topo.nCells && connOk; ++c) {
             for (int j = 0; j < 4; ++j) {
                 const int32_t id = plt.int32();
-                connOk &= id >= 1 && id <= topo.nNodes;
+                connOk &= id >= 0 && id < topo.nNodes;
             }
         }
-        ok &= check(connOk, "plt connectivity ids in range");
+        ok &= check(connOk, "plt connectivity ids in range (0-based V112)");
         ok &= check(plt.pos == plt.buf.size(), "plt fully consumed");
     } catch (const std::exception &e) {
         ok &= check(false, e.what());
@@ -869,6 +875,7 @@ static bool testVizOutputFormats() {
                     "tri plt magic");
         plt.pos = 8;
         plt.int32(); // Byte order.
+        plt.int32(); // FileType (FULL).
         plt.str();   // Title.
         plt.int32(); // nVars.
         for (int v = 0; v < 9; ++v) {
@@ -918,20 +925,20 @@ static bool testVizOutputFormats() {
         }
         // Element 0 sub-cell (i0,j0) of the 4x4 extended grid: corners
         // n1=(0,0), n2=(1,0), n3=(1,1), n4=(0,1) -> ids 0,1,5,4; the
-        // diagonal split gives tri1 (0,1,5), tri2 (0,5,4), 1-based.
-        ok &= checkInt(plt.int32(), 1, "tri conn 1");
-        ok &= checkInt(plt.int32(), 2, "tri conn 2");
-        ok &= checkInt(plt.int32(), 6, "tri conn 3");
-        ok &= checkInt(plt.int32(), 1, "tri conn 4");
-        ok &= checkInt(plt.int32(), 6, "tri conn 5");
-        ok &= checkInt(plt.int32(), 5, "tri conn 6");
+        // diagonal split gives tri1 (0,1,5), tri2 (0,5,4), 0-based V112.
+        ok &= checkInt(plt.int32(), 0, "tri conn 1");
+        ok &= checkInt(plt.int32(), 1, "tri conn 2");
+        ok &= checkInt(plt.int32(), 5, "tri conn 3");
+        ok &= checkInt(plt.int32(), 0, "tri conn 4");
+        ok &= checkInt(plt.int32(), 5, "tri conn 5");
+        ok &= checkInt(plt.int32(), 4, "tri conn 6");
         // Sub-cell (i1,j0): corners 1,2,6,5 -> (2,3,7), (2,7,6).
-        ok &= checkInt(plt.int32(), 2, "tri conn 7");
-        ok &= checkInt(plt.int32(), 3, "tri conn 8");
-        ok &= checkInt(plt.int32(), 7, "tri conn 9");
-        ok &= checkInt(plt.int32(), 2, "tri conn 10");
-        ok &= checkInt(plt.int32(), 7, "tri conn 11");
-        ok &= checkInt(plt.int32(), 6, "tri conn 12");
+        ok &= checkInt(plt.int32(), 1, "tri conn 7");
+        ok &= checkInt(plt.int32(), 2, "tri conn 8");
+        ok &= checkInt(plt.int32(), 6, "tri conn 9");
+        ok &= checkInt(plt.int32(), 1, "tri conn 10");
+        ok &= checkInt(plt.int32(), 6, "tri conn 11");
+        ok &= checkInt(plt.int32(), 5, "tri conn 12");
         // Skip to element 1 (18 triangle cells per element; 4 already
         // consumed): its first sub-cell is (16,17,21), (16,21,20),
         // 1-based.
@@ -940,21 +947,21 @@ static bool testVizOutputFormats() {
                 plt.int32();
             }
         }
-        ok &= checkInt(plt.int32(), 17, "tri conn e2 1");
-        ok &= checkInt(plt.int32(), 18, "tri conn e2 2");
-        ok &= checkInt(plt.int32(), 22, "tri conn e2 3");
-        ok &= checkInt(plt.int32(), 17, "tri conn e2 4");
-        ok &= checkInt(plt.int32(), 22, "tri conn e2 5");
-        ok &= checkInt(plt.int32(), 21, "tri conn e2 6");
+        ok &= checkInt(plt.int32(), 16, "tri conn e2 1");
+        ok &= checkInt(plt.int32(), 17, "tri conn e2 2");
+        ok &= checkInt(plt.int32(), 21, "tri conn e2 3");
+        ok &= checkInt(plt.int32(), 16, "tri conn e2 4");
+        ok &= checkInt(plt.int32(), 21, "tri conn e2 5");
+        ok &= checkInt(plt.int32(), 20, "tri conn e2 6");
         // Remaining cells: ids in range (one read per id).
         bool connOk = true;
         for (long long c = 20; c < topo.nCells && connOk; ++c) {
             for (int j = 0; j < 3; ++j) {
                 const int32_t id = plt.int32();
-                connOk &= id >= 1 && id <= topo.nNodes;
+                connOk &= id >= 0 && id < topo.nNodes;
             }
         }
-        ok &= check(connOk, "tri remaining ids in range");
+        ok &= check(connOk, "tri remaining ids in range (0-based V112)");
         ok &= check(plt.pos == plt.buf.size(), "tri plt fully consumed");
     } catch (const std::exception &e) {
         ok &= check(false, e.what());
@@ -992,6 +999,359 @@ static bool testVizOutputFormats() {
 // ---------------------------------------------------------------------------
 // 8. Checkpoint -> convert visualization dual path + format inheritance
 // ---------------------------------------------------------------------------
+
+/// @brief One writer pass with a free-stream field on the default mesh;
+///        returns the basenames that exist afterwards (h5/vtu/xmf/pvd).
+static std::vector<bool> writeWithFormat(const std::string &outputToml,
+                                         long step) {
+    const Config cfg(writeToml(outputToml));
+    occa::device device({{"mode", "Serial"}});
+    DeviceMemoryManager mem(device);
+    DgField field(cfg, device, mem);
+    field.setup();
+    field.applyFreeStreamInitialCondition(field.o_u());
+    device.finish();
+
+    SolutionWriter writer(cfg, field);
+    writer.write(step, Real(0.1));
+
+    const std::string stem = "test_hdf5_scratch_solution_" + [&] {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%07ld", step);
+        return std::string(buf);
+    }();
+    const auto has = [&](const char *ext) {
+        return fs::exists(fs::path(kResultsDir) / (stem + ext));
+    };
+    const bool pvd =
+        fs::exists(fs::path(kResultsDir) / "test_hdf5_scratch_series.pvd");
+    const bool xmfSeries =
+        fs::exists(fs::path(kResultsDir) / "test_hdf5_scratch_series.xmf");
+    return {has(".h5"), has(".vtu"), has(".xmf"), pvd, xmfSeries};
+}
+
+static bool testArchiveSwitch() {
+    std::cout << "Test 10: [output] archive switch\n";
+    fs::create_directories(kResultsDir);
+    const std::string dir = kResultsDir;
+
+    // (a) vtu + archive=false: self-contained vtu + pvd only, no h5.
+    {
+        const std::vector<bool> f = writeWithFormat(
+            "[output]\nenable = true\nformat = \"vtu\"\narchive = false\n"
+            "directory = \"" +
+                dir + "\"\n",
+            11);
+        bool ok = check(!f[0], "vtu + archive=false: no h5");
+        ok &= check(f[1], "vtu + archive=false: vtu written");
+        ok &= check(f[3], "vtu + archive=false: pvd still maintained");
+        if (!ok) {
+            return false;
+        }
+    }
+    // (b) xdmf + archive=false: the format is ignored entirely (an .xmf
+    //     sidecar without its heavy data is unreadable).
+    {
+        const std::vector<bool> f = writeWithFormat(
+            "[output]\nenable = true\nformat = \"xdmf\"\narchive = false\n"
+            "directory = \"" +
+                dir + "\"\n",
+            12);
+        bool ok = check(!f[0], "xdmf + archive=false: no h5");
+        ok &= check(!f[2], "xdmf + archive=false: xmf ignored");
+        ok &= check(!f[4], "xdmf + archive=false: series.xmf not written");
+        if (!ok) {
+            return false;
+        }
+    }
+    // (c) hdf5 + archive=false: the plain archive is the format — ignored.
+    {
+        const std::vector<bool> f = writeWithFormat(
+            "[output]\nenable = true\nformat = \"hdf5\"\narchive = false\n"
+            "directory = \"" +
+                dir + "\"\n",
+            13);
+        if (!check(!f[0], "hdf5 + archive=false: no h5")) {
+            return false;
+        }
+    }
+    // (d) vtu with the default archive=true: companion h5 (regression —
+    //     the archival companion behaviour is unchanged).
+    {
+        const std::vector<bool> f =
+            writeWithFormat("[output]\nenable = true\nformat = \"vtu\"\n"
+                            "directory = \"" +
+                                dir + "\"\n",
+                            14);
+        bool ok = check(f[0], "vtu + default archive: companion h5");
+        ok &= check(f[1], "vtu + default archive: vtu written");
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool testVtuHighOrder() {
+    std::cout << "Test 9: high-order VTU output (format = vtu)\n";
+    fs::create_directories(kResultsDir);
+    const Config cfg(writeToml(
+        "[output]\nenable = true\nformat = \"vtu\"\ndirectory = \"" +
+        kResultsDir +
+        "\"\n\n[initial_condition]\ntype = \"expr\"\n"
+        // Bilinear rho: exactly representable in P2, so the VTU nodal
+        // values are the analytic field itself (a trig IC on the default
+        // dx = 1 mesh aliases to near-zero moments in the L2 projection
+        // and cannot serve as an ordering reference).
+        "rho = \"1 + 0.25*x + 0.5*y + 0.3*x*y\"\nu = \"0.1\"\nv = \"0\"\n"
+        "p = \"1\"\n"));
+    occa::device device({{"mode", "Serial"}});
+    DeviceMemoryManager mem(device);
+    DgField field(cfg, device, mem);
+    field.setup();
+    solver_detail::applyExprICFromConfig(field, cfg);
+    device.finish();
+
+    SolutionWriter writer(cfg, field);
+    writer.write(3, Real(0.25));
+
+    const int nElem         = field.numElements();
+    const int order         = cfg.polynomialOrder();
+    const int nModes        = field.numModes();
+    const int nQuad         = (order + 1) * (order + 1);
+    const long long nPtsTot = static_cast<long long>(nElem) * nQuad;
+
+    const std::string vtuPath =
+        (fs::path(kResultsDir) / "test_hdf5_scratch_solution_0000003.vtu")
+            .string();
+    const std::string pvdPath =
+        (fs::path(kResultsDir) / "test_hdf5_scratch_series.pvd").string();
+    bool ok = check(fs::exists(vtuPath), "vtu exists");
+    ok &= check(fs::exists(pvdPath), "pvd collection exists");
+    if (!ok) {
+        return ok;
+    }
+
+    // --- Header parse: counts, cell type, appended offsets. ---
+    std::ifstream in(vtuPath, std::ios::binary);
+    std::string xml((std::istreambuf_iterator<char>(in)),
+                    std::istreambuf_iterator<char>());
+    in.close();
+    auto attr = [&xml](const std::string &key) -> std::string {
+        const size_t p = xml.find(key + "=\"");
+        if (p == std::string::npos) {
+            return "";
+        }
+        const size_t s = p + key.size() + 2;
+        return xml.substr(s, xml.find('"', s) - s);
+    };
+    ok &= checkInt(std::stoi(attr("NumberOfPoints")), static_cast<int>(nPtsTot),
+                   "vtu point count");
+    ok &= checkInt(std::stoi(attr("NumberOfCells")), nElem, "vtu cell count");
+    ok &= check(xml.find("encoding=\"raw\"") != std::string::npos,
+                "vtu appended raw encoding");
+
+    // --- Binary blocks: read at the declared offsets. ---
+    std::vector<char> blob;
+    {
+        std::ifstream bin(vtuPath, std::ios::binary);
+        bin.seekg(0, std::ios::end);
+        blob.resize(static_cast<size_t>(bin.tellg()));
+        bin.seekg(0);
+        bin.read(blob.data(), static_cast<std::streamsize>(blob.size()));
+    }
+    const size_t marker = xml.find("_", xml.find("<AppendedData"));
+    auto blockByName = [&xml, &blob, marker](const std::string &name, size_t n,
+                                             int typeSize,
+                                             const std::string &attr) {
+        const size_t p    = xml.find("Name=\"" + name + "\"");
+        const size_t o    = xml.find(attr + "=\"", p);
+        const size_t oEnd = xml.find('"', o + attr.size() + 2);
+        const size_t off =
+            marker + 1 +
+            static_cast<size_t>(std::stoll(
+                xml.substr(o + attr.size() + 2, oEnd - o - attr.size() - 2)));
+        return std::vector<char>(blob.begin() + static_cast<long>(off) + 4,
+                                 blob.begin() + static_cast<long>(off) + 4 +
+                                     static_cast<long>(n * typeSize));
+    };
+    // Types block (UInt8): every cell a VTK_LAGRANGE_QUADRILATERAL (70).
+    {
+        const std::vector<char> t = blockByName("types", nElem, 1, "offset");
+        bool all70                = true;
+        for (char c : t) {
+            all70 &= (static_cast<unsigned char>(c) == 70);
+        }
+        ok &= check(all70, "vtu cell types = Lagrange quad");
+    }
+    // Connectivity: sequential ids (element blocks in VTK lattice order).
+    {
+        const std::vector<char> c =
+            blockByName("connectivity", nPtsTot, 8, "offset");
+        const auto *ids = reinterpret_cast<const int64_t *>(c.data());
+        bool seq        = true;
+        for (long long k = 0; k < nPtsTot; ++k) {
+            seq &= ids[k] == k;
+        }
+        ok &= check(seq, "vtu connectivity sequential");
+    }
+    // rho block: must equal the DG polynomial evaluated at the VTK
+    // lattice, recomputed here fully independently.
+    {
+        const std::vector<Real> rhoRef = [&]() {
+            const std::vector<Real> uv =
+                viz::vtkLagrangeParametricPoints(order, false);
+            MatrixX2r lattice(nQuad, 2);
+            for (int k = 0; k < nQuad; ++k) {
+                lattice(k, 0) = Real(2) * uv[2 * k] - Real(1);
+                lattice(k, 1) = Real(2) * uv[2 * k + 1] - Real(1);
+            }
+            const MatrixXr V = field.basis().vandermondeAt(lattice);
+            std::vector<Real> modal(static_cast<size_t>(nElem) * 4 *
+                                    static_cast<size_t>(nModes));
+            field.o_u().copyTo(modal.data(),
+                               static_cast<occa::dim_t>(modal.size()));
+            std::vector<Real> r(static_cast<size_t>(nPtsTot));
+            for (int e = 0; e < nElem; ++e) {
+                const Eigen::Map<const VectorXr> uhat(
+                    modal.data() + static_cast<size_t>(e) * 4 *
+                                       static_cast<size_t>(nModes),
+                    nModes);
+                const VectorXr vals = V * uhat;
+                for (int k = 0; k < nQuad; ++k) {
+                    r[static_cast<size_t>(e) * nQuad + k] = vals[k];
+                }
+            }
+            return r;
+        }();
+        // The rho DataArray is located by its Name attribute.
+        const std::vector<char> blk =
+            blockByName("rho", nPtsTot, sizeof(Real), "offset");
+        const auto *rho = reinterpret_cast<const Real *>(blk.data());
+        bool same       = true;
+        for (long long k = 0; same && k < nPtsTot; ++k) {
+            same &= checkClose(rho[k], rhoRef[static_cast<size_t>(k)],
+                               "vtu rho vs direct lattice evaluation");
+        }
+        ok &= check(same, "vtu rho equals DG polynomial on the lattice");
+    }
+    // Lattice ordering spot check: VTK id 4 is the first bottom-edge
+    // point, lattice (1, 0) — i.e. the 5th point of element 0 lies at
+    // parametric (1/N, 0) of that element.
+    {
+        const std::vector<Real> uv =
+            viz::vtkLagrangeParametricPoints(order, false);
+        ok &= checkClose(uv[2 * 4 + 0], Real(1) / Real(order),
+                         "vtk id 4 = (1/N, 0)");
+        ok &= checkClose(uv[2 * 4 + 1], Real(0), "vtk id 4 ordinate 0");
+        ok &= checkInt(static_cast<int>(uv.size()) / 2, nQuad,
+                       "lattice point count");
+    }
+    // --- PVD collection: timestep and file reference. ---
+    {
+        std::ifstream pin(pvdPath);
+        std::string pxml((std::istreambuf_iterator<char>(pin)),
+                         std::istreambuf_iterator<char>());
+        pin.close();
+        ok &= check(pxml.find("timestep=\"0.25\"") != std::string::npos,
+                    "pvd timestep 0.25");
+        ok &= check(pxml.find("test_hdf5_scratch_solution_0000003.vtu") !=
+                        std::string::npos,
+                    "pvd references the vtu file");
+    }
+
+    // --- Triangle path: one degenerate-quad element (P1(0,0), P2(1,0),
+    //     P3(1,1), P4=P3) written directly through viz::writeVtu with a
+    //     bilinear field sampled on the VTK triangle lattice. Verifies
+    //     the barycentric ring ordering and the per-element node count
+    //     ((order+1)(order+2)/2 = 6 for order 2). ---
+    {
+        const int orderT = 2;
+        const std::vector<Real> uv =
+            viz::vtkLagrangeParametricPoints(orderT, true);
+        ok &=
+            checkInt(static_cast<int>(uv.size()) / 2, 6, "tri lattice count 6");
+        // Reference -> physical via the collapsed-quad map; the analytic
+        // field f(x, y) = 1 + x + 2y sampled at the lattice nodes.
+        std::vector<Real> tx(6), ty(6), tr(6), dummy(6, Real(0));
+        const Real vx[4] = {0, 1, 1, 1};
+        const Real vy[4] = {0, 0, 1, 1};
+        for (int k = 0; k < 6; ++k) {
+            const Real r   = Real(2) * uv[2 * k] - Real(1);
+            const Real s   = Real(2) * uv[2 * k + 1] - Real(1);
+            const Real a[] = {Real(-1), Real(1), Real(1), Real(-1)};
+            const Real b[] = {Real(-1), Real(-1), Real(1), Real(1)};
+            Real x = 0, y = 0;
+            for (int c = 0; c < 4; ++c) {
+                const Real N = Real(0.25) * (1 + a[c] * r) * (1 + b[c] * s);
+                x += N * vx[c];
+                y += N * vy[c];
+            }
+            tx[k] = x;
+            ty[k] = y;
+            tr[k] = Real(1) + x + Real(2) * y;
+        }
+        viz::Fields f;
+        f.x    = tx.data();
+        f.y    = ty.data();
+        f.rho  = tr.data();
+        f.rhoU = dummy.data();
+        f.rhoV = dummy.data();
+        f.E    = dummy.data();
+        f.u    = dummy.data();
+        f.v    = dummy.data();
+        f.p    = dummy.data();
+        const std::string triPath =
+            (fs::path(kResultsDir) / "tri_lagrange.vtu").string();
+        viz::writeVtu(triPath, f, orderT, 1, {1});
+        std::ifstream tin(triPath, std::ios::binary);
+        std::string txml((std::istreambuf_iterator<char>(tin)),
+                         std::istreambuf_iterator<char>());
+        tin.close();
+        const size_t nm = txml.find("_", txml.find("<AppendedData"));
+        auto tblock = [&txml, &triPath, nm](const std::string &name, int nPts) {
+            std::ifstream b(triPath, std::ios::binary);
+            const size_t p    = txml.find("Name=\"" + name + "\"");
+            const size_t o    = txml.find("offset=\"", p);
+            const size_t oEnd = txml.find('"', o + 8);
+            const size_t off  = nm + 1 +
+                                static_cast<size_t>(std::stoll(
+                                    txml.substr(o + 8, oEnd - o - 8)));
+            b.seekg(static_cast<std::streamoff>(off) + 4);
+            std::vector<char> buf(static_cast<size_t>(nPts) * 8);
+            b.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+            return buf;
+        };
+        {
+            const auto buf  = tblock("rho", 6);
+            const auto *val = reinterpret_cast<const Real *>(buf.data());
+            bool same       = true;
+            for (int k = 0; k < 6; ++k) {
+                same &= checkClose(val[k], tr[static_cast<size_t>(k)],
+                                   "tri vtu rho");
+            }
+            ok &= check(same, "tri vtu rho values verbatim");
+        }
+        ok &= check(txml.find("NumberOfCells=\"1\"") != std::string::npos,
+                    "tri vtu one cell");
+        // The types block (UInt8) must carry the Lagrange triangle (69).
+        {
+            std::ifstream b(triPath, std::ios::binary);
+            const size_t p    = txml.find("Name=\"types\"");
+            const size_t o    = txml.find("offset=\"", p);
+            const size_t oEnd = txml.find('"', o + 8);
+            const size_t off  = nm + 1 +
+                                static_cast<size_t>(std::stoll(
+                                    txml.substr(o + 8, oEnd - o - 8)));
+            b.seekg(static_cast<std::streamoff>(off) + 4);
+            unsigned char t = 0;
+            b.read(reinterpret_cast<char *>(&t), 1);
+            ok &= checkInt(static_cast<int>(t), 69,
+                           "tri vtu cell type = Lagrange triangle");
+        }
+    }
+    return ok;
+}
 
 static bool testConvertVizDualPath() {
     std::cout << "Test 8: checkpoint -> convert viz dual path\n";
@@ -1143,12 +1503,19 @@ int main() {
         {"solver_end_to_end", testSolverEndToEnd},
         {"viz_connectivity", testVizConnectivity},
         {"viz_output_formats", testVizOutputFormats},
+        {"vtu_high_order", testVtuHighOrder},
+        {"archive_switch", testArchiveSwitch},
         {"convert_viz_dual_path", testConvertVizDualPath},
     };
 
     bool allOk = true;
+    // CMELES_KEEP_SCRATCH=1 keeps the per-case output files (debugging
+    // and external reader validation).
+    const bool keep = std::getenv("CMELES_KEEP_SCRATCH") != nullptr;
     for (const Case &c : cases) {
-        fs::remove_all(kScratchDir);
+        if (!keep) {
+            fs::remove_all(kScratchDir);
+        }
         std::cout << "== " << c.name << " ==\n";
         bool ok = false;
         try {
@@ -1160,8 +1527,10 @@ int main() {
         allOk &= ok;
     }
 
-    fs::remove_all(kScratchDir);
-    fs::remove_all("./results");
+    if (!keep) {
+        fs::remove_all(kScratchDir);
+        fs::remove_all("./results");
+    }
     std::remove(kScratchToml.c_str());
     std::cout << (allOk ? "test_hdf5_output: all passed\n"
                         : "test_hdf5_output: FAILURES\n");

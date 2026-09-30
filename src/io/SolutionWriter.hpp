@@ -41,7 +41,11 @@ class DgField;
 /// $k = e \cdot n^2 + (j \cdot n + i)$, the same ordering as mesh/x and
 /// mesh/y. The XDMF / Tecplot outputs visualize the same nodal data
 /// through the per-element-type adaptive sub-grid built once at
-/// construction.
+/// construction. The VTU output ("vtu"/"all" formats) instead evaluates
+/// the polynomial on a THIRD node set — the $(N+1)^2$ (quad) /
+/// $(N+1)(N+2)/2$ (triangle) VTK Lagrange lattice, in the VTK node-id
+/// order (see viz::vtkLagrangeParametricPoints) — so each element is
+/// written as a single high-order cell.
 class SolutionWriter : public OutputWriterBase {
 public:
     /// @param cfg    Configuration (gamma, polynomial order, [output]).
@@ -58,17 +62,30 @@ private:
     int polynomialOrder_;
     std::string directory_;
     OutputFormat format_ = OutputFormat::Hdf5;
-    std::string prefix_;         ///< Config-file stem; empty -> legacy naming.
-    bool seriesEnabled_ = false; ///< [output] series, effective for xdmf.
+    std::string prefix_;          ///< Config-file stem; empty -> legacy naming.
+    bool seriesEnabled_  = false; ///< [output] series, effective for xdmf.
+    bool archiveEnabled_ = true;  ///< [output] archive: the HDF5 files are
+                                  ///< written (backbone of hdf5/xdmf,
+                                  ///< companion of vtu).
+    bool vtuEnabled_ = false;     ///< [output] format writes VTU.
 
     /// Steps written so far (h5 basename + time), maintained
     /// incrementally to regenerate the <prefix>_series.xmf index.
     std::vector<viz::SeriesEntry> seriesSteps_;
 
+    /// Steps written so far (vtu basename + time) for the
+    /// <prefix>_series.pvd collection.
+    std::vector<viz::SeriesEntry> pvdSteps_;
+
     /// @brief Index-file name: <prefix>_series.xmf (series.xmf without a
     ///        prefix).
     std::string seriesFileName() const {
         return prefix_.empty() ? "series.xmf" : prefix_ + "_series.xmf";
+    }
+
+    /// @brief Collection-file name: <prefix>_series.pvd.
+    std::string pvdFileName() const {
+        return prefix_.empty() ? "series.pvd" : prefix_ + "_series.pvd";
     }
 
     int nElem_  = 0;
@@ -87,6 +104,20 @@ private:
 
     /// Physical output-node coordinates (contiguous per component).
     std::vector<Real> coordsX_, coordsY_;
+
+    // ---- High-order VTU path: per-element VTK Lagrange lattices ----
+    bool vtuReady_    = false;  ///< Lattice tables built ([output] vtu).
+    long long vtuPts_ = 0;      ///< Total lattice nodes (sum over elements).
+    std::vector<int> vtuOff_;   ///< First lattice node of each element.
+    std::vector<int> vtuCount_; ///< Lattice node count of each element.
+    std::vector<int> isTriangle_;
+    MatrixXr Vvtu_; ///< Vandermonde at the concatenated lattice points.
+    std::vector<Real> vtuX_, vtuY_, vtuRho_, vtuRhoU_, vtuRhoV_, vtuE_, vtuU_,
+        vtuV_, vtuP_;
+
+    /// Evaluate the DG polynomial on the Lagrange lattice and write the
+    /// .vtu (+ PVD index maintenance).
+    void writeVtuFrame_(long step, Real time);
 
     /// Reusable host buffers: modal coefficients, the projection scratch
     /// and the seven SoA fields.

@@ -9,6 +9,7 @@
 #include "basis/BasisFunctions1D.hpp"
 #include "basis/BasisFunctions2D.hpp"
 #include "common/Constants.hpp"
+#include "common/Log.hpp"
 #include "config/Config.hpp"
 #include "dg/DgField.hpp"
 #include "dg/QuadratureCoords.hpp"
@@ -40,8 +41,20 @@ SolutionWriter::SolutionWriter(const Config &cfg, const DgField &field)
     : field_(field), gamma_(cfg.gamma()),
       polynomialOrder_(cfg.polynomialOrder()),
       directory_(cfg.outputDirectory()), format_(cfg.outputFormat()),
-      prefix_(cfg.outputPrefix()),
-      seriesEnabled_(cfg.outputSeries() && formatWritesXdmf(format_)) {
+      prefix_(cfg.outputPrefix()), archiveEnabled_(cfg.outputArchive()),
+      seriesEnabled_(cfg.outputSeries() &&
+                     ((archiveEnabled_ && formatWritesXdmf(format_)) ||
+                      formatWritesVtu(format_))) {
+    // The HDF5 archive is the storage backbone of "hdf5"/"xdmf": with
+    // archive = false those formats cannot produce their files (an XDMF
+    // sidecar without its heavy data is unreadable) and are ignored.
+    if (!archiveEnabled_ &&
+        (formatWritesHdf5(format_) || formatWritesXdmf(format_))) {
+        CMES_LOG_NORMAL
+            << "SolutionWriter: [output] archive = false — the hdf5/xdmf "
+               "output is ignored (XDMF has no data without its HDF5 "
+               "heavy file)";
+    }
     nElem_  = field.numElements();
     nModes_ = field.numModes();
 
@@ -49,9 +62,10 @@ SolutionWriter::SolutionWriter(const Config &cfg, const DgField &field)
     // visualization formats evaluate the DG polynomial on the
     // boundary-inclusive extended grid so each element's sub-grid closes
     // up to its interfaces; the plain archive keeps the interior Gauss
-    // points.
-    const bool extendedViz =
-        formatWritesXdmf(format_) || formatWritesTecplot(format_);
+    // points. The VTU path adds its own lattice set (constructor tail).
+    const bool extendedViz = formatWritesXdmf(format_) ||
+                             formatWritesTecplot(format_) ||
+                             formatWritesVtu(format_);
     MatrixX2r outPts;
     if (extendedViz) {
         nOut1D_ = field.numPoints1D() + 2;
@@ -96,6 +110,72 @@ SolutionWriter::SolutionWriter(const Config &cfg, const DgField &field)
         coordsX_[k] = xy(static_cast<Eigen::Index>(k), 0);
         coordsY_[k] = xy(static_cast<Eigen::Index>(k), 1);
     }
+
+    // ---- High-order VTU path: the per-element VTK Lagrange lattices in
+    //      the authoritative VTK node order (see
+    //      viz::vtkLagrangeParametricPoints), mapped to the reference
+    //      element as $(r, s) = (2u - 1, 2v - 1)$. The DG polynomial is
+    //      evaluated exactly on this unisolvent set; the lattice replaces
+    //      the linear sub-grid of the XDMF path at $(N+1)^2$ (quad) /
+    //      $(N+1)(N+2)/2$ (triangle) nodes per element. ----
+    vtuEnabled_ = formatWritesVtu(format_);
+    if (vtuEnabled_) {
+        const Mesh &mesh = field.mesh();
+        const int nQuad  = (polynomialOrder_ + 1) * (polynomialOrder_ + 1);
+        const int nTri   = (polynomialOrder_ + 1) * (polynomialOrder_ + 2) / 2;
+        const std::vector<Real> quadUV =
+            viz::vtkLagrangeParametricPoints(polynomialOrder_, false);
+        const std::vector<Real> triUV =
+            viz::vtkLagrangeParametricPoints(polynomialOrder_, true);
+        isTriangle_.resize(static_cast<size_t>(nElem_));
+        vtuOff_.resize(static_cast<size_t>(nElem_) + 1);
+        vtuCount_.resize(static_cast<size_t>(nElem_));
+        vtuPts_ = 0;
+        for (int e = 0; e < nElem_; ++e) {
+            const bool tri                      = mesh.isTriangle(e);
+            isTriangle_[static_cast<size_t>(e)] = tri ? 1 : 0;
+            vtuCount_[static_cast<size_t>(e)]   = tri ? nTri : nQuad;
+            vtuOff_[static_cast<size_t>(e)]     = static_cast<int>(vtuPts_);
+            vtuPts_ += tri ? nTri : nQuad;
+        }
+        vtuOff_[static_cast<size_t>(nElem_)] = static_cast<int>(vtuPts_);
+
+        MatrixX2r lattice(static_cast<Eigen::Index>(vtuPts_), 2);
+        for (int e = 0; e < nElem_; ++e) {
+            const Real *uv = isTriangle_[static_cast<size_t>(e)] != 0
+                                 ? triUV.data()
+                                 : quadUV.data();
+            const int m    = vtuCount_[static_cast<size_t>(e)] * 2;
+            for (int k = 0; k < m; ++k) {
+                lattice(vtuOff_[static_cast<size_t>(e)] + k / 2, k % 2) =
+                    Real(2) * uv[k] - Real(1);
+            }
+        }
+        Vvtu_ = field.basis().vandermondeAt(lattice);
+        // NOTE: bilinearPhysicalCoords(vertices, pts) applies EVERY
+        // element's map to the SAME reference points (the extended-grid
+        // convention, N_elem x npts rows). The lattice is a per-element
+        // concatenated set, so the coordinates must be evaluated element
+        // by element against that element's own vertex row.
+        const auto &verts = field.geometry().vertices();
+        vtuX_.resize(static_cast<size_t>(vtuPts_));
+        vtuY_.resize(static_cast<size_t>(vtuPts_));
+        for (int e = 0; e < nElem_; ++e) {
+            const Eigen::Index off = vtuOff_[static_cast<size_t>(e)];
+            const Eigen::Index m   = vtuCount_[static_cast<size_t>(e)];
+            const MatrixX2r xyE    = bilinearPhysicalCoords(
+                verts.middleRows(e, 1), lattice.middleRows(off, m));
+            for (Eigen::Index k = 0; k < m; ++k) {
+                vtuX_[static_cast<size_t>(off + k)] = xyE(k, 0);
+                vtuY_[static_cast<size_t>(off + k)] = xyE(k, 1);
+            }
+        }
+        for (auto *buf :
+             {&vtuRho_, &vtuRhoU_, &vtuRhoV_, &vtuE_, &vtuU_, &vtuV_, &vtuP_}) {
+            buf->assign(static_cast<size_t>(vtuPts_), Real(0));
+        }
+        vtuReady_ = true;
+    }
 }
 
 void SolutionWriter::write(long step, Real time) {
@@ -136,8 +216,13 @@ void SolutionWriter::write(long step, Real time) {
                  Real(0.5) * rho_[k] * (u_[k] * u_[k] + v_[k] * v_[k]));
     }
 
-    // --- HDF5 archive (plain or with the XDMF sidecar's heavy data). ---
-    if (formatWritesHdf5(format_) || formatWritesXdmf(format_)) {
+    // --- HDF5 archive (plain or with the XDMF sidecar's heavy data).
+    //     The archive is gated by [output] archive; "vtu" keeps it as the
+    //     archival companion unless it is switched off (the vtu files are
+    //     self-contained and never read the archive). ---
+    if (archiveEnabled_ &&
+        (formatWritesHdf5(format_) || formatWritesXdmf(format_) ||
+         formatWritesVtu(format_))) {
         const std::filesystem::path path =
             std::filesystem::path(directory_) /
             solutionFileName(prefix_, step, ".h5");
@@ -193,5 +278,64 @@ void SolutionWriter::write(long step, Real time) {
                               solutionFileName(prefix_, step, ".plt"))
                                  .string(),
                              f, topo_, time);
+    }
+
+    // --- High-order VTU (independent node set: the VTK Lagrange
+    //     lattice, not the extended grid above). ---
+    if (vtuEnabled_ && vtuReady_) {
+        writeVtuFrame_(step, time);
+    }
+}
+
+void SolutionWriter::writeVtuFrame_(long step, Real time) {
+    // Modal -> lattice projection per element and variable (variable
+    // node counts: triangles carry the barycentric lattice count).
+    std::vector<Real> *conserved[kNumVars2D] = {&vtuRho_, &vtuRhoU_, &vtuRhoV_,
+                                                &vtuE_};
+    for (int e = 0; e < nElem_; ++e) {
+        const Eigen::Index off = vtuOff_[static_cast<size_t>(e)];
+        const Eigen::Index m   = vtuCount_[static_cast<size_t>(e)];
+        for (int var = 0; var < kNumVars2D; ++var) {
+            const Eigen::Map<const VectorXr> uhat(
+                modal_.data() + (static_cast<size_t>(e) * kNumVars2D +
+                                 static_cast<size_t>(var)) *
+                                    static_cast<size_t>(nModes_),
+                nModes_);
+            const VectorXr vals = Vvtu_.block(off, 0, m, nModes_) * uhat;
+            Real *dst = conserved[var]->data() + static_cast<size_t>(off);
+            for (Eigen::Index q = 0; q < m; ++q) {
+                dst[q] = vals[q];
+            }
+        }
+    }
+    for (long long k = 0; k < vtuPts_; ++k) {
+        const size_t i = static_cast<size_t>(k);
+        vtuU_[i]       = vtuRhoU_[i] / vtuRho_[i];
+        vtuV_[i]       = vtuRhoV_[i] / vtuRho_[i];
+        vtuP_[i] = (gamma_ - Real(1)) *
+                   (vtuE_[i] - Real(0.5) * vtuRho_[i] *
+                                   (vtuU_[i] * vtuU_[i] + vtuV_[i] * vtuV_[i]));
+    }
+
+    const std::string name = solutionFileName(prefix_, step, ".vtu");
+    viz::Fields f;
+    f.x    = vtuX_.data();
+    f.y    = vtuY_.data();
+    f.rho  = vtuRho_.data();
+    f.rhoU = vtuRhoU_.data();
+    f.rhoV = vtuRhoV_.data();
+    f.E    = vtuE_.data();
+    f.u    = vtuU_.data();
+    f.v    = vtuV_.data();
+    f.p    = vtuP_.data();
+    viz::writeVtu((std::filesystem::path(directory_) / name).string(), f,
+                  polynomialOrder_, nElem_, isTriangle_);
+
+    // PVD collection maintenance — same contract as the XDMF series.
+    if (seriesEnabled_) {
+        pvdSteps_.push_back({name, time});
+        viz::writePvdSeries(
+            (std::filesystem::path(directory_) / pvdFileName()).string(),
+            pvdSteps_);
     }
 }

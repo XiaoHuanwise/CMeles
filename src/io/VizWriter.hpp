@@ -105,10 +105,12 @@ struct Fields {
     const Real *p    = nullptr;
 };
 
-/// @brief One time step of the XDMF temporal-collection index.
+/// @brief One time step of a temporal-collection index (XDMF series /
+///        PVD collection).
 struct SeriesEntry {
-    std::string h5Basename; ///< Solution h5 file name (no directory),
-                            ///< referenced relatively from the series file.
+    std::string h5Basename; ///< Solution data file name (no directory),
+                            ///< referenced relatively from the series file
+                            ///< (.h5 for XDMF, .vtu for PVD).
     Real time = Real(0);    ///< Physical time of the step.
 };
 
@@ -154,9 +156,77 @@ void writeXdmfSeries(const std::string &seriesPath,
 /// passive/sharing flags and per-variable min/max pairs: data section
 /// FLOAT32 299.0 marker, per-variable INT4 format codes (2 = double,
 /// 1 = float), INT4 passive 0, INT4 sharing 0, INT4 connectivity-sharing
-/// -1, per-variable FLOAT64 min/max pairs, nine block data arrays,
-/// 1-based INT4 cell connectivity.
+/// -1, per-variable FLOAT64 min/max pairs, nine block data arrays, INT4
+/// cell connectivity.
+///
+/// FE connectivity index base (per the Tecplot Data Format Guide, both
+/// Tecplot 360 and the VisIt/ParaView readers apply it): 0-based for
+/// file versions >= 103 (ours), 1-based for versions <= 102 (ASCII .dat
+/// stays 1-based at every version). The wrong base displaces every cell
+/// by one node. Note ParaView's PLT readers never lift SolutionTime
+/// into the time axis — for ParaView time series open the XDMF
+/// <prefix>_series.xmf instead; SolutionTime targets Tecplot 360.
 void writeTecplotPlt(const std::string &pltPath, const Fields &f,
                      const VizTopology &topo, Real time);
+
+/// @brief Reference parametric coordinates of the VTK Lagrange node
+///        lattice, in the VTK point-id order.
+///
+/// Quadrilateral of degree \p order: $(order+1)^2$ nodes at the uniform
+/// tensor lattice $(i/order, j/order)$, enumerated in the VTK
+/// higher-order order — corners (0,0),(1,0),(1,1),(0,1), then the
+/// bottom/right/top/left edge interiors (each in its increasing lattice
+/// direction), then the interior block row-major
+/// (vtkHigherOrderQuadrilateral::PointIndexFromIJK).
+///
+/// Triangle of degree \p order: $(order+1)(order+2)/2$ nodes enumerated
+/// by the concentric-ring loop of vtkHigherOrderTriangle::
+/// SetParametricCoords (per ring: the 3 vertices, then the 3 edge
+/// interiors).
+///
+/// The mapping to the CMeles reference element is $(r, s) = (2u - 1,
+/// 2v - 1)$ of the returned parametric coordinates $(u, v) \in [0,1]^2$
+/// (triangle: $u + v \le 1$); for triangles the collapsed apex is the
+/// $s = +1$ corner, matching the degenerate-quadrilateral element
+/// convention (vertices P1, P2, apex). Both lists are the authoritative
+/// connectivity order for writeVtu: point $k$ of an element must carry
+/// the coordinate/value evaluated at exactly these positions.
+std::vector<Real> vtkLagrangeParametricPoints(int order, bool triangle);
+
+/// @brief Write one VTK XML UnstructuredGrid (.vtu) file whose cells are
+///        the DG elements as HIGH-ORDER Lagrange cells.
+///
+/// Each element becomes a single VTK_LAGRANGE_QUADRILATERAL (type 70) or
+/// VTK_LAGRANGE_TRIANGLE (type 69) of degree \p order with
+/// vtkLagrangeParametricPoints as its node lattice: the nodal values are
+/// the DG polynomial evaluated exactly at the lattice (unisolvent for
+/// the degree-order polynomial space), so ParaView renders the actual
+/// polynomial with error-driven adaptive subdivision instead of a fixed
+/// piecewise-linear sub-grid. Nodes are NOT shared between elements —
+/// each element carries its own boundary-node copies, preserving the DG
+/// discontinuity exactly like the XDMF extended grid, at
+/// $(N+1)^2$ instead of $(N_q+2)^2$ nodes per element.
+///
+/// \p f holds the per-node arrays in the concatenated element order of
+/// vtkLagrangeParametricPoints (element e occupies
+/// nPts(e) = triangle ? (order+1)(order+2)/2 : (order+1)^2 entries).
+///
+/// File form: VTKFile/UnstructuredGrid, appended raw encoding (each
+/// block a UInt32 byte-count header then little-endian payload; all
+/// offsets computed a priori, single pass), Float64 point data and
+/// Int64/UInt8 cell arrays. ParaView opens the .vtu directly; time
+/// series open the companion PVD collection (writePvdSeries).
+void writeVtu(const std::string &vtuPath, const Fields &f, int order, int nElem,
+              const std::vector<int> &isTriangle);
+
+/// @brief (Re)write the PVD temporal collection <prefix>_series.pvd.
+///
+/// The ParaView-native time-series index for .vtu files: a plain XML
+/// Collection of <DataSet timestep part file/> entries. Same incremental
+/// maintenance contract as writeXdmfSeries (caller keeps the entry
+/// list; the index is regenerated each output step and covers this
+/// run's steps).
+void writePvdSeries(const std::string &pvdPath,
+                    const std::vector<SeriesEntry> &entries);
 
 } // namespace viz
