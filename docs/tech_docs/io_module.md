@@ -149,7 +149,7 @@ level = 1                 # 日志输出深度：消息深度 <= level 时才输
 interval = 100            # 进度行打印间隔（时间步数，>= 1）
 ```
 
-> 注：`variables` 键未实现（总是全量输出 7 个物理量），预留为未来扩展；`format` 键已实现（见 2.5 节：`hdf5`/`xdmf`/`tecplot`/`all`）。`enable = true` 时输出时机为：初始场（step 0）+ 每 `interval` 步 + 终态（与最后一次间隔输出重合时去重）。
+> 注：`variables` 键未实现（总是全量输出 7 个物理量），预留为未来扩展；`format` 键已实现（见 2.5 节：`hdf5`/`xdmf`/`tecplot`/`vtu`/`all`）。`enable = true` 时输出时机为：初始场（step 0）+ 每 `interval` 步 + 终态（与最后一次间隔输出重合时去重）。
 
 ### 1.4 配置结构体设计
 
@@ -622,7 +622,8 @@ directory = "./results"
 |------|------|------|
 | `"hdf5"` | `solution_<step>.h5` | 纯归档（原有行为） |
 | `"xdmf"` | `<前缀>_solution_<step>.h5`（内含 `mesh/connect`）+ 自包含 `<前缀>_solution_<step>.xmf` + `<前缀>_series.xmf` | ParaView 直接打开 `.xmf` 生成填充云图；**时间序列打开 `<前缀>_series.xmf`**（配对可整体移动） |
-| `"tecplot"` | `<前缀>_solution_<step>.plt` | 经典 Tecplot 二进制（V112，含 StrandID/SolutionTime），Tecplot 360 与 ParaView（VisIt Tecplot Binary Reader）均可直接打开 |
+| `"tecplot"` | `<前缀>_solution_<step>.plt` | 经典 Tecplot 二进制（V112：FileType + StrandID/SolutionTime + min/max 范围 + 0-based 连接表），Tecplot 360 与 ParaView（VisIt Tecplot Binary Reader）均可直接打开 |
+| `"vtu"` | `<前缀>_solution_<step>.vtu`（**高阶单元**）+ `<前缀>_series.pvd` + 伴随 h5 | ParaView 渲染**DG 多项式本身**（自适应细分），见"VTU 高阶单元输出"一节 |
 | `"all"` | 以上全部 | — |
 
 **文件命名前缀**：输出文件以 config 文件名（去扩展名）为前缀——`<前缀>_solution_<step>.{h5,xmf,plt}`、`<前缀>_checkpoint_<step>.h5`、`<前缀>_mesh.h5`、`<前缀>_series.xmf`——多个 config 可共用同一输出目录；`CMelesConvert` 批量模式从 `<前缀>_mesh.h5` 推断前缀并沿用（旧式 `mesh.h5`/`solution_<step>` 命名完全兼容）。
@@ -633,9 +634,22 @@ directory = "./results"
 
 **XDMF sidecar**（`viz::writeXdmf`）：统一或 Mixed 拓扑引用同文件 `mesh/connect`，`Geometry="XYZ"` 引用交错坐标数据集 `mesh/xyz`（[N][3]，z=0），7 个节点属性 HyperSlab 引用同名数据集，`<Time>` 记录物理时间。**必须用 XYZ 交错几何而非 XY 双数组**：ParaView 5.13 的 Xdmf3 读取器对 `XY` + 两个一维 DataItem 解析出的点数减半，连接表随即越界，Apply/Render 堆损坏闪退（pvbatch 实测复现与验证）。
 
-**Tecplot PLT 二进制**（`viz::writeTecplotPlt`）：经典 **V112** 布局、单一瞬态 FE 区（StrandID=1、FLOAT64 SolutionTime，`.plt` 序列在 Tecplot 360 中携带真实时间）、块式（BLOCK）打包。布局逐字段对齐 ParaView "VisIt Tecplot Binary Reader" 的解析器（VisIt `databases/Tecplot/TecplotFile.C`，pvbatch 实测四边形/三角形网格均加载、渲染成功）：**字符串编码为每字符一个 INT4 + 终止 INT4 0**（无长度前缀）；区头字段序 `FLOAT32 299.0 标记、区名、父区 −1、StrandID 1、SolutionTime、区色 −1、区类型、变量定位 0、面邻居 0、用户定义邻居连接 0、节点数/单元数、3×cell-dim、辅助结束 0`——**V112 没有 data-packing 字段**（读取器默认块打包）；数据区（≥103 形态）：`FLOAT32 299.0`、每变量 INT4 格式码（2=double/1=float）、passive 0、共享 0、连接共享 −1、**每变量 FLOAT64 min/max 对**（块的真实极值）、9 个块数据、1-based INT4 连接表。经典 FE 区只允许单一单元类型：全四边形/全三角形网格使用原生 `FEQUADRILATERAL(3)`/`FETRIANGLE(2)` 区类型；仅真混合网格把三角子胞折叠为重复节点四边形 $(n_1,n_2,n_3,n_3)$（节点 id 与 XDMF 连接表一致，仅编码折叠）。注意：Tecplot/VisIt 读取器会合并**比特级重合**的相邻单元边界节点（DG 不连续子网格的固有特性，显示层面无影响）。
+**Tecplot PLT 二进制**（`viz::writeTecplotPlt`）：经典 **V112** 布局（默认，`[output] tecplot_version`，另有 `"v101"` 兼容档见下）、单一瞬态 FE 区（StrandID=1、FLOAT64 SolutionTime，`.plt` 序列在 Tecplot 360 中携带真实时间）、块式（BLOCK）打包。布局逐字段对齐 ParaView "VisIt Tecplot Binary Reader" 的解析器（VisIt `databases/Tecplot/TecplotFile.C`）与 Tecplot Data Format Guide：**字符串编码为每字符一个 INT4 + 终止 INT4 0**（无长度前缀）；文件头 `magic #!TDV112、INT4 字节序检查、INT4 FileType=0（FULL，V111+ 才有——缺了它整个字段流错位，Tecplot 360 报 "Invalid header in binary datafile"）、标题、变量数、变量名`；区头字段序 `FLOAT32 299.0 标记、区名、父区 −1、StrandID 1、SolutionTime、区色 −1、区类型、变量定位 0、面邻居 0、用户定义邻居连接 0、节点数/单元数、3×cell-dim、辅助结束 0`——**V112 没有 data-packing 字段**（读取器默认块打包）；数据区（≥103 形态）：`FLOAT32 299.0`、每变量 INT4 格式码（2=double/1=float）、passive 0、共享 0、连接共享 −1、**每变量 FLOAT64 min/max 对**（块的真实极值）、9 个块数据、1-based INT4 连接表。经典 FE 区只允许单一单元类型：全四边形/全三角形网格使用原生 `FEQUADRILATERAL(3)`/`FETRIANGLE(2)` 区类型；仅真混合网格把三角子胞折叠为重复节点四边形 $(n_1,n_2,n_3,n_3)$（节点 id 与 XDMF 连接表一致，仅编码折叠）。注意：Tecplot/VisIt 读取器会合并**比特级重合**的相邻单元边界节点（DG 不连续子网格的固有特性，显示层面无影响）。
+
+**连接表索引基准（重要格式坑点）**：二进制 PLT 的 FE 连接表索引基准**按文件版本变化**（Tecplot Data Format Guide；Tecplot 360 与 VisIt/ParaView 读取器均按版本施加）：**V102 及以前为 1-based，V103 起为 0-based**（ASCII `.dat` 格式任何版本都保持 1-based——二进制/文本行为不一致是格式自身的著名坑点）。写错基准的症状是每个单元的节点 id 整体偏移 1：网格错位一个子胞、最小 id 的角点被当未引用丢弃（96×96 演示网格 2304 点读成 2303、去重后仅 1680=41²−1 个位置；Tecplot 360 与 ParaView 同时受累）。`writeTecplotPlt` 按 V112 规范写 **0-based**。**ParaView 的 PLT 读取器不把 SolutionTime 提升为时间轴**（序列打开时时间滑条只有文件序号）——PLT 的时间元数据面向 Tecplot 360；**ParaView 看云图/时间序列的首选路径始终是 XDMF**（`<前缀>_series.xmf`）。
+
+**VTU 高阶单元输出**（`viz::writeVtu`，`format = "vtu"`）：VTK XML UnstructuredGrid（appended/raw 编码，Float64 数据、Int64 连接表），**每个 DG 单元写成一个 degree-$N$ 的 VTK Lagrange 单元**——四边形 `VTK_LAGRANGE_QUADRILATERAL`(=70)、三角形 `VTK_LAGRANGE_TRIANGLE`(=69)，混合网格原生双类型（无需 PLT 的折叠 hack）。高阶属性要点：
+
+- **节点格点与模态→节点转换**：每单元 $(N{+}1)^2$（四边形）/ $\tfrac{(N+1)(N+2)}{2}$（三角形）个节点，取**均匀格点**（含边界，参数坐标 $u=i/N$）；节点值 = DG 多项式在格点的**精确求值**（`vandermondeAt` 收缩；均匀格点对 degree-$N$ 多项式空间 unisolvent），不是重采样近似。几何坐标 = 双线性映射在格点的值（直边单元被任意 degree-$\ge 1$ 的 Lagrange 插值精确再现）。
+- **DG 间断保留**：节点不跨单元共享——每单元自带边界格点副本（与扩展网格同理），渲染器逐单元求值，界面处间断为颜色突变。
+- **渲染质量与体积**：ParaView 对高阶单元做**误差驱动的自适应细分**（等值线随曲率加密），代替 XDMF 路径的固定 $(N_q{+}1)^2$ 线性子网格；节点数从 $(N_q{+}2)^2$ 降到 $(N{+}1)^2$（$N=3,N_q=4$：36→16，单帧体积约 2.2×缩小）。
+- **节点排序约定（关键格式坑点）**：VTK 高阶单元的连接表**不是**张量行主序——四边形为"角点 (0,0),(1,0),(1,1),(0,1) → 底/右/顶/左边内部点（各沿格点方向）→ 内部行主序"（`vtkHigherOrderQuadrilateral::PointIndexFromIJK`），三角形为同心环枚举"每环 3 顶点 → 3 条边内部"（`vtkHigherOrderTriangle::SetParametricCoords`）。`viz::vtkLagrangeParametricPoints(order, triangle)` 按上述源码逐字实现该序；排序错误的症状是单元内容错乱（本实现经 pvbatch `InterpolateFunctions` 与解析场逐点对照验证，四边形/三角形均到机器精度）。
+- **时间轴**：PVD 集合 `<前缀>_series.pvd`（`[output] series`，与 xmf 索引同一开关）携带每帧 timestep——ParaView 原生时间序列格式（优于 PLT 的无时间轴）。
+- 伴随 h5 与 xdmf/tecplot 一致仍为扩展网格布局；`CMelesConvert`（checkpoint→vtu）为后续项，当前转换端对 `vtu` 回退纯 h5。
 
 **双路径**：`format` 对 direct 策略（`SolutionWriter`）与 checkpoint→convert 策略（`CheckpointConvert`）同样生效；mesh.h5 记录运行期 `format` 属性供 `CMelesConvert` 继承（旧文件缺省回退 hdf5），`CMelesConvert --format <name>` 可覆盖。
+
+
 
 ### 2.6 未来扩展
 

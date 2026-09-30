@@ -404,6 +404,8 @@ void setPostStageFilter(StateFilter filter);   // 允许为空（无限幅）
 
 `CompressibleFlowSolver::run()` 在创建 stepper 后组装：`stepper->setPostStageFilter([limiter](occa::memory u) { limiter->apply(u); });`。限制器对象由 `Config` 的 `[limiter]` 段决定是否创建（`type = "none"` 时不创建，保持现有行为）。
 
+**初始场的一次性过滤**（第二个挂载点，`CompressibleFlowSolver` 构造时）：post-stage 过滤器只能看到 RK stage 状态，初始场本身在其覆盖之外——而强间断初始条件（如双马赫问题 $p$ 比 $116:1$ 的入射激波）的模态投影携带 Gibbs 下冲，可使积分点压力为负，第一次 RHS 求值即在 LLF 通量内对负数开方产生 NaN。因此求解器在初始条件投影之后、首个时间步之前调用一次 `limiter->apply(o_u)`（正性网检出非物理单元、MR-WENO 正性缩放修复）；该过滤同时让 `riemann_target = "ic"` 的初始场快照引用物理上合理（已过滤）的场。对温和间断该步骤无害。
+
 ### 配置项设计
 
 ```toml
