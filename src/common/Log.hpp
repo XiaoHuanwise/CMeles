@@ -65,7 +65,10 @@ public:
 
     ~LogLine() {
         buffer_ << '\n';
-        std::cout << buffer_.str();
+        // Flush per line: under file redirection std::cout is fully
+        // block-buffered (a ~4 KB glibc buffer), which would delay the
+        // per-step progress lines of a long run by thousands of steps.
+        std::cout << buffer_.str() << std::flush;
     }
 
     /// @brief The depth this line was requested at.
