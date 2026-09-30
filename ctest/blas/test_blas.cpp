@@ -174,8 +174,13 @@ static bool runBlasTests(const std::string &mode, occa::json &props) {
     // ========================================================================
     std::cout << "  --- BLAS-1 reductions ---" << std::endl;
 
-    // Extra large size to exercise multi-level reduction (> 256*256)
-    const std::vector<int> redSizes = {1, 255, 256, 257, 1000, 65537};
+    // Extra large size to exercise multi-level reduction (> 256*256).
+    // 1048577 = 4096 * 256 + 1 pushes count0 past kHostReduceMax (4096), so
+    // the pipeline runs at least one device-side sumReduce level before the
+    // host finalise — regression guard for the finalize copyTo, which must
+    // copy `count` entries and not the full scratch capacity (heap overflow
+    // otherwise; crashed production runs with n > 1e6 DOFs).
+    const std::vector<int> redSizes = {1, 255, 256, 257, 1000, 65537, 1048577};
 
     for (int n : redSizes) {
         VectorXr h_x = VectorXr::Random(n);

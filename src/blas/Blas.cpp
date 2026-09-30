@@ -118,8 +118,13 @@ Real Blas::finalizeReduction(occa::dim_t count, FinalOp finalOp) {
     // Use raw occa::memory::copyTo (not DeviceMemoryManager::copyToHost)
     // because scratch was allocated via device_.malloc, not wrapOrMalloc,
     // so the DeviceMemoryManager no-op path does not apply.
+    // The element count is mandatory: after the ping-pong levels `count`
+    // shrinks below the scratch capacity, and a default-entries copyTo
+    // transfers the WHOLE scratch buffer into the host vector (heap
+    // overflow whenever count0 > kHostReduceMax forced at least one
+    // device-side reduction level, i.e. n > kHostReduceMax * tileSize_).
     std::vector<Real> host(static_cast<std::size_t>(count));
-    src->copyTo(host.data());
+    src->copyTo(host.data(), count);
 
     Real acc = Real(0);
     for (occa::dim_t i = 0; i < count; ++i) {
@@ -143,8 +148,9 @@ Real Blas::finalizeMaxReduction(occa::dim_t count) {
     }
 
     // Level-2: copy remaining partials to host and max (0.0 identity).
+    // `count` entries, NOT the full scratch capacity (see finalizeReduction).
     std::vector<Real> host(static_cast<std::size_t>(count));
-    src->copyTo(host.data());
+    src->copyTo(host.data(), count);
 
     Real m = Real(0);
     for (occa::dim_t i = 0; i < count; ++i) {
@@ -169,8 +175,9 @@ Real Blas::finalizeMinReduction(occa::dim_t count) {
     }
 
     // Level-2: copy remaining partials to host and min (+infinity identity).
+    // `count` entries, NOT the full scratch capacity (see finalizeReduction).
     std::vector<Real> host(static_cast<std::size_t>(count));
-    src->copyTo(host.data());
+    src->copyTo(host.data(), count);
 
     Real m = std::numeric_limits<Real>::infinity();
     for (occa::dim_t i = 0; i < count; ++i) {

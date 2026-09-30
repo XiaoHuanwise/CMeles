@@ -79,8 +79,11 @@ Real MathOps::countNaN(occa::dim_t n, occa::memory &x) {
 
     // Final combine on the host: the partial count is small relative to the
     // scanned field and this is already the synchronisation point.
+    // `groups` entries: the scratch may have been grown by a previous,
+    // larger countNaN call, and a default-entries copyTo would transfer the
+    // whole capacity into this vector.
     std::vector<Real> partials(static_cast<std::size_t>(groups));
-    o_nanPartial_.copyTo(partials.data());
+    o_nanPartial_.copyTo(partials.data(), groups);
     Real count = Real(0);
     for (const Real p : partials) {
         count += p;
