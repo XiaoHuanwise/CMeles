@@ -163,8 +163,8 @@ cmake --install build --prefix ../.occa_install
 
 ```bash
 conda activate cmeles
-cd /path/to/CMeles
-bash tests/verify_env.sh
+cd /path/to/CMeles/tests
+bash ./verify_env.sh
 ```
 
 验证通过的输出示例：
