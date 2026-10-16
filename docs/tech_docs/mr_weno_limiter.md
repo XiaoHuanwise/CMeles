@@ -402,9 +402,9 @@ void setPostStageFilter(StateFilter filter);   // 允许为空（无限幅）
 - `RungeKuttaStepper`（通用 Butcher）：`rkStep` 内每个 stage 的 `o_uStage_` + 最终更新与 FSAL 起点；
 - 自适应步长方案：stage 状态必须限制（它要参与 RHS 计算）；被拒步的重试自然重复限制，无需特殊处理。
 
-`CompressibleFlowSolver::run()` 在创建 stepper 后组装：`stepper->setPostStageFilter([limiter](occa::memory u) { limiter->apply(u); });`。限制器对象由 `Config` 的 `[limiter]` 段决定是否创建（`type = "none"` 时不创建，保持现有行为）。
+`CompressibleFlowSolver::run()` 在创建 stepper 后组装 limiter 链（MR-WENO，之后可接保正缩放限制器）：`stepper->setPostStageFilter([solver](occa::memory u) { solver->applyStageFilter(u); })`。限制器对象由 `Config` 的 `[limiter]` 段决定是否创建（`type = "none"` 且 `positivity = false` 时均不创建，保持现有行为）。
 
-**初始场的一次性过滤**（第二个挂载点，`CompressibleFlowSolver` 构造时）：post-stage 过滤器只能看到 RK stage 状态，初始场本身在其覆盖之外——而强间断初始条件（如双马赫问题 $p$ 比 $116:1$ 的入射激波）的模态投影携带 Gibbs 下冲，可使积分点压力为负，第一次 RHS 求值即在 LLF 通量内对负数开方产生 NaN。因此求解器在初始条件投影之后、首个时间步之前调用一次 `limiter->apply(o_u)`（正性网检出非物理单元、MR-WENO 正性缩放修复）；该过滤同时让 `riemann_target = "ic"` 的初始场快照引用物理上合理（已过滤）的场。对温和间断该步骤无害。
+**初始场的一次性过滤**（第二个挂载点，`CompressibleFlowSolver` 构造时）：post-stage 过滤器只能看到 RK stage 状态，初始场本身在其覆盖之外——而强间断初始条件（如双马赫问题 $p$ 比 $116:1$ 的入射激波）的模态投影携带 Gibbs 下冲，可使积分点压力为负，第一次 RHS 求值即在 LLF 通量内对负数开方产生 NaN。因此求解器在初始条件投影之后、首个时间步之前调用一次 limiter 链（MR-WENO 抑制振荡；`positivity = true` 时再经 Zhang-Shu 保正缩放保证可容许，见 `positivity_limiter.md`）；该过滤同时让 `riemann_target = "ic"` 的初始场快照引用物理上合理（已过滤）的场。对温和间断该步骤无害。
 
 ### 配置项设计
 

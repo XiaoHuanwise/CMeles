@@ -87,10 +87,11 @@ void RungeKuttaStepper::rkStep(occa::memory &o_u, occa::memory &o_uNew,
         } else {
             rkStageCombine_(n, dt_, stage, s, o_A_, o_u, o_K_, o_uStage_);
         }
-        // Filter contract: the stage state feeds the RHS line below. In the
-        // pseudo-stepping role (inside DualStepper) no filter is ever
-        // installed, so this is a no-op there — pseudo iterates must stay
-        // unfiltered (see StepperBase::setPostStageFilter).
+        // Filter contract: the stage state feeds the RHS line below. In
+        // the pseudo-stepping role (inside DualStepper) only a continuous
+        // positivity projection is ever installed (via
+        // setPseudoStateFilter) — WENO-type limiters stay out of the
+        // pseudo iteration (see StepperBase::setPostStageFilter).
         applyPostStageFilter(o_uStage_);
         occa::memory kS =
             o_K_.slice(nSz * static_cast<std::size_t>(stage), nSz);

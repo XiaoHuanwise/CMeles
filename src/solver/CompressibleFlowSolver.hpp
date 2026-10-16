@@ -30,6 +30,7 @@
 
 class FieldOutput;
 class LimiterBase;
+class PositivityLimiter;
 
 namespace solver_detail {
 /// Defined in CompressibleFlowSolver.cpp: overrides the OpenMP thread
@@ -94,6 +95,11 @@ private:
     /// @brief Apply the configured initial condition to field_->o_u().
     void applyInitialCondition();
 
+    /// @brief Run the installed limiter chain (MR-WENO, then positivity)
+    ///        in place on \p o_u — the single source of truth shared by the
+    ///        post-stage filter lambda and the initial-condition filter.
+    void applyStageFilter(occa::memory o_u);
+
     /// @brief Time step: the fixed configured dt (if > 0), otherwise the
     ///        CFL estimate, clamped to the remaining time.
     Real computeDt(Real t);
@@ -110,6 +116,10 @@ private:
     /// Declared after the stepper so it is destroyed first (it only
     /// borrows the field/device/mem handles, all of which outlive it).
     std::unique_ptr<LimiterBase> limiter_;
+
+    /// Positivity-preserving scaling limiter; null unless
+    /// [limiter] positivity is true.
+    std::unique_ptr<PositivityLimiter> posLimiter_;
 
     /// Compiled [bc] Dirichlet expressions; null unless any boundary face
     /// resolved to type "expr". Refreshed once per physical time step.

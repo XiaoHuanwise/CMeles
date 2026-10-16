@@ -20,6 +20,7 @@
 #include "common/Timer.hpp"
 #include "io/FieldOutput.hpp"
 #include "limiter/MrWenoLimiter.hpp"
+#include "limiter/PositivityLimiter.hpp"
 #include "time/StepperFactory.hpp"
 
 namespace solver_detail {
@@ -75,6 +76,17 @@ void CompressibleFlowSolver::applyInitialCondition() {
     }
 }
 
+void CompressibleFlowSolver::applyStageFilter(occa::memory o_u) {
+    // MR-WENO first (accuracy), positivity last (admissibility): the state
+    // a downstream RHS evaluation sees is then positive by construction.
+    if (limiter_) {
+        limiter_->apply(o_u);
+    }
+    if (posLimiter_) {
+        posLimiter_->apply(o_u);
+    }
+}
+
 Real CompressibleFlowSolver::computeDt(Real t) {
     const Real remaining = cfg_.timeFinal() - t;
     Real dt = (cfg_.timeDt() > Real(0))
@@ -109,16 +121,33 @@ int CompressibleFlowSolver::run() {
     };
     stepper_ = makeStepperFactory(cfg_)(device_, *mem_, rhs, nDof);
 
-    // Discontinuity limiter ([limiter] type != "none"): installed as the
-    // stepper's post-stage filter, so it acts on every RK stage state /
-    // implicit stage publish for ALL time-marching methods (filtering
-    // contract in StepperBase::setPostStageFilter). With the default
-    // type = "none" nothing is created and the behaviour is unchanged.
-    if (cfg_.limiterType() != LimiterType::None) {
+    // Limiter chain ([limiter]): the discontinuity limiter (type =
+    // "mr-weno") and/or the positivity-preserving scaling limiter
+    // (positivity = true) are installed as the stepper's post-stage
+    // filter, so they act on every RK stage state / implicit stage
+    // publish for ALL time-marching methods (filtering contract in
+    // StepperBase::setPostStageFilter). The chain runs MR-WENO first
+    // (accuracy) and the positivity projection LAST, so any state handed
+    // to an RHS is admissible by construction. The positivity projection
+    // additionally rides the implicit family's pseudo iterations via
+    // setPseudoStateFilter (continuous projections only — MR-WENO stays
+    // outside the dual-time iteration by contract). With both disabled
+    // (the defaults) nothing is created and the behaviour is unchanged.
+    if (cfg_.limiterType() == LimiterType::MrWeno) {
         limiter_ =
             std::make_unique<MrWenoLimiter>(cfg_, device_, *mem_, *field_);
+    }
+    if (cfg_.limiterPositivity()) {
+        posLimiter_ = std::make_unique<PositivityLimiter>(cfg_, device_,
+                                                          *mem_, *field_);
+    }
+    if (limiter_ || posLimiter_) {
         stepper_->setPostStageFilter(
-            [this](occa::memory u) { limiter_->apply(u); });
+            [this](occa::memory u) { applyStageFilter(u); });
+        if (posLimiter_) {
+            stepper_->setPseudoStateFilter(
+                [this](occa::memory u) { posLimiter_->apply(u); });
+        }
     }
 
     applyInitialCondition();
@@ -130,9 +159,7 @@ int CompressibleFlowSolver::run() {
     // evaluation. The post-stage filter only sees RK stage states, so the
     // initial state must be filtered explicitly (the "ic" Riemann snapshot
     // below then references the limited, physical field).
-    if (limiter_) {
-        limiter_->apply(field_->o_u());
-    }
+    applyStageFilter(field_->o_u());
     // Characteristic boundary with the "ic" reference target: freeze the
     // initial field as the boundary reference state (the kernel evaluates
     // its trace on the boundary faces).

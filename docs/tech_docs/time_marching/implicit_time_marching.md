@@ -312,6 +312,8 @@ $$
 
 CMeles 默认采用阶段解耦方案，通过 `DitrResidual::temporalResidualStageC2()` 和 `DitrResidual::temporalResidualStageN1()` 分别求解两个解耦后的伪时间子系统。
 
+**伪迭代内的保正投影**：伪迭代中间态不在 SSP 凸性论证覆盖内，强激波问题（如双马赫）上会冲出正性域并使 LLF 通量对负数开方。`[limiter] positivity = true` 时，Zhang-Shu 保正缩放限制器（连续守恒凸投影，见 `positivity_limiter.md`）经 `StepperBase::setPseudoStateFilter()` 安装到伪步进器的 post-stage 插槽，保证每次 RHS 求值的输入可容许；WENO 类不连续限制器按过滤契约仍留在伪迭代之外。同时 `DualStepper::notConverged()` 对非有限 $\|\mathcal{F}\|_\infty$ 一律视为未收敛（NaN 残差不再可能被误判收敛）。
+
 ### 7.4 收敛判断
 
 伪时间迭代的未收敛条件（当以下两式同时成立时迭代继续）：

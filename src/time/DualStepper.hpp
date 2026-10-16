@@ -62,6 +62,14 @@ public:
     ///        convergence, publish $u^{n+1}$. Returns \p dt.
     Real advance(occa::memory o_u, Real t, Real dt) override;
 
+    /// @brief Install a filter on the pseudo steppers' post-stage slots.
+    ///
+    /// Positivity-type continuous projections only (filtering contract in
+    /// StepperBase::setPostStageFilter); coupled mode passes the stacked
+    /// 2N state, which the projection must handle (the positivity limiter
+    /// slices it in halves itself).
+    void setPseudoStateFilter(StateFilter filter) override;
+
     /// @brief Prints the accumulated pseudo-iteration statistics of the
     ///        whole run at the detail log depth.
     ~DualStepper() override;

@@ -144,6 +144,20 @@ epsilon = 1.0e-6           # WENO-Z anti-zero epsilon.
 force_troubled = false     # Diagnostic: flag every element as troubled
                            # (accuracy-acceptance tests only; never enable in
                            # production).
+positivity = false         # Zhang & Shu positivity-preserving scaling
+                           # limiter, applied to ALL steppers after any
+                           # mr-weno pass: scales each element's high-order
+                           # modes toward the cell mean until every volume
+                           # Gauss point and face Gauss trace point satisfies
+                           # rho >= eps*rhoBar and e >= eps*eBar
+                           # (conservative: cell means are preserved). On
+                           # the implicit (dual-time) family it additionally
+                           # rides the pseudo iterations, keeping every RHS
+                           # input admissible — see
+                           # docs/tech_docs/positivity_limiter.md.
+positivity_epsilon = 1.0e-10  # Relative positivity margin eps in
+                              # rho >= eps*rhoBar, e >= eps*eBar; must lie
+                              # in (0, 1).
 
 # ---- Initial condition ----
 [initial_condition]

@@ -64,7 +64,24 @@ void DualStepper::pseudoStep(RungeKuttaStepper &ps) {
 }
 
 bool DualStepper::notConverged(Real fNorm, Real f0Norm) const {
+    // A NaN/Inf residual norm must never pass as converged — a diverged
+    // pseudo march would otherwise publish garbage silently. It runs to
+    // maxPseudoSteps (warning) and fails loudly in the solver's checks.
+    if (!std::isfinite(fNorm)) {
+        return true;
+    }
     return (fNorm / f0Norm > params_.rtol) && (fNorm > params_.atol);
+}
+
+void DualStepper::setPseudoStateFilter(StateFilter filter) {
+    // Post-stage slots of the pseudo steppers: stage states and the
+    // candidate state of every pseudo RK attempt pass through the filter
+    // (positivity-type continuous projections only — the filtering
+    // contract keeps WENO-type limiters out of the pseudo iteration).
+    pseudo_.setPostStageFilter(filter);
+    if (pseudoC2_) {
+        pseudoC2_->setPostStageFilter(filter);
+    }
 }
 
 Real DualStepper::residualNorm(const RungeKuttaStepper &ps, occa::dim_t n) {

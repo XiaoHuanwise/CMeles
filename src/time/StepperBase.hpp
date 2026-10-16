@@ -64,11 +64,11 @@ public:
     ///      between the stage update and the next RHS evaluation).
     ///
     ///   2. States internal to an implicit solve iteration (dual-time
-    ///      pseudo iterates) must NOT be filtered. The limiter acts as a
-    ///      projection on the converged stage state instead:
-    ///      $u^{n+1} = \pi(u^*)$ where $u^*$ solves the smooth equation
-    ///      $G(u^*; u^n) = 0$ that contains no limiter. Embedding the
-    ///      projection inside the iteration would (a) make the iterated
+    ///      pseudo iterates) must not carry the DISCONTINUITY limiter. The
+    ///      limiter acts as a projection on the converged stage state
+    ///      instead: $u^{n+1} = \pi(u^*)$ where $u^*$ solves the smooth
+    ///      equation $G(u^*; u^n) = 0$ that contains no limiter. Embedding
+    ///      the projection inside the iteration would (a) make the iterated
     ///      operator piecewise discontinuous (WENO weights / troubled
     ///      flags switch at O(1) magnitude when iterates cross the KXRCF
     ///      threshold), stalling the residual in a limit cycle, and
@@ -77,10 +77,28 @@ public:
     ///      the equation). The equation data ($u^n$, $R(u^n)$, $u^{n-1}$)
     ///      always comes from published — hence already filtered — states,
     ///      so the implicit residual sees limited physics by construction.
+    ///      Continuous conservative projections toward the admissible set
+    ///      (the Zhang & Shu positivity scaling limiter) are exempt from
+    ///      this rule: they are Lipschitz in the state, so the iterated
+    ///      operator stays continuous — install them via
+    ///      setPseudoStateFilter().
     ///
     /// An empty filter (the default) disables limiting.
     void setPostStageFilter(StateFilter filter) {
         postStageFilter_ = std::move(filter);
+    }
+
+    /// @brief Install a state filter on implicit-solve iterates (dual-time
+    ///        pseudo stepping).
+    ///
+    /// Restricted to continuous conservative projections toward the
+    /// admissible set (e.g. the positivity scaling limiter) — see the
+    /// filtering contract rule 2 above. The base implementation ignores
+    /// the filter: only steppers that own implicit iteration states
+    /// (DualStepper) honour it, by installing it on their pseudo steppers'
+    /// post-stage slots.
+    virtual void setPseudoStateFilter(StateFilter filter) {
+        (void)filter;
     }
 
 protected:

@@ -1,0 +1,251 @@
+// positivity_scale.okl — Zhang & Shu positivity-preserving scaling limiter
+// (per element).
+//
+// Scales the high-order (m > 0) modal coefficients of ALL conserved
+// variables toward the cell mean by a single factor theta,
+//
+//   u_h(x) <- uBar + theta * (u_h(x) - uBar),   theta in [0, 1],
+//
+// leaving the constant mode (the cell mean) untouched, so the projection
+// is conservative. theta is chosen as the largest value keeping, at every
+// VOLUME Gauss point and every FACE Gauss trace point of the element,
+//
+//   rho(x_q) >= eps * rhoBar  and  e(x_q) >= eps * eBar,
+//
+// with (rhoBar, mBar, EBar) the exact quadrature cell mean,
+// e_q = E_q - |m_q|^2 / (2 rho_q) the pointwise internal energy and
+// eBar = EBar - |mBar|^2 / (2 rhoBar).
+//
+// Candidate thetas follow the closed forms of Zhang & Shu (JCP 229, 2010):
+//
+//   theta_1 = min(1, (1 - eps) rhoBar / (rhoBar - min_q rho_q)),
+//   theta_2 = min(1, (1 - eps) eBar / (eBar - min_q e_q(theta_1))),
+//   theta   = theta_1 * theta_2,
+//
+// where e_q(theta_1) is the internal energy of the theta_1-scaled point
+// state (all variables scale affinely, so the scaled point values follow
+// from the raw ones without re-projecting the modes). Because CMeles
+// evaluates the RHS at Gauss — not Gauss-Lobatto — points, the closed
+// forms are only a starting guess: a verification pass re-checks the
+// criterion above at every point and halves theta until it holds
+// (theta -> 0 lands exactly on the admissible mean, so the loop always
+// terminates).
+//
+// Elements whose MEAN state is inadmissible (rhoBar <= 0 or eBar <= 0)
+// cannot be repaired by a mean-preserving scaling; they are left untouched
+// and flagged so the failure surfaces loudly downstream. flags values:
+//   0 = untouched (theta == 1), 1 = scaled (theta < 1), 2 = mean
+//   inadmissible.
+//
+// Layout: u[elem][var][mode]; V2D[q][mode] shared by all elements;
+// lambdaWJ[elem][q]; Vface[(side*4 + fOwn)][i][mode] with the element's
+// own traces selected through elemFaces / faceKL / faceFL / faceKR /
+// faceFR (same walk as kxrcf_flag).
+//
+// See docs/tech_docs/positivity_limiter.md.
+
+static void evalState(const Real *uElem, const int N_modes, const Real *Vrow,
+                      Real *rho, Real *mx, Real *my, Real *en) {
+    Real a = 0.0, b = 0.0, c = 0.0, d = 0.0;
+    for (int m = 0; m < N_modes; ++m) {
+        const Real v = Vrow[m];
+        a += v * uElem[m];
+        b += v * uElem[N_modes + m];
+        c += v * uElem[2 * N_modes + m];
+        d += v * uElem[3 * N_modes + m];
+    }
+    *rho = a;
+    *mx  = b;
+    *my  = c;
+    *en  = d;
+}
+
+@kernel void positivityScale(const int N_elem, const int N_vars,
+                             const int N_modes, const int N_q, const int N_q2,
+                             const Real epsRel, Real *u, const Real *V2D,
+                             const Real *lambdaWJ, const Real *Vface,
+                             const int *elemFaces, const int *faceKL,
+                             const int *faceFL, const int *faceKR,
+                             const int *faceFR, int *flags) {
+    for (int elem = 0; elem < N_elem; ++elem;
+         @tile(TILE_SIZE, @outer, @inner)) {
+        const int uOff = elem * N_vars * N_modes;
+
+        // ---- Pass 1: exact cell means (volume quadrature, valid on
+        //      non-affine elements) + pointwise min of rho over the
+        //      volume Gauss and face Gauss points -----------------------
+        Real area   = 0.0;
+        Real meanRho = 0.0, meanMx = 0.0, meanMy = 0.0, meanE = 0.0;
+        Real minRho = 1.0e300;
+        for (int q = 0; q < N_q2; ++q) {
+            const Real lam = lambdaWJ[elem * N_q2 + q];
+            Real rh, mx, my, en;
+            evalState(&u[uOff], N_modes, V2D + q * N_modes, &rh, &mx, &my,
+                      &en);
+            area += lam;
+            meanRho += lam * rh;
+            meanMx += lam * mx;
+            meanMy += lam * my;
+            meanE += lam * en;
+            if (rh < minRho) {
+                minRho = rh;
+            }
+        }
+        meanRho /= area;
+        meanMx /= area;
+        meanMy /= area;
+        meanE /= area;
+        for (int f = 0; f < 4; ++f) {
+            const int F = elemFaces[elem * 4 + f];
+            if (F < 0) {
+                continue; // collapsed (triangle) face slot
+            }
+            const int side = (elem == faceKL[F]) ? 0 : 1;
+            const int fOwn = (side == 0) ? faceFL[F] : faceFR[F];
+            const Real *Vf = Vface + (side * 4 + fOwn) * (N_q * N_modes);
+            for (int i = 0; i < N_q; ++i) {
+                Real rh, mx, my, en;
+                evalState(&u[uOff], N_modes, Vf + i * N_modes, &rh, &mx, &my,
+                          &en);
+                if (rh < minRho) {
+                    minRho = rh;
+                }
+            }
+        }
+
+        if (meanRho <= 0.0) {
+            // A non-positive mean cannot be repaired by mean-preserving
+            // scaling — flag and leave untouched (loud failure downstream).
+            flags[elem] = 2;
+        } else {
+            const Real meanInt =
+                meanE - 0.5 * (meanMx * meanMx + meanMy * meanMy) / meanRho;
+            if (meanInt <= 0.0) {
+                flags[elem] = 2;
+            } else {
+                // ---- theta_1 (density) ------------------------------------
+                Real theta = 1.0;
+                if (minRho < meanRho) {
+                    const Real cand =
+                        (1.0 - epsRel) * meanRho / (meanRho - minRho);
+                    theta = (cand < theta) ? cand : theta;
+                }
+
+                // ---- theta_2 (internal energy of the theta_1-scaled
+                //      points) -----------------------------------------------
+                Real minInt = 1.0e300;
+                for (int q = 0; q < N_q2; ++q) {
+                    Real rh, mx, my, en;
+                    evalState(&u[uOff], N_modes, V2D + q * N_modes, &rh, &mx,
+                              &my, &en);
+                    const Real rh1 = meanRho + theta * (rh - meanRho);
+                    const Real mx1 = meanMx + theta * (mx - meanMx);
+                    const Real my1 = meanMy + theta * (my - meanMy);
+                    const Real en1 = meanE + theta * (en - meanE);
+                    const Real e1 =
+                        en1 - 0.5 * (mx1 * mx1 + my1 * my1) / rh1;
+                    if (e1 < minInt) {
+                        minInt = e1;
+                    }
+                }
+                for (int f = 0; f < 4; ++f) {
+                    const int F = elemFaces[elem * 4 + f];
+                    if (F < 0) {
+                        continue;
+                    }
+                    const int side = (elem == faceKL[F]) ? 0 : 1;
+                    const int fOwn = (side == 0) ? faceFL[F] : faceFR[F];
+                    const Real *Vf =
+                        Vface + (side * 4 + fOwn) * (N_q * N_modes);
+                    for (int i = 0; i < N_q; ++i) {
+                        Real rh, mx, my, en;
+                        evalState(&u[uOff], N_modes, Vf + i * N_modes, &rh,
+                                  &mx, &my, &en);
+                        const Real rh1 = meanRho + theta * (rh - meanRho);
+                        const Real mx1 = meanMx + theta * (mx - meanMx);
+                        const Real my1 = meanMy + theta * (my - meanMy);
+                        const Real en1 = meanE + theta * (en - meanE);
+                        const Real e1 =
+                            en1 - 0.5 * (mx1 * mx1 + my1 * my1) / rh1;
+                        if (e1 < minInt) {
+                            minInt = e1;
+                        }
+                    }
+                }
+                if (minInt < meanInt) {
+                    const Real cand =
+                        (1.0 - epsRel) * meanInt / (meanInt - minInt);
+                    theta *= (cand < 1.0) ? cand : 1.0;
+                }
+
+                // ---- Verification with halving fallback: enforce the
+                //      actual criterion at every point. The closed forms
+                //      above are derived for Gauss-Lobatto point sets and
+                //      may undershoot on plain Gauss points. --------------
+                int ok   = 0;
+                int iter = 0;
+                while (!ok && iter < 60) {
+                    ok = 1;
+                    const Real rhoFloor = epsRel * meanRho;
+                    const Real intFloor = epsRel * meanInt;
+                    for (int q = 0; q < N_q2 && ok == 1; ++q) {
+                        Real rh, mx, my, en;
+                        evalState(&u[uOff], N_modes, V2D + q * N_modes, &rh,
+                                  &mx, &my, &en);
+                        const Real rh1 = meanRho + theta * (rh - meanRho);
+                        const Real mx1 = meanMx + theta * (mx - meanMx);
+                        const Real my1 = meanMy + theta * (my - meanMy);
+                        const Real en1 = meanE + theta * (en - meanE);
+                        const Real e1 =
+                            en1 - 0.5 * (mx1 * mx1 + my1 * my1) / rh1;
+                        if (rh1 < rhoFloor || e1 < intFloor) {
+                            ok = 0;
+                        }
+                    }
+                    for (int f = 0; f < 4 && ok == 1; ++f) {
+                        const int F = elemFaces[elem * 4 + f];
+                        if (F < 0) {
+                            continue;
+                        }
+                        const int side = (elem == faceKL[F]) ? 0 : 1;
+                        const int fOwn = (side == 0) ? faceFL[F] : faceFR[F];
+                        const Real *Vf =
+                            Vface + (side * 4 + fOwn) * (N_q * N_modes);
+                        for (int i = 0; i < N_q && ok == 1; ++i) {
+                            Real rh, mx, my, en;
+                            evalState(&u[uOff], N_modes, Vf + i * N_modes,
+                                      &rh, &mx, &my, &en);
+                            const Real rh1 = meanRho + theta * (rh - meanRho);
+                            const Real mx1 = meanMx + theta * (mx - meanMx);
+                            const Real my1 = meanMy + theta * (my - meanMy);
+                            const Real en1 = meanE + theta * (en - meanE);
+                            const Real e1 =
+                                en1 -
+                                0.5 * (mx1 * mx1 + my1 * my1) / rh1;
+                            if (rh1 < rhoFloor || e1 < intFloor) {
+                                ok = 0;
+                            }
+                        }
+                    }
+                    if (ok == 0) {
+                        theta *= 0.5;
+                        ++iter;
+                    }
+                }
+
+                // ---- Apply: scale the m > 0 modes of all variables -----
+                if (theta < 1.0) {
+                    for (int m = 1; m < N_modes; ++m) {
+                        u[uOff + m] *= theta;
+                        u[uOff + N_modes + m] *= theta;
+                        u[uOff + 2 * N_modes + m] *= theta;
+                        u[uOff + 3 * N_modes + m] *= theta;
+                    }
+                    flags[elem] = 1;
+                } else {
+                    flags[elem] = 0;
+                }
+            }
+        }
+    }
+}

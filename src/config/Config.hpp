@@ -581,6 +581,24 @@ public:
         return limiter_force_troubled_;
     }
 
+    /// @brief Whether the positivity-preserving scaling limiter
+    ///        ([limiter] positivity; Zhang & Shu) is enabled. Off by
+    ///        default. Composable with the MR-WENO limiter (both run:
+    ///        MR-WENO first, positivity last) and usable standalone
+    ///        (type = "none").
+    bool limiterPositivity() const noexcept {
+        return limiter_positivity_;
+    }
+
+    /// @brief Relative positivity margin $\varepsilon$
+    ///        ([limiter] positivity_epsilon): after limiting, every
+    ///        quadrature / face point satisfies
+    ///        $\rho \ge \varepsilon \bar{\rho}$ and
+    ///        $e \ge \varepsilon \bar{e}$.
+    Real limiterPositivityEpsilon() const noexcept {
+        return limiter_positivity_epsilon_;
+    }
+
     // ---- Initial condition ----
 
     IcType icType() const noexcept {
@@ -750,6 +768,8 @@ private:
     Real limiter_gamma_high_      = Real(0.99);
     Real limiter_epsilon_         = Real(1e-6);
     bool limiter_force_troubled_  = false;
+    bool limiter_positivity_      = false;
+    Real limiter_positivity_epsilon_ = Real(1e-10);
 
     IcType ic_type_     = IcType::Uniform;
     std::string ic_rho_ = "1";

@@ -441,6 +441,8 @@ void Config::setDefaults() {
     limiter_gamma_high_     = Real(0.99);
     limiter_epsilon_        = Real(1e-6);
     limiter_force_troubled_ = false;
+    limiter_positivity_     = false;
+    limiter_positivity_epsilon_ = Real(1e-10);
 
     ic_type_ = IcType::Uniform;
     ic_rho_  = "1";
@@ -644,6 +646,10 @@ Config::Config(const std::string &path) {
         limiter_epsilon_    = getReal(*tbl, "epsilon", limiter_epsilon_);
         limiter_force_troubled_ =
             getBool(*tbl, "force_troubled", limiter_force_troubled_);
+        limiter_positivity_ =
+            getBool(*tbl, "positivity", limiter_positivity_);
+        limiter_positivity_epsilon_ =
+            getReal(*tbl, "positivity_epsilon", limiter_positivity_epsilon_);
     }
 
     // [initial_condition]
@@ -747,6 +753,11 @@ Config::Config(const std::string &path) {
     }
     if (limiter_epsilon_ <= Real(0)) {
         throw std::invalid_argument("Config: limiter epsilon must be > 0");
+    }
+    if (limiter_positivity_epsilon_ <= Real(0) ||
+        limiter_positivity_epsilon_ >= Real(1)) {
+        throw std::invalid_argument(
+            "Config: limiter positivity_epsilon must be in (0, 1)");
     }
     if (occa_threads_ < 0) {
         throw std::invalid_argument("Config: threads must be >= 0");
