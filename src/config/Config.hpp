@@ -66,10 +66,19 @@ enum class BcType : int {
                   ///< $\rho$ and $E$ unchanged. Any consistent numerical
                   ///< flux then produces exactly zero wall-normal mass
                   ///< flux — the inviscid (Euler) wall condition.
-    Expr = 5      ///< Dirichlet boundary from primitive-variable
+    Expr = 5,     ///< Dirichlet boundary from primitive-variable
                   ///< expressions ([bc] rho / u / v / p evaluated at
                   ///< x, y, t on every boundary quadrature point; the
                   ///< values are refreshed once per physical time step).
+    FreeAvg = 6   ///< Zero-gradient from the CELL MEAN: the exterior state
+                  ///< is the interior element's mean (the polynomial's
+                  ///< constant mode u^(0); phi_0 = 1/2 so mean = u^(0)/2,
+                  ///< exact on affine elements) instead of the pointwise
+                  ///< trace -- the finite-volume edge-pad analogue. The
+                  ///  pointwise free trace carries the polynomial's
+                  ///  high-order oscillations straight into the wall flux
+                  ///  when a shock crosses the wall cell; the constant
+                  ///  mode averages them out and supplies only the mean.
 };
 
 /// @brief Per-side boundary-condition override ([bc.x_low] etc.). Faces are
@@ -101,11 +110,19 @@ enum class RiemannTarget : int {
     Flow = 0, ///< Constant [flow] (rho, u, v, p): user-provided operating
               ///< condition — the standard far-field / pressure-outlet
               ///< interface (cf. Fluent pressure-outlet, SU2 far-field).
-    Ic = 1    ///< Trace of the initial field at each boundary quadrature
+    Ic = 1,   ///< Trace of the initial field at each boundary quadrature
               ///< point: for benchmark problems whose ambient environment
               ///< varies along the wall (the four-quadrant 2-D Riemann
               ///< data), where a single constant target would anchor the
               ///< wrong pressure on part of the boundary.
+    Expr = 2  ///< Analytic wall data: the [bc] rho/u/v/p expressions
+              ///< evaluated at the boundary point (x, y, t) and refreshed
+              ///< every time step (the same evaluator the Dirichlet
+              ///< boundary uses). The reference then follows moving waves
+              ///< instead of a frozen snapshot — e.g. the exact
+              ///< self-similar 1-D Riemann wall states of the 2-D Riemann
+              ///< problem — while the characteristic mixing still lets the
+              ///< outgoing information leave freely.
 };
 
 /// @brief Parse a boundary-condition name string into a \p BcType.
@@ -120,7 +137,7 @@ BcType parseBcType(const std::string &name);
 /// @brief Convert a \p BcType back to its canonical string name.
 const char *bcTypeName(BcType t) noexcept;
 
-/// @brief Parse a Riemann-target name ("flow" | "ic") into a
+/// @brief Parse a Riemann-target name ("flow" | "ic" | "expr") into a
 ///        \p RiemannTarget. Throws std::invalid_argument otherwise.
 RiemannTarget parseRiemannTarget(const std::string &name);
 

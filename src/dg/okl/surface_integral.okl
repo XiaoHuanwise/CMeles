@@ -118,6 +118,19 @@
                     for (int var = 0; var < N_VARS; ++var) {
                         qR[var] = qL[var];
                     }
+                } else if (bct == 6) {
+                    // BcType::FreeAvg — the interior element's MEAN as the
+                    // exterior state: the constant mode u^(0) with
+                    // phi_0 = 1/2 gives mean = u^(0)/2 (exact on affine
+                    // elements). The finite-volume edge-pad analogue:
+                    // unlike the pointwise free trace, the constant mode
+                    // carries no high-order oscillation, so a shock
+                    // crossing the wall cell feeds only its mean through
+                    // the boundary flux.
+                    const int uBaseM = KL * N_vars * N_modes;
+                    for (int var = 0; var < N_VARS; ++var) {
+                        qR[var] = 0.5 * u[uBaseM + var * N_modes];
+                    }
                 } else if (bct == 4) {
                     // BcType::Slip — reflection (slip) wall: mirror the
                     // interior trace, negating the normal momentum
@@ -156,7 +169,18 @@
                 // reflection, unlike the zero-gradient branch whose
                 // acoustic Neumann behaviour reflects them back.
                 Real qT[N_VARS];
-                if (riemannTarget == 1) {
+                if (riemannTarget == 2) {
+                    // "expr" target — analytic wall data: the [bc]
+                    // rho/u/v/p expressions evaluated host-side at
+                    // (x, y, t) on this face point and refreshed once per
+                    // time step (the same buffer the Dirichlet branch
+                    // reads). The reference then follows moving waves
+                    // instead of a frozen snapshot.
+                    const int bf = bfMap[F];
+                    for (int var = 0; var < N_VARS; ++var) {
+                        qT[var] = bcGhost[(bf * N_q + i) * N_VARS + var];
+                    }
+                } else if (riemannTarget == 1) {
                     // "ic" target: trace of the initial field at this
                     // face point (same side-0 face-Vandermonde rows
                     // the left-state interpolation uses).

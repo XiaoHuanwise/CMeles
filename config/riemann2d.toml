@@ -1,17 +1,26 @@
-# CMeles 2-D Riemann problem (Lax & Liu configuration 3, Liska & Wendroff
-# Table 4.3 case 3) with the MR-WENO limiter: four-quadrant initial data on
-# [0, 1]^2 whose four interface Riemann problems are all shocks (S, S, S,
-# S); every quadrant flow converges toward the heavy upper-right state and
-# the interaction rolls the shear layers into the classic double spiral.
+# CMeles 2-D Riemann problem — Lax & Liu (1998) configuration 3 in the
+# ORIGINAL paper convention: quadrant split at x = 0.8, y = 0.8 on
+# [0, 1]^2, presentation time T = 0.8 (Schulz-Rinne, Collins & Glaz 1993
+# class S, S, S, S; the same case appears as Liska & Wendroff Table 4.3
+# case 3 under the 0.5-split / T = 0.3 variant convention). All four
+# quadrant-interface 1-D Riemann problems are single pure shocks — the
+# star state equals the heavy quadrant exactly, by construction of the
+# data — everything converges toward the heavy upper-right corner and
+# the interaction rolls the shear layers into the classic double spiral
+# centred at (0.8, 0.8).
 #
-# Free (zero-gradient) boundaries: exactly neutral while the wall-adjacent
-# flow is constant. The fastest signal (lower-left diagonal stream,
-# |u| + a ~ 2.25) reaches a wall at t = 0.222, so t_final = 0.2 keeps a
-# 10% margin. Run with:
+# Boundary: free-avg (zero-gradient from the CELL MEAN) on all walls --
+# the exterior state is the interior element's constant mode, the
+# finite-volume edge-pad. Unlike the pointwise free trace (whose
+# high-order oscillations feed the wall flux and pile up unboundedly,
+# rho ~ 68 by t = 0.8) the constant mode carries no oscillation, so the
+# wave systems exit cleanly through the walls.
+#
+# Run with:
 #   ./build/CMeles config/riemann2d.toml
 # then open results_riemann2d/riemann2d_series.xmf in ParaView for the
-# whole time series (or riemann2d_solution_0000600.xmf for one step; the
-# .plt files go to Tecplot 360 with format = "tecplot"/"all").
+# whole time series (the .plt files go to Tecplot 360 with format =
+# "tecplot"/"all").
 
 [basis]
 order = 2
@@ -26,8 +35,7 @@ dx = 0.0104166666666667
 dy = 0.0104166666666667
 
 [bc]
-type = "riemann"
-riemann_target = "ic"
+type = "free-avg"
 
 [riemann]
 flux = "llf"
@@ -44,17 +52,18 @@ p = 1.5
 [time_marching]
 method = "ssprk3"
 cfl = 0.18
-t_final = 0.2
+t_final = 0.8
 
 [initial_condition]
 type = "expr"
-rho = "(y < 0.5) ? ((x < 0.5) ? 0.138 : 0.5323) : ((x < 0.5) ? 0.5323 : 1.5)"
-u = "(x < 0.5) ? 1.206 : 0.0"
-v = "(y < 0.5) ? 1.206 : 0.0"
-p = "(y < 0.5) ? ((x < 0.5) ? 0.029 : 0.3) : ((x < 0.5) ? 0.3 : 1.5)"
+rho = "(y < 0.8) ? ((x < 0.8) ? 0.138 : 0.5323) : ((x < 0.8) ? 0.5323 : 1.5)"
+u = "(x < 0.8) ? 1.206 : 0.0"
+v = "(y < 0.8) ? 1.206 : 0.0"
+p = "(y < 0.8) ? ((x < 0.8) ? 0.029 : 0.3) : ((x < 0.8) ? 0.3 : 1.5)"
 
 [limiter]
 type = "mr-weno"
+positivity = true
 
 [occa]
 mode = "OpenMP"
@@ -63,9 +72,9 @@ mode = "OpenMP"
 enable = true
 strategy = "direct"
 format = "xdmf"
-interval = 300
+interval = 400
 directory = "./results_riemann2d"
 
 [log]
 level = 1
-interval = 100
+interval = 200

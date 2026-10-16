@@ -352,13 +352,17 @@ void DgField::buildBoundaryData() {
         }
     }
 
-    // Expression faces need the [bc] rho/u/v/p Dirichlet expressions; the
-    // evaluator lives in the solver layer, so fail fast here.
-    if (n_expr_faces_ > 0 && (cfg_.bcRho().empty() || cfg_.bcU().empty() ||
-                              cfg_.bcV().empty() || cfg_.bcP().empty())) {
+    // Expression faces and the "expr" Riemann target need the [bc]
+    // rho/u/v/p expressions; the evaluator lives in the solver layer, so
+    // fail fast here.
+    const bool needsBcExpr = n_expr_faces_ > 0 ||
+                             (cfg_.bcType() == BcType::Riemann &&
+                              cfg_.riemannTarget() == RiemannTarget::Expr);
+    if (needsBcExpr && (cfg_.bcRho().empty() || cfg_.bcU().empty() ||
+                        cfg_.bcV().empty() || cfg_.bcP().empty())) {
         throw std::invalid_argument(
-            "DgField: boundary type \"expr\" requires the [bc] rho/u/v/p "
-            "Dirichlet expressions");
+            "DgField: boundary type \"expr\" / riemann_target = \"expr\" "
+            "requires the [bc] rho/u/v/p expressions");
     }
 
     o_faceBcType_ = mem_.wrapOrMallocInt(

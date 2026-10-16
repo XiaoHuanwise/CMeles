@@ -167,10 +167,12 @@ int CompressibleFlowSolver::run() {
         cfg_.riemannTarget() == RiemannTarget::Ic) {
         field_->setInitialFieldSnapshot();
     }
-    // Expression (Dirichlet) boundary faces: compile the [bc] expressions
-    // once and seed the ghost states at t = 0; the run loop refreshes them
-    // once per physical time step.
-    if (field_->hasExprBoundary()) {
+    // Expression (Dirichlet) boundary faces and the "expr" Riemann
+    // target: compile the [bc] expressions once and seed the ghost states
+    // at t = 0; the run loop refreshes them once per physical time step.
+    if (field_->hasExprBoundary() ||
+        (cfg_.bcType() == BcType::Riemann &&
+         cfg_.riemannTarget() == RiemannTarget::Expr)) {
         exprBc_ = std::make_unique<solver_detail::ExprBoundaryCondition>(
             cfg_, *field_);
         exprBc_->refresh(Real(0));

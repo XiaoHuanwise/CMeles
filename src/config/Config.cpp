@@ -115,6 +115,10 @@ BcType parseBcType(const std::string &name) {
     if (key == "free" || key == "zero-gradient" || key == "zero_gradient") {
         return BcType::Free;
     }
+    if (key == "free-avg" || key == "free_avg" || key == "freeavg" ||
+        key == "free-average") {
+        return BcType::FreeAvg;
+    }
     if (key == "riemann" || key == "characteristic" ||
         key == "pressure-farfield" || key == "pressure_farfield") {
         return BcType::Riemann;
@@ -137,6 +141,8 @@ const char *bcTypeName(BcType t) noexcept {
             return "periodic";
         case BcType::Free:
             return "free";
+        case BcType::FreeAvg:
+            return "free-avg";
         case BcType::Riemann:
             return "riemann";
         case BcType::Slip:
@@ -156,8 +162,11 @@ RiemannTarget parseRiemannTarget(const std::string &name) {
     if (key == "ic") {
         return RiemannTarget::Ic;
     }
+    if (key == "expr" || key == "analytic") {
+        return RiemannTarget::Expr;
+    }
     throw std::invalid_argument("parseRiemannTarget: unknown target '" + name +
-                                "' (expected \"flow\" or \"ic\")");
+                                "' (expected \"flow\", \"ic\" or \"expr\")");
 }
 
 const char *riemannTargetName(RiemannTarget t) noexcept {
@@ -166,6 +175,8 @@ const char *riemannTargetName(RiemannTarget t) noexcept {
             return "flow";
         case RiemannTarget::Ic:
             return "ic";
+        case RiemannTarget::Expr:
+            return "expr";
         default:
             return "unknown";
     }

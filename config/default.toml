@@ -53,6 +53,12 @@ type = "farfield"          # "farfield" (free-stream exterior state) | "periodic
                            #  flow is constant — but acoustically reflective:
                            #  outgoing pressure waves bounce back and tangential
                            #  wall flows can pile up non-physical compression)
+                           # | "free-avg" (zero-gradient from the CELL MEAN:
+                           #  exterior = the interior polynomial's constant
+                           #  mode — the finite-volume edge-pad; unlike the
+                           #  pointwise "free" trace it carries no high-order
+                           #  oscillation into the wall flux when a shock
+                           #  crosses the wall cell)
                            # | "riemann" (characteristic / pressure far-field
                            #  non-reflecting boundary, aliases "characteristic",
                            #  "pressure-farfield": the boundary state mixes the
@@ -69,7 +75,14 @@ riemann_target = "flow"    # Reference state of the "riemann" bc: "flow" (the
                            # boundary point, for benchmark problems whose
                            # ambient environment varies along the walls, e.g.
                            # the four-quadrant 2-D Riemann data; a frozen
-                           # snapshot of the initial solution).
+                           # snapshot of the initial solution) | "expr"
+                           #  (analytic wall data: the [bc] rho/u/v/p
+                           #  expressions evaluated at the boundary point
+                           #  (x, y, t) and refreshed every time step — the
+                           #  reference follows moving waves instead of a
+                           #  frozen snapshot, e.g. the exact self-similar
+                           #  1-D Riemann wall states of the 2-D Riemann
+                           #  problem).
 # Two more boundary types: "slip" (aliases "slip-wall", "wall" — reflection
 # wall: the exterior state mirrors the interior trace with the normal
 # momentum negated, giving exactly zero wall-normal mass flux; the inviscid

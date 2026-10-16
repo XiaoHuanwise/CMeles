@@ -1,0 +1,75 @@
+# CMeles 2-D Riemann problem - Lax & Liu (1998) configuration 3 in the
+# ORIGINAL paper convention (split at (0.8, 0.8), T = 0.8), analytic
+# boundary with sliding shock feet: TOP/RIGHT fitted, LEFT/BOTTOM
+# analytic. The top/right feet follow a piecewise-linear trajectory
+# measured (sub-cell interpolated) from the 96^2 P2 interior front and
+# re-injected as the wall data (the discrete front there runs ~0.75%
+# slower than the analytic Rankine-Hugoniot speed 0.66330); the
+# left/bottom feet keep the ANALYTIC speed 0.42201 (measured 0.42198 --
+# the theoretical position holds, no fitting needed). Post-shock state (= the heavy
+# quadrant, by construction of the config-3 data) fills [foot(t), 0.8).
+# Everything else matches config/riemann2d.toml (the analytic-speed
+# variant); see that file for the full case description.
+
+[basis]
+order = 2
+nq = 4
+
+[mesh]
+nx = 96
+ny = 96
+x0 = 0.0
+y0 = 0.0
+dx = 0.0104166666666667
+dy = 0.0104166666666667
+
+[bc]
+type = "riemann"
+riemann_target = "expr"
+rho = "(y > 0.9) ? ((x < 0.8 - t*(0.70821701 + t*(-0.40841486 + t*(0.68492553 + t*-0.38339148)))) ? 0.5323 : 1.5) : (y < 0.1) ? ((x < 0.8 - 0.4220067*t) ? 0.138 : 0.5323) : (x > 0.9) ? ((y < 0.8 - t*(0.70821701 + t*(-0.40841486 + t*(0.68492553 + t*-0.38339148)))) ? 0.5323 : 1.5) : ((y < 0.8 - 0.4220067*t) ? 0.138 : 0.5323)"
+u = "(y > 0.9) ? ((x < 0.8 - t*(0.70821701 + t*(-0.40841486 + t*(0.68492553 + t*-0.38339148)))) ? 1.206 : 0.0) : (y < 0.1) ? ((x < 0.8 - 0.4220067*t) ? 1.206 : 0.0) : (x > 0.9) ? 0.0 : 1.206"
+v = "(y > 0.9) ? 0.0 : (y < 0.1) ? 1.206 : (x > 0.9) ? ((y < 0.8 - t*(0.70821701 + t*(-0.40841486 + t*(0.68492553 + t*-0.38339148)))) ? 1.206 : 0.0) : ((y < 0.8 - 0.4220067*t) ? 1.206 : 0.0)"
+p = "(y > 0.9) ? ((x < 0.8 - t*(0.70821701 + t*(-0.40841486 + t*(0.68492553 + t*-0.38339148)))) ? 0.3 : 1.5) : (y < 0.1) ? ((x < 0.8 - 0.4220067*t) ? 0.029 : 0.3) : (x > 0.9) ? ((y < 0.8 - t*(0.70821701 + t*(-0.40841486 + t*(0.68492553 + t*-0.38339148)))) ? 0.3 : 1.5) : ((y < 0.8 - 0.4220067*t) ? 0.029 : 0.3)"
+
+[riemann]
+flux = "llf"
+
+[gas]
+gamma = 1.4
+
+[flow]
+rho = 1.5
+u = 0.0
+v = 0.0
+p = 1.5
+
+[time_marching]
+method = "ssprk3"
+cfl = 0.18
+t_final = 0.8
+
+[initial_condition]
+type = "expr"
+rho = "(y < 0.8) ? ((x < 0.8) ? 0.138 : 0.5323) : ((x < 0.8) ? 0.5323 : 1.5)"
+u = "(x < 0.8) ? 1.206 : 0.0"
+v = "(y < 0.8) ? 1.206 : 0.0"
+p = "(y < 0.8) ? ((x < 0.8) ? 0.029 : 0.3) : ((x < 0.8) ? 0.3 : 1.5)"
+
+[limiter]
+type = "mr-weno"
+positivity = true
+
+[occa]
+mode = "OpenMP"
+threads = 6
+
+[output]
+enable = true
+strategy = "direct"
+format = "xdmf"
+interval = 300
+directory = "./results_riemann2d_fit"
+
+[log]
+level = 1
+interval = 200
