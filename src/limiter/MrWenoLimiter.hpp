@@ -9,15 +9,20 @@
 ///   1. kxrcfFaceJump — per-face signed density-jump boundary integrals;
 ///   2. kxrcfFlag — per-element modified KXRCF troubled-cell test
 ///      (Fu & Shu exponent, Zhu & Shu min normalisation);
-///   3. mrWenoLimit — per-troubled-cell reconstruction: face-normal
+///   3. host-side compaction of the flags into a dense ascending index
+///      list (a clean field short-circuits the remaining steps);
+///   4. mrWenoLinStage — snapshot of every element's linear modes;
+///   5. mrWenoLimit — per-troubled-cell reconstruction from the dense
+///      list (exactly one thread slot per troubled cell): face-normal
 ///      characteristic decomposition, per-component scalar MR-WENO
 ///      (hierarchical candidates -> telescoping recursion -> WENO-Z
 ///      weights), edge-length weighted average.
 ///
 /// Stencil: only the direct face neighbours' linear modal coefficients
-/// (for the lowest-order smoothness indicator); every troubled cell is
-/// processed independently from its neighbours' *pre-limit* state, so the
-/// kernel has no ordering dependence and no write conflicts.
+/// (for the lowest-order smoothness indicator), read from the staged
+/// snapshot; every troubled cell is processed independently from its
+/// neighbours' *pre-limit* state, so the kernel has no ordering
+/// dependence and no write conflicts.
 
 #pragma once
 
@@ -50,6 +55,13 @@ public:
 
     /// @brief Detect troubled cells and limit them in place in \p o_u.
     void apply(occa::memory o_u) override;
+
+    /// @brief Cells flagged troubled by the last apply() call (0 when the
+    ///        field is clean — the reconstruction chain is then skipped
+    ///        entirely).
+    int lastTroubledCount() const {
+        return last_troubled_count_;
+    }
 
 private:
     /// @brief Build a limiter kernel with the standard JIT props
@@ -96,16 +108,24 @@ private:
 
     // ---- Host storage of uploaded data (wrap sources on unified
     // backends must outlive the occa handles) ----
-    std::vector<Real> deriv_v_; ///< Flattened derivative Vandermonde tables.
-    std::vector<int> troubled_; ///< Troubled-cell flags (0/1).
+    std::vector<Real> deriv_v_;    ///< Flattened derivative Vandermonde tables.
+    std::vector<int> troubled_;    ///< Troubled-cell flags (0/1).
+    std::vector<int> troubleList_; ///< Dense ascending troubled indices.
+    std::vector<Real> u_lin_;      ///< Linear-mode snapshot (staging source).
 
     // ---- Device buffers ----
     occa::memory o_derivV_;
     occa::memory o_troubled_;
+    occa::memory o_troubleList_;
+    occa::memory o_uLin_;
     occa::memory o_faceJump_;
 
     // ---- Kernels ----
     occa::kernel kxrcfFaceJump_;
     occa::kernel kxrcfFlag_;
+    occa::kernel mrWenoLinStage_;
     occa::kernel mrWenoLimit_;
+
+    /// Troubled cells found by the last apply() call.
+    int last_troubled_count_ = 0;
 };

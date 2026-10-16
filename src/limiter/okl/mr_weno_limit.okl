@@ -26,6 +26,21 @@
 // characteristic component runs the scalar algorithm, and the per-face
 // results are averaged with the edge lengths as weights.
 //
+// Parallel strategy: the host compacts the troubled flags into a dense
+// ascending index list (MrWenoLimiter::apply), so this kernel spawns
+// exactly one thread slot per troubled cell — no idle slots for clean
+// cells, no load imbalance. The loop bound is the SHORT troubled list,
+// so the tile is deliberately tiny (TROUBLE_TILE_SIZE: 1 on the unified
+// backends — the parallel-for then schedules every troubled cell as its
+// own work unit — and 64 on the GPU backends, one wavefront per block);
+// a 256-tile over a few hundred troubled cells would collapse the outer
+// block count to a handful and serialize the heavy reconstruction on
+// as many threads. Neighbour linear modes come from the uLin snapshot
+// staged by mr_weno_lin_stage.okl BEFORE this kernel runs, which makes
+// the pre-limit neighbour semantics race-free by construction
+// (host-side compaction because OCCA 2.0's @atomic is not portable —
+// the OpenCL backend silently drops it).
+//
 // See docs/tech_docs/mr_weno_limiter.md (full derivation and references).
 
 // --- Small helpers -----------------------------------------------------------
@@ -302,11 +317,12 @@ static Real rotT(const int k, const int j, const Real nx, const Real ny) {
 
 // --- Kernel ------------------------------------------------------------------
 
-@kernel void mrWenoLimit(const int N_elem, const int N_order,
+@kernel void mrWenoLimit(const int N_troubled, const int N_order,
                          const int N_vars, const int N_modes, const int N_q,
                          const int Nq2, const Real gammaLow,
                          const Real gammaHigh, const Real epsW,
-                         const Real gammaGas, Real *u, const int *troubled,
+                         const Real gammaGas, Real *u, const Real *uLin,
+                         const int *troubleList,
                          const int *elemFaces, const int *faceKL,
                          const int *faceFL, const int *faceKR,
                          const int *faceFR, const Real *faceN,
@@ -325,460 +341,504 @@ static Real rotT(const int k, const int j, const Real nx, const Real ny) {
     // d(phi_1)/dr = d(phi_2)/ds = sqrt(3)/2, the cross terms vanish.
     const Real cLin = sqrt(3.0) / 2.0;
 
-    for (int elem = 0; elem < N_elem; ++elem;
-         @tile(TILE_SIZE, @outer, @inner)) {
-        if (troubled[elem] != 0) {
-            const int eOff = elem * Nq2;
-            const int uOff = elem * N_vars * N_modes;
+    for (int k = 0; k < N_troubled; ++k;
+         @tile(TROUBLE_TILE_SIZE, @outer, @inner)) {
+        const int elem = troubleList[k];
+        const int eOff = elem * Nq2;
+        const int uOff = elem * N_vars * N_modes;
 
-            // --- Step 0: own modal coefficients and the TRUE cell mean
-            //     (weighted quadrature = the (M u)_0 row of the general
-            //     formula; never assume u^{(0)} alone is the mean).
-            Real uc[N_VARS][NMODES_MAX];
+        // --- Step 0: own modal coefficients and the TRUE cell mean
+        //     (weighted quadrature = the (M u)_0 row of the general
+        //     formula; never assume u^{(0)} alone is the mean).
+        Real uc[N_VARS][NMODES_MAX];
+        for (int var = 0; var < N_vars; ++var) {
+            for (int l = 0; l < N_modes; ++l) {
+                uc[var][l] = u[uOff + var * N_modes + l];
+            }
+        }
+        Real mean[N_VARS];
+        Real area = 0.0;
+        for (int var = 0; var < N_VARS; ++var) {
+            mean[var] = 0.0;
+        }
+        for (int q = 0; q < Nq2; ++q) {
+            const Real lam = lambdaWJ[eOff + q];
+            const int vRow = q * N_modes;
+            Real uh[N_VARS];
             for (int var = 0; var < N_vars; ++var) {
-                for (int l = 0; l < N_modes; ++l) {
-                    uc[var][l] = u[uOff + var * N_modes + l];
+                Real acc = 0.0;
+                for (int m = 0; m < N_modes; ++m) {
+                    acc += V2D[vRow + m] * uc[var][m];
                 }
+                uh[var] = acc;
             }
-            Real mean[N_VARS];
-            Real area = 0.0;
+            area += lam;
             for (int var = 0; var < N_VARS; ++var) {
-                mean[var] = 0.0;
+                mean[var] += lam * uh[var];
             }
-            for (int q = 0; q < Nq2; ++q) {
-                const Real lam = lambdaWJ[eOff + q];
-                const int vRow = q * N_modes;
-                Real uh[N_VARS];
-                for (int var = 0; var < N_vars; ++var) {
-                    Real acc = 0.0;
-                    for (int m = 0; m < N_modes; ++m) {
-                        acc += V2D[vRow + m] * uc[var][m];
-                    }
-                    uh[var] = acc;
-                }
-                area += lam;
-                for (int var = 0; var < N_VARS; ++var) {
-                    mean[var] += lam * uh[var];
-                }
-            }
+        }
+        for (int var = 0; var < N_VARS; ++var) {
+            mean[var] /= area;
+        }
+
+        // rs-coefficients of the OWN bilinear map (needed by the
+        // exact second-order chain-rule terms of beta).
+        const int vOff0 = elem * 8;
+        const Real ownA3 = (vertices[vOff0 + 0] - vertices[vOff0 + 2] +
+                            vertices[vOff0 + 4] - vertices[vOff0 + 6]) /
+                           4.0;
+        const Real ownB3 = (vertices[vOff0 + 1] - vertices[vOff0 + 3] +
+                            vertices[vOff0 + 5] - vertices[vOff0 + 7]) /
+                           4.0;
+
+        // --- Step 1: per-face topology, neighbour linear modal
+        //     coefficients read from the uLin snapshot staged by
+        //     mrWenoLinStage BEFORE any cell is reconstructed — every
+        //     troubled cell sees the same PRE-limit neighbours (the
+        //     limiter of a neighbour never feeds this cell), so the
+        //     cells are independent, order-free and write-conflict-
+        //     free — and the physical gradients of the linear basis at
+        //     the shared-face midpoint (neighbour frame).
+        int nbK[4], nbF[4];
+        Real lin[4][N_VARS][3];
+        Real g1x[4], g1y[4], g2x[4], g2y[4];
+        Real eLen[4], nUx[4], nUy[4];
+        for (int f = 0; f < 4; ++f) {
+            nbK[f] = -1;
+            eLen[f] = 0.0;
+            nUx[f] = 0.0;
+            nUy[f] = 0.0;
             for (int var = 0; var < N_VARS; ++var) {
-                mean[var] /= area;
+                for (int l = 0; l < 3; ++l) {
+                    lin[f][var][l] = 0.0;
+                }
+            }
+            const int F = elemFaces[elem * 4 + f];
+            if (F < 0) {
+                continue; // collapsed (triangle) face slot
+            }
+            const int KL = faceKL[F];
+            const int KR = faceKR[F];
+            const int Kn = (elem == KL) ? KR : KL;
+            const Real nx = faceN[F * 2];
+            const Real ny = faceN[F * 2 + 1];
+            eLen[f] = sqrt(nx * nx + ny * ny);
+            nUx[f] = nx / eLen[f];
+            nUy[f] = ny / eLen[f];
+            if (Kn < 0) {
+                continue; // domain-boundary face: no neighbour
+            }
+            nbK[f] = Kn;
+            nbF[f] = (Kn == KR) ? faceFR[F] : faceFL[F];
+            for (int var = 0; var < N_vars; ++var) {
+                for (int l = 0; l < 3; ++l) {
+                    lin[f][var][l] = uLin[(Kn * N_vars + var) * 3 + l];
+                }
             }
 
-            // rs-coefficients of the OWN bilinear map (needed by the
-            // exact second-order chain-rule terms of beta).
-            const int vOff0 = elem * 8;
-            const Real ownA3 = (vertices[vOff0 + 0] - vertices[vOff0 + 2] +
-                                vertices[vOff0 + 4] - vertices[vOff0 + 6]) /
-                               4.0;
-            const Real ownB3 = (vertices[vOff0 + 1] - vertices[vOff0 + 3] +
-                                vertices[vOff0 + 5] - vertices[vOff0 + 7]) /
-                               4.0;
+            // Neighbour bilinear map evaluated at its own face
+            // midpoint (r', s'): physical gradients of phi_1/phi_2 via
+            // the inverse-map Jacobian there.
+            //
+            // APPROXIMATION RISK (emphasised): beta_{0,1} uses the
+            // neighbour's linear reconstruction as seen from Omega_0,
+            // and this implementation evaluates its gradient at a
+            // SINGLE point — the shared-face midpoint — then takes
+            //
+            // $$ \zeta_i = \big|\nabla q_i\big|^2 \, \big|\Omega_0\big|. $$
+            //
+            // This is EXACT when the neighbour is affine (the linear
+            // projection then has a constant gradient), but a
+            // single-point approximation of
+            // $\int_{\Omega_0} |\nabla q_i|^2 d\Omega$ for a
+            // non-affine neighbour, with an O(eps) error (eps =
+            // neighbour non-affinity degree; triangles sit at eps = 1).
+            // Two further approximations stack on top for non-affine
+            // neighbours: the linear coefficients are the neighbour's
+            // TRUNCATED modal modes 1..2 rather than a true P_1
+            // L2-projection, and even a full gradient table would
+            // leave the integral itself inexact — the integrand
+            // contains the neighbour's inverse-Jacobian entries and
+            // is RATIONAL in Omega_0's reference coordinates, so the
+            // Lambda_wJ quadrature does not integrate it exactly.
+            // All of this is safe BECAUSE beta_{0,1} is an
+            // indicator-only input: conservation and smooth-region
+            // order preservation are provably independent of its
+            // exactness; the sole effect is a possible shift of the
+            // weight-switch timing near discontinuities. The full
+            // remedy (a precomputed neighbour gradient table with
+            // cross-element bilinear Newton inversion) is deferred
+            // per the design document's recommendation.
+            const int vOff = Kn * 8;
+            const Real x1 = vertices[vOff + 0], y1 = vertices[vOff + 1];
+            const Real x2 = vertices[vOff + 2], y2 = vertices[vOff + 3];
+            const Real x3 = vertices[vOff + 4], y3 = vertices[vOff + 5];
+            const Real x4 = vertices[vOff + 6], y4 = vertices[vOff + 7];
+            const Real ra1 = (-x1 + x2 + x3 - x4) / 4.0;
+            const Real ra2 = (-x1 - x2 + x3 + x4) / 4.0;
+            const Real ra3 = (x1 - x2 + x3 - x4) / 4.0;
+            const Real rb1 = (-y1 + y2 + y3 - y4) / 4.0;
+            const Real rb2 = (-y1 - y2 + y3 + y4) / 4.0;
+            const Real rb3 = (y1 - y2 + y3 - y4) / 4.0;
+            const Real rp = kFaceMid[nbF[f]][0];
+            const Real sp = kFaceMid[nbF[f]][1];
+            const Real dxdr = ra1 + ra3 * sp;
+            const Real dxds = ra2 + ra3 * rp;
+            const Real dydr = rb1 + rb3 * sp;
+            const Real dyds = rb2 + rb3 * rp;
+            const Real det = dxdr * dyds - dxds * dydr;
+            const Real rx = dyds / det;
+            const Real ry = -dxds / det;
+            const Real sx = -dydr / det;
+            const Real sy = dxdr / det;
+            // Column convention: [g_x; g_y] = [[rx, sx], [ry, sy]] [g_r; g_s].
+            g1x[f] = rx * cLin;
+            g1y[f] = ry * cLin;
+            g2x[f] = sx * cLin;
+            g2y[f] = sy * cLin;
+        }
 
-            // --- Step 1: per-face topology, neighbour linear modal
-            //     coefficients (PRE-limit state — the limiter of the
-            //     neighbour never feeds this cell, so troubled cells are
-            //     independent and write-conflict-free), and the physical
-            //     gradients of the linear basis at the shared-face
-            //     midpoint (neighbour frame).
-            int nbK[4], nbF[4];
-            Real lin[4][N_VARS][3];
-            Real g1x[4], g1y[4], g2x[4], g2y[4];
-            Real eLen[4], nUx[4], nUy[4];
-            for (int f = 0; f < 4; ++f) {
-                nbK[f] = -1;
-                eLen[f] = 0.0;
-                nUx[f] = 0.0;
-                nUy[f] = 0.0;
-                for (int var = 0; var < N_VARS; ++var) {
-                    for (int l = 0; l < 3; ++l) {
-                        lin[f][var][l] = 0.0;
-                    }
-                }
-                const int F = elemFaces[elem * 4 + f];
-                if (F < 0) {
-                    continue; // collapsed (triangle) face slot
-                }
-                const int KL = faceKL[F];
-                const int KR = faceKR[F];
-                const int Kn = (elem == KL) ? KR : KL;
-                const Real nx = faceN[F * 2];
-                const Real ny = faceN[F * 2 + 1];
-                eLen[f] = sqrt(nx * nx + ny * ny);
-                nUx[f] = nx / eLen[f];
-                nUy[f] = ny / eLen[f];
-                if (Kn < 0) {
-                    continue; // domain-boundary face: no neighbour
-                }
-                nbK[f] = Kn;
-                nbF[f] = (Kn == KR) ? faceFR[F] : faceFL[F];
-                const int nOff = Kn * N_vars * N_modes;
-                for (int var = 0; var < N_vars; ++var) {
-                    for (int l = 0; l < 3; ++l) {
-                        lin[f][var][l] = u[nOff + var * N_modes + l];
-                    }
-                }
-
-                // Neighbour bilinear map evaluated at its own face
-                // midpoint (r', s'): physical gradients of phi_1/phi_2 via
-                // the inverse-map Jacobian there.
-                //
-                // APPROXIMATION RISK (emphasised): beta_{0,1} uses the
-                // neighbour's linear reconstruction as seen from Omega_0,
-                // and this implementation evaluates its gradient at a
-                // SINGLE point — the shared-face midpoint — then takes
-                //
-                // $$ \zeta_i = \big|\nabla q_i\big|^2 \, \big|\Omega_0\big|. $$
-                //
-                // This is EXACT when the neighbour is affine (the linear
-                // projection then has a constant gradient), but a
-                // single-point approximation of
-                // $\int_{\Omega_0} |\nabla q_i|^2 d\Omega$ for a
-                // non-affine neighbour, with an O(eps) error (eps =
-                // neighbour non-affinity degree; triangles sit at eps = 1).
-                // Two further approximations stack on top for non-affine
-                // neighbours: the linear coefficients are the neighbour's
-                // TRUNCATED modal modes 1..2 rather than a true P_1
-                // L2-projection, and even a full gradient table would
-                // leave the integral itself inexact — the integrand
-                // contains the neighbour's inverse-Jacobian entries and
-                // is RATIONAL in Omega_0's reference coordinates, so the
-                // Lambda_wJ quadrature does not integrate it exactly.
-                // All of this is safe BECAUSE beta_{0,1} is an
-                // indicator-only input: conservation and smooth-region
-                // order preservation are provably independent of its
-                // exactness; the sole effect is a possible shift of the
-                // weight-switch timing near discontinuities. The full
-                // remedy (a precomputed neighbour gradient table with
-                // cross-element bilinear Newton inversion) is deferred
-                // per the design document's recommendation.
-                const int vOff = Kn * 8;
-                const Real x1 = vertices[vOff + 0], y1 = vertices[vOff + 1];
-                const Real x2 = vertices[vOff + 2], y2 = vertices[vOff + 3];
-                const Real x3 = vertices[vOff + 4], y3 = vertices[vOff + 5];
-                const Real x4 = vertices[vOff + 6], y4 = vertices[vOff + 7];
-                const Real ra1 = (-x1 + x2 + x3 - x4) / 4.0;
-                const Real ra2 = (-x1 - x2 + x3 + x4) / 4.0;
-                const Real ra3 = (x1 - x2 + x3 - x4) / 4.0;
-                const Real rb1 = (-y1 + y2 + y3 - y4) / 4.0;
-                const Real rb2 = (-y1 - y2 + y3 + y4) / 4.0;
-                const Real rb3 = (y1 - y2 + y3 - y4) / 4.0;
-                const Real rp = kFaceMid[nbF[f]][0];
-                const Real sp = kFaceMid[nbF[f]][1];
-                const Real dxdr = ra1 + ra3 * sp;
-                const Real dxds = ra2 + ra3 * rp;
-                const Real dydr = rb1 + rb3 * sp;
-                const Real dyds = rb2 + rb3 * rp;
-                const Real det = dxdr * dyds - dxds * dydr;
-                const Real rx = dyds / det;
-                const Real ry = -dxds / det;
-                const Real sx = -dydr / det;
-                const Real sy = dxdr / det;
-                // Column convention: [g_x; g_y] = [[rx, sx], [ry, sy]] [g_r; g_s].
-                g1x[f] = rx * cLin;
-                g1y[f] = ry * cLin;
-                g2x[f] = sx * cLin;
-                g2y[f] = sy * cLin;
-            }
-
-            // --- Step 2: non-affine projection support: inverse Gram
-            //     blocks M_l^{-1} for l = 0..N-1 (block sizes
-            //     N_l = (l+1)(l+2)/2; cap 10 for N = 4, flattened total
-            //     1 + 9 + 36 + 100 = 146).
-            const int affine = (elemAffine[elem] != 0) ? 1 : 0;
-            Real minvBlk[146];
-            int blkOff[5];
-            for (int l = 0; l <= N_order; ++l) {
-                blkOff[l] = 0;
-            }
-            if (!affine) {
-                int off = 0;
-                for (int ell = 0; ell < N_order; ++ell) {
-                    const int Nl = (ell + 1) * (ell + 2) / 2;
-                    blkOff[ell] = off;
-                    Real A[100], Ainv[100];
-                    for (int i = 0; i < Nl; ++i) {
-                        for (int j = 0; j < Nl; ++j) {
-                            Real s = 0.0;
-                            for (int q = 0; q < Nq2; ++q) {
-                                s += lambdaWJ[eOff + q] *
-                                     V2D[q * N_modes + i] *
-                                     V2D[q * N_modes + j];
-                            }
-                            A[i * Nl + j] = s;
+        // --- Step 2: non-affine projection support: inverse Gram
+        //     blocks M_l^{-1} for l = 0..N-1 (block sizes
+        //     N_l = (l+1)(l+2)/2; cap 10 for N = 4, flattened total
+        //     1 + 9 + 36 + 100 = 146).
+        const int affine = (elemAffine[elem] != 0) ? 1 : 0;
+        Real minvBlk[146];
+        int blkOff[5];
+        for (int l = 0; l <= N_order; ++l) {
+            blkOff[l] = 0;
+        }
+        if (!affine) {
+            int off = 0;
+            for (int ell = 0; ell < N_order; ++ell) {
+                const int Nl = (ell + 1) * (ell + 2) / 2;
+                blkOff[ell] = off;
+                Real A[100], Ainv[100];
+                for (int i = 0; i < Nl; ++i) {
+                    for (int j = 0; j < Nl; ++j) {
+                        Real s = 0.0;
+                        for (int q = 0; q < Nq2; ++q) {
+                            s += lambdaWJ[eOff + q] *
+                                 V2D[q * N_modes + i] *
+                                 V2D[q * N_modes + j];
                         }
+                        A[i * Nl + j] = s;
                     }
-                    cholInvert(Nl, A, Ainv);
-                    for (int i = 0; i < Nl * Nl; ++i) {
-                        minvBlk[off + i] = Ainv[i];
-                    }
-                    off += Nl * Nl;
                 }
-                blkOff[N_order] = off;
+                cholInvert(Nl, A, Ainv);
+                for (int i = 0; i < Nl * Nl; ++i) {
+                    minvBlk[off + i] = Ainv[i];
+                }
+                off += Nl * Nl;
+            }
+            blkOff[N_order] = off;
+        }
+
+        // --- Step 3: per face: characteristic decomposition, scalar
+        //     MR-WENO per component, edge-length weighted average.
+        Real acc[N_VARS][NMODES_MAX];
+        for (int var = 0; var < N_vars; ++var) {
+            for (int l = 0; l < N_modes; ++l) {
+                acc[var][l] = 0.0;
+            }
+        }
+        Real wSum = 0.0;
+
+        for (int f = 0; f < 4; ++f) {
+            const int F = elemFaces[elem * 4 + f];
+            if (F < 0) {
+                continue;
+            }
+            wSum += eLen[f];
+
+            // Rotated mean primitives at the face normal.
+            const Real rho = mean[0];
+            const Real uM = mean[1] / rho;
+            const Real vM = mean[2] / rho;
+            const Real Un = uM * nUx[f] + vM * nUy[f];
+            const Real Vt = -uM * nUy[f] + vM * nUx[f];
+            const Real ke = 0.5 * rho * (uM * uM + vM * vM);
+            const Real pbar = (gammaGas - 1.0) * (mean[3] - ke);
+            const Real a = sqrt(gammaGas * pbar / rho);
+            const Real H = (mean[3] + pbar) / rho;
+
+            // 1-D Euler right-eigenvector matrix of the rotated mean
+            // state (columns are the eigenvectors):
+            //
+            // $$ R = \begin{bmatrix} 1 & 1 & 0 & 1 \\ U_n - c & U_n & 0 & U_n + c \\ U_t & U_t & 1 & U_t \\ H - c U_n & \tfrac{1}{2}(U_n^2 + U_t^2) & U_t & H + c U_n \end{bmatrix}. $$
+            //
+            // The left matrix is its numerical inverse (inv4) rather
+            // than an analytic formula — sign-convention-free.
+            Real R1D[16], L1D[16];
+            R1D[0] = 1.0;
+            R1D[1] = 1.0;
+            R1D[2] = 0.0;
+            R1D[3] = 1.0;
+            R1D[4] = Un - a;
+            R1D[5] = Un;
+            R1D[6] = 0.0;
+            R1D[7] = Un + a;
+            R1D[8] = Vt;
+            R1D[9] = Vt;
+            R1D[10] = 1.0;
+            R1D[11] = Vt;
+            R1D[12] = H - a * Un;
+            R1D[13] = 0.5 * (Un * Un + Vt * Vt);
+            R1D[14] = Vt;
+            R1D[15] = H + a * Un;
+            inv4(R1D, L1D);
+
+            // Fold the rotation: Lrot = L1D * T, Rrot = T^T * R1D.
+            Real Lr[16], Rr[16];
+            for (int i = 0; i < 4; ++i) {
+                for (int j = 0; j < 4; ++j) {
+                    Real sl = 0.0;
+                    Real sr = 0.0;
+                    for (int k = 0; k < 4; ++k) {
+                        sl += L1D[i * 4 + k] * rotT(k, j, nUx[f], nUy[f]);
+                        sr += rotT(k, i, nUx[f], nUy[f]) * R1D[k * 4 + j];
+                    }
+                    Lr[i * 4 + j] = sl;
+                    Rr[i * 4 + j] = sr;
+                }
             }
 
-            // --- Step 3: per face: characteristic decomposition, scalar
-            //     MR-WENO per component, edge-length weighted average.
-            Real acc[N_VARS][NMODES_MAX];
-            for (int var = 0; var < N_vars; ++var) {
-                for (int l = 0; l < N_modes; ++l) {
-                    acc[var][l] = 0.0;
+            // Own modal coefficients in the characteristic field.
+            Real w[N_VARS][NMODES_MAX];
+            for (int l = 0; l < N_modes; ++l) {
+                for (int c = 0; c < N_VARS; ++c) {
+                    Real s = 0.0;
+                    for (int j = 0; j < N_VARS; ++j) {
+                        s += Lr[c * 4 + j] * uc[j][l];
+                    }
+                    w[c][l] = s;
                 }
             }
-            Real wSum = 0.0;
 
-            for (int f = 0; f < 4; ++f) {
-                const int F = elemFaces[elem * 4 + f];
-                if (F < 0) {
+            // beta_{0,1} per component: minimum over the direct
+            // neighbours of the linear-gradient energy, with the
+            // neighbour's linear coefficients transformed into THIS
+            // face's characteristic field (same L as above).
+            Real b01[N_VARS];
+            int anyNb = 0;
+            for (int c = 0; c < N_VARS; ++c) {
+                b01[c] = 1.0e300;
+            }
+            for (int g = 0; g < 4; ++g) {
+                if (nbK[g] < 0) {
                     continue;
                 }
-                wSum += eLen[f];
-
-                // Rotated mean primitives at the face normal.
-                const Real rho = mean[0];
-                const Real uM = mean[1] / rho;
-                const Real vM = mean[2] / rho;
-                const Real Un = uM * nUx[f] + vM * nUy[f];
-                const Real Vt = -uM * nUy[f] + vM * nUx[f];
-                const Real ke = 0.5 * rho * (uM * uM + vM * vM);
-                const Real pbar = (gammaGas - 1.0) * (mean[3] - ke);
-                const Real a = sqrt(gammaGas * pbar / rho);
-                const Real H = (mean[3] + pbar) / rho;
-
-                // 1-D Euler right-eigenvector matrix of the rotated mean
-                // state (columns are the eigenvectors):
-                //
-                // $$ R = \begin{bmatrix} 1 & 1 & 0 & 1 \\ U_n - c & U_n & 0 & U_n + c \\ U_t & U_t & 1 & U_t \\ H - c U_n & \tfrac{1}{2}(U_n^2 + U_t^2) & U_t & H + c U_n \end{bmatrix}. $$
-                //
-                // The left matrix is its numerical inverse (inv4) rather
-                // than an analytic formula — sign-convention-free.
-                Real R1D[16], L1D[16];
-                R1D[0] = 1.0;
-                R1D[1] = 1.0;
-                R1D[2] = 0.0;
-                R1D[3] = 1.0;
-                R1D[4] = Un - a;
-                R1D[5] = Un;
-                R1D[6] = 0.0;
-                R1D[7] = Un + a;
-                R1D[8] = Vt;
-                R1D[9] = Vt;
-                R1D[10] = 1.0;
-                R1D[11] = Vt;
-                R1D[12] = H - a * Un;
-                R1D[13] = 0.5 * (Un * Un + Vt * Vt);
-                R1D[14] = Vt;
-                R1D[15] = H + a * Un;
-                inv4(R1D, L1D);
-
-                // Fold the rotation: Lrot = L1D * T, Rrot = T^T * R1D.
-                Real Lr[16], Rr[16];
-                for (int i = 0; i < 4; ++i) {
-                    for (int j = 0; j < 4; ++j) {
-                        Real sl = 0.0;
-                        Real sr = 0.0;
-                        for (int k = 0; k < 4; ++k) {
-                            sl += L1D[i * 4 + k] * rotT(k, j, nUx[f], nUy[f]);
-                            sr += rotT(k, i, nUx[f], nUy[f]) * R1D[k * 4 + j];
-                        }
-                        Lr[i * 4 + j] = sl;
-                        Rr[i * 4 + j] = sr;
-                    }
-                }
-
-                // Own modal coefficients in the characteristic field.
-                Real w[N_VARS][NMODES_MAX];
-                for (int l = 0; l < N_modes; ++l) {
-                    for (int c = 0; c < N_VARS; ++c) {
-                        Real s = 0.0;
-                        for (int j = 0; j < N_VARS; ++j) {
-                            s += Lr[c * 4 + j] * uc[j][l];
-                        }
-                        w[c][l] = s;
-                    }
-                }
-
-                // beta_{0,1} per component: minimum over the direct
-                // neighbours of the linear-gradient energy, with the
-                // neighbour's linear coefficients transformed into THIS
-                // face's characteristic field (same L as above).
-                Real b01[N_VARS];
-                int anyNb = 0;
+                anyNb = 1;
+                Real cl1[N_VARS], cl2[N_VARS];
                 for (int c = 0; c < N_VARS; ++c) {
-                    b01[c] = 1.0e300;
-                }
-                for (int g = 0; g < 4; ++g) {
-                    if (nbK[g] < 0) {
-                        continue;
-                    }
-                    anyNb = 1;
-                    Real cl1[N_VARS], cl2[N_VARS];
-                    for (int c = 0; c < N_VARS; ++c) {
-                        Real s1 = 0.0, s2 = 0.0;
-                        for (int j = 0; j < N_VARS; ++j) {
-                            s1 += Lr[c * 4 + j] * lin[g][j][1];
-                            s2 += Lr[c * 4 + j] * lin[g][j][2];
-                        }
-                        cl1[c] = s1;
-                        cl2[c] = s2;
-                    }
-                    for (int c = 0; c < N_VARS; ++c) {
-                        const Real gx = cl1[c] * g1x[g] + cl2[c] * g2x[g];
-                        const Real gy = cl1[c] * g1y[g] + cl2[c] * g2y[g];
-                        const Real zeta = (gx * gx + gy * gy) * area;
-                        if (zeta < b01[c]) {
-                            b01[c] = zeta;
-                        }
-                    }
-                }
-                if (!anyNb) {
-                    // No usable neighbour (fully boundary-enclosed cell):
-                    // fall back to the gradient energy of the element's
-                    // own linear truncation — the same quantity beta
-                    // measures, from self data.
-                    Real linp[NMODES_MAX];
-                    for (int c = 0; c < N_VARS; ++c) {
-                        for (int l = 0; l < N_modes; ++l) {
-                            linp[l] = 0.0;
-                        }
-                        linp[1] = w[c][1];
-                        linp[2] = w[c][2];
-                        b01[c] = mrBeta(linp, 1, N_modes, Nq2,
-                                        lambdaWJ + eOff, Jinv11 + eOff,
-                                        Jinv12 + eOff, Jinv21 + eOff,
-                                        Jinv22 + eOff, derivV, area, ownA3,
-                                        ownB3);
-                    }
-                }
-
-                // Scalar MR-WENO per characteristic component.
-                Real pRes[N_VARS][NMODES_MAX];
-                for (int c = 0; c < N_VARS; ++c) {
-                    // (M u)_l of the characteristic polynomial (projection
-                    // path only).
-                    Real Mu[NMODES_MAX];
-                    if (!affine) {
-                        Real uh[NQ2_MAX];
-                        for (int q = 0; q < Nq2; ++q) {
-                            Real s = 0.0;
-                            for (int m = 0; m < N_modes; ++m) {
-                                s += V2D[q * N_modes + m] * w[c][m];
-                            }
-                            uh[q] = s;
-                        }
-                        for (int l = 0; l < N_modes; ++l) {
-                            Real s = 0.0;
-                            for (int q = 0; q < Nq2; ++q) {
-                                s += lambdaWJ[eOff + q] * V2D[q * N_modes + l] *
-                                     uh[q];
-                            }
-                            Mu[l] = s;
-                        }
-                    }
-
-                    // Level 1 low candidate: q_0.
-                    Real plo[NMODES_MAX];
-                    hierq(0, plo, affine, w[c], Mu, minvBlk, blkOff, N_order,
-                          N_modes);
-
-                    for (int ell = 1; ell <= N_order; ++ell) {
-                        // Detail polynomial p_{l,l} = (q_l - gL p_low)/gH.
-                        Real qe[NMODES_MAX], ph[NMODES_MAX];
-                        hierq(ell, qe, affine, w[c], Mu, minvBlk, blkOff,
-                              N_order, N_modes);
-                        for (int i = 0; i < N_modes; ++i) {
-                            ph[i] = (qe[i] - gammaLow * plo[i]) / gammaHigh;
-                        }
-
-                        // Smoothness indicators.
-                        const Real bl =
-                            (ell == 1)
-                                ? b01[c]
-                                : mrBeta(plo, ell - 1, N_modes, Nq2,
-                                         lambdaWJ + eOff, Jinv11 + eOff,
-                                         Jinv12 + eOff, Jinv21 + eOff,
-                                         Jinv22 + eOff, derivV, area, ownA3,
-                                         ownB3);
-                        const Real bh =
-                            mrBeta(ph, ell, N_modes, Nq2, lambdaWJ + eOff,
-                                   Jinv11 + eOff, Jinv12 + eOff,
-                                   Jinv21 + eOff, Jinv22 + eOff, derivV,
-                                   area, ownA3, ownB3);
-
-                        // WENO-Z weights.
-                        const Real tau = (bh - bl) * (bh - bl);
-                        const Real alo =
-                            gammaLow * (1.0 + tau / (epsW + bl));
-                        const Real ahi =
-                            gammaHigh * (1.0 + tau / (epsW + bh));
-                        const Real omLo = alo / (alo + ahi);
-                        const Real omHi = ahi / (alo + ahi);
-                        for (int i = 0; i < N_modes; ++i) {
-                            plo[i] = omLo * plo[i] + omHi * ph[i];
-                        }
-                    }
-                    for (int l = 0; l < N_modes; ++l) {
-                        pRes[c][l] = plo[l];
-                    }
-                }
-
-                // Back-transform and accumulate with the edge-length
-                // weight (|faceN| equals the physical edge length).
-                for (int l = 0; l < N_modes; ++l) {
+                    Real s1 = 0.0, s2 = 0.0;
                     for (int j = 0; j < N_VARS; ++j) {
-                        Real s = 0.0;
-                        for (int c = 0; c < N_VARS; ++c) {
-                            s += Rr[j * 4 + c] * pRes[c][l];
-                        }
-                        acc[j][l] += eLen[f] * s;
+                        s1 += Lr[c * 4 + j] * lin[g][j][1];
+                        s2 += Lr[c * 4 + j] * lin[g][j][2];
+                    }
+                    cl1[c] = s1;
+                    cl2[c] = s2;
+                }
+                for (int c = 0; c < N_VARS; ++c) {
+                    const Real gx = cl1[c] * g1x[g] + cl2[c] * g2x[g];
+                    const Real gy = cl1[c] * g1y[g] + cl2[c] * g2y[g];
+                    const Real zeta = (gx * gx + gy * gy) * area;
+                    if (zeta < b01[c]) {
+                        b01[c] = zeta;
                     }
                 }
             }
-
-            // --- Step 4: overwrite the modal coefficients.
-            if (wSum > 0.0) {
-                for (int var = 0; var < N_vars; ++var) {
+            if (!anyNb) {
+                // No usable neighbour (fully boundary-enclosed cell):
+                // fall back to the gradient energy of the element's
+                // own linear truncation — the same quantity beta
+                // measures, from self data.
+                Real linp[NMODES_MAX];
+                for (int c = 0; c < N_VARS; ++c) {
                     for (int l = 0; l < N_modes; ++l) {
-                        acc[var][l] /= wSum;
+                        linp[l] = 0.0;
+                    }
+                    linp[1] = w[c][1];
+                    linp[2] = w[c][2];
+                    b01[c] = mrBeta(linp, 1, N_modes, Nq2,
+                                    lambdaWJ + eOff, Jinv11 + eOff,
+                                    Jinv12 + eOff, Jinv21 + eOff,
+                                    Jinv22 + eOff, derivV, area, ownA3,
+                                    ownB3);
+                }
+            }
+
+            // Scalar MR-WENO per characteristic component.
+            Real pRes[N_VARS][NMODES_MAX];
+            for (int c = 0; c < N_VARS; ++c) {
+                // (M u)_l of the characteristic polynomial (projection
+                // path only).
+                Real Mu[NMODES_MAX];
+                if (!affine) {
+                    Real uh[NQ2_MAX];
+                    for (int q = 0; q < Nq2; ++q) {
+                        Real s = 0.0;
+                        for (int m = 0; m < N_modes; ++m) {
+                            s += V2D[q * N_modes + m] * w[c][m];
+                        }
+                        uh[q] = s;
+                    }
+                    for (int l = 0; l < N_modes; ++l) {
+                        Real s = 0.0;
+                        for (int q = 0; q < Nq2; ++q) {
+                            s += lambdaWJ[eOff + q] * V2D[q * N_modes + l] *
+                                 uh[q];
+                        }
+                        Mu[l] = s;
                     }
                 }
 
-                // Zhang-Shu-type positivity scaling (convex blend toward
-                // the cell mean, applied only when the reconstructed
-                // polynomial violates the density/pressure floors at a
-                // quadrature point). The modal representation of the mean
-                // constant is $(2 \bar{u}, 0, \ldots)$ because $\phi_0$
-                // itself is the constant $1/2$, so the blend preserves
-                // the exact cell mean — the limiter's conservation
-                // property is untouched. Floors are absolute small
-                // positives suited to the O(1) states of the validation
-                // cases; the mean itself violating a floor cannot be
-                // repaired here and is skipped.
-                //
-                // The check covers BOTH the volume quadrature points and
-                // the element's own face traces (evaluated through the
-                // face Vandermonde rows): positivity at the volume points
-                // alone does NOT bound the face trace, while the LLF flux
-                // evaluates sqrt(p) and sqrt(rho) exactly at the face
-                // points — a negative face trace is the classic
-                // one-step NaN path this scaling exists to close.
-                const Real rhoFloor = 1.0e-8;
-                const Real pFloor   = 1.0e-8;
-                const Real rhoM     = mean[0];
-                const Real uM       = mean[1] / rhoM;
-                const Real vM       = mean[2] / rhoM;
-                const Real pM = (gammaGas - 1.0) *
-                                (mean[3] -
-                                 0.5 * rhoM * (uM * uM + vM * vM));
-                Real theta = 1.0;
-                if (rhoM > rhoFloor && pM > pFloor) {
-                    for (int q = 0; q < Nq2; ++q) {
-                        const int vRow = q * N_modes;
+                // Level 1 low candidate: q_0.
+                Real plo[NMODES_MAX];
+                hierq(0, plo, affine, w[c], Mu, minvBlk, blkOff, N_order,
+                      N_modes);
+
+                for (int ell = 1; ell <= N_order; ++ell) {
+                    // Detail polynomial p_{l,l} = (q_l - gL p_low)/gH.
+                    Real qe[NMODES_MAX], ph[NMODES_MAX];
+                    hierq(ell, qe, affine, w[c], Mu, minvBlk, blkOff,
+                          N_order, N_modes);
+                    for (int i = 0; i < N_modes; ++i) {
+                        ph[i] = (qe[i] - gammaLow * plo[i]) / gammaHigh;
+                    }
+
+                    // Smoothness indicators.
+                    const Real bl =
+                        (ell == 1)
+                            ? b01[c]
+                            : mrBeta(plo, ell - 1, N_modes, Nq2,
+                                     lambdaWJ + eOff, Jinv11 + eOff,
+                                     Jinv12 + eOff, Jinv21 + eOff,
+                                     Jinv22 + eOff, derivV, area, ownA3,
+                                     ownB3);
+                    const Real bh =
+                        mrBeta(ph, ell, N_modes, Nq2, lambdaWJ + eOff,
+                               Jinv11 + eOff, Jinv12 + eOff,
+                               Jinv21 + eOff, Jinv22 + eOff, derivV,
+                               area, ownA3, ownB3);
+
+                    // WENO-Z weights.
+                    const Real tau = (bh - bl) * (bh - bl);
+                    const Real alo =
+                        gammaLow * (1.0 + tau / (epsW + bl));
+                    const Real ahi =
+                        gammaHigh * (1.0 + tau / (epsW + bh));
+                    const Real omLo = alo / (alo + ahi);
+                    const Real omHi = ahi / (alo + ahi);
+                    for (int i = 0; i < N_modes; ++i) {
+                        plo[i] = omLo * plo[i] + omHi * ph[i];
+                    }
+                }
+                for (int l = 0; l < N_modes; ++l) {
+                    pRes[c][l] = plo[l];
+                }
+            }
+
+            // Back-transform and accumulate with the edge-length
+            // weight (|faceN| equals the physical edge length).
+            for (int l = 0; l < N_modes; ++l) {
+                for (int j = 0; j < N_VARS; ++j) {
+                    Real s = 0.0;
+                    for (int c = 0; c < N_VARS; ++c) {
+                        s += Rr[j * 4 + c] * pRes[c][l];
+                    }
+                    acc[j][l] += eLen[f] * s;
+                }
+            }
+        }
+
+        // --- Step 4: overwrite the modal coefficients.
+        if (wSum > 0.0) {
+            for (int var = 0; var < N_vars; ++var) {
+                for (int l = 0; l < N_modes; ++l) {
+                    acc[var][l] /= wSum;
+                }
+            }
+
+            // Zhang-Shu-type positivity scaling (convex blend toward
+            // the cell mean, applied only when the reconstructed
+            // polynomial violates the density/pressure floors at a
+            // quadrature point). The modal representation of the mean
+            // constant is $(2 \bar{u}, 0, \ldots)$ because $\phi_0$
+            // itself is the constant $1/2$, so the blend preserves
+            // the exact cell mean — the limiter's conservation
+            // property is untouched. Floors are absolute small
+            // positives suited to the O(1) states of the validation
+            // cases; the mean itself violating a floor cannot be
+            // repaired here and is skipped.
+            //
+            // The check covers BOTH the volume quadrature points and
+            // the element's own face traces (evaluated through the
+            // face Vandermonde rows): positivity at the volume points
+            // alone does NOT bound the face trace, while the LLF flux
+            // evaluates sqrt(p) and sqrt(rho) exactly at the face
+            // points — a negative face trace is the classic
+            // one-step NaN path this scaling exists to close.
+            const Real rhoFloor = 1.0e-8;
+            const Real pFloor   = 1.0e-8;
+            const Real rhoM     = mean[0];
+            const Real uM       = mean[1] / rhoM;
+            const Real vM       = mean[2] / rhoM;
+            const Real pM = (gammaGas - 1.0) *
+                            (mean[3] -
+                             0.5 * rhoM * (uM * uM + vM * vM));
+            Real theta = 1.0;
+            if (rhoM > rhoFloor && pM > pFloor) {
+                for (int q = 0; q < Nq2; ++q) {
+                    const int vRow = q * N_modes;
+                    Real qv[N_VARS];
+                    for (int var = 0; var < N_vars; ++var) {
+                        Real accv = 0.0;
+                        for (int m = 0; m < N_modes; ++m) {
+                            accv += V2D[vRow + m] * acc[var][m];
+                        }
+                        qv[var] = accv;
+                    }
+                    const Real rhoQ = qv[0];
+                    if (rhoQ < rhoFloor) {
+                        const Real t =
+                            (rhoM - rhoFloor) / (rhoM - rhoQ);
+                        if (t < theta) {
+                            theta = t;
+                        }
+                    }
+                    const Real uu = qv[1] / rhoQ;
+                    const Real vv = qv[2] / rhoQ;
+                    const Real pQ =
+                        (gammaGas - 1.0) *
+                        (qv[3] - 0.5 * rhoQ * (uu * uu + vv * vv));
+                    if (pQ < pFloor) {
+                        const Real t = (pM - pFloor) / (pM - pQ);
+                        if (t < theta) {
+                            theta = t;
+                        }
+                    }
+                }
+                // Face traces: the element's own side of each valid
+                // face, at the face quadrature points.
+                for (int f = 0; f < 4; ++f) {
+                    const int F = elemFaces[elem * 4 + f];
+                    if (F < 0) {
+                        continue;
+                    }
+                    const int isL  = (elem == faceKL[F]) ? 1 : 0;
+                    const int side = isL;
+                    const int fOwn = isL ? faceFL[F] : faceFR[F];
+                    const int vBase = (side * 4 + fOwn) *
+                                      (N_q * N_modes);
+                    for (int i = 0; i < N_q; ++i) {
                         Real qv[N_VARS];
                         for (int var = 0; var < N_vars; ++var) {
                             Real accv = 0.0;
+                            const int row =
+                                vBase + i * N_modes;
                             for (int m = 0; m < N_modes; ++m) {
-                                accv += V2D[vRow + m] * acc[var][m];
+                                accv += Vface[row + m] * acc[var][m];
                             }
                             qv[var] = accv;
                         }
@@ -794,7 +854,8 @@ static Real rotT(const int k, const int j, const Real nx, const Real ny) {
                         const Real vv = qv[2] / rhoQ;
                         const Real pQ =
                             (gammaGas - 1.0) *
-                            (qv[3] - 0.5 * rhoQ * (uu * uu + vv * vv));
+                            (qv[3] -
+                             0.5 * rhoQ * (uu * uu + vv * vv));
                         if (pQ < pFloor) {
                             const Real t = (pM - pFloor) / (pM - pQ);
                             if (t < theta) {
@@ -802,65 +863,20 @@ static Real rotT(const int k, const int j, const Real nx, const Real ny) {
                             }
                         }
                     }
-                    // Face traces: the element's own side of each valid
-                    // face, at the face quadrature points.
-                    for (int f = 0; f < 4; ++f) {
-                        const int F = elemFaces[elem * 4 + f];
-                        if (F < 0) {
-                            continue;
-                        }
-                        const int isL  = (elem == faceKL[F]) ? 1 : 0;
-                        const int side = isL;
-                        const int fOwn = isL ? faceFL[F] : faceFR[F];
-                        const int vBase = (side * 4 + fOwn) *
-                                          (N_q * N_modes);
-                        for (int i = 0; i < N_q; ++i) {
-                            Real qv[N_VARS];
-                            for (int var = 0; var < N_vars; ++var) {
-                                Real accv = 0.0;
-                                const int row =
-                                    vBase + i * N_modes;
-                                for (int m = 0; m < N_modes; ++m) {
-                                    accv += Vface[row + m] * acc[var][m];
-                                }
-                                qv[var] = accv;
-                            }
-                            const Real rhoQ = qv[0];
-                            if (rhoQ < rhoFloor) {
-                                const Real t =
-                                    (rhoM - rhoFloor) / (rhoM - rhoQ);
-                                if (t < theta) {
-                                    theta = t;
-                                }
-                            }
-                            const Real uu = qv[1] / rhoQ;
-                            const Real vv = qv[2] / rhoQ;
-                            const Real pQ =
-                                (gammaGas - 1.0) *
-                                (qv[3] -
-                                 0.5 * rhoQ * (uu * uu + vv * vv));
-                            if (pQ < pFloor) {
-                                const Real t = (pM - pFloor) / (pM - pQ);
-                                if (t < theta) {
-                                    theta = t;
-                                }
-                            }
-                        }
-                    }
-                    if (theta < 0.0) {
-                        theta = 0.0;
-                    }
-                    if (theta > 1.0) {
-                        theta = 1.0;
-                    }
                 }
-                for (int var = 0; var < N_vars; ++var) {
-                    for (int l = 0; l < N_modes; ++l) {
-                        const Real meanC =
-                            (l == 0) ? 2.0 * mean[var] : 0.0;
-                        u[uOff + var * N_modes + l] =
-                            theta * acc[var][l] + (1.0 - theta) * meanC;
-                    }
+                if (theta < 0.0) {
+                    theta = 0.0;
+                }
+                if (theta > 1.0) {
+                    theta = 1.0;
+                }
+            }
+            for (int var = 0; var < N_vars; ++var) {
+                for (int l = 0; l < N_modes; ++l) {
+                    const Real meanC =
+                        (l == 0) ? 2.0 * mean[var] : 0.0;
+                    u[uOff + var * N_modes + l] =
+                        theta * acc[var][l] + (1.0 - theta) * meanC;
                 }
             }
         }

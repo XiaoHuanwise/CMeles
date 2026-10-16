@@ -14,6 +14,11 @@
 ///   e. Filter-contract smoke across every stepper family (euler, ssprk3,
 ///      rk32, be, ditr-u2r1 + pseudo ssprk321): complete runs with the
 ///      limiter active and conserved total mass.
+///   f. Clean constant field, detection-based: zero troubled cells, the
+///      reconstruction chain is skipped and u stays bit-identical.
+///   g. Mixed smooth/discontinuous field, detection-based: partial trouble
+///      list coverage; untroubled cells untouched bit-exactly, cell means
+///      conserved everywhere.
 
 #include <Eigen/Dense>
 #include <occa.hpp>
@@ -334,6 +339,108 @@ void testStepperFamilies() {
     }
 }
 
+// ----------------------------------------------------------------------------
+// f) Clean constant field, detection-based: zero troubled cells
+// ----------------------------------------------------------------------------
+
+void testCleanFieldNoTroubled() {
+    const std::string toml =
+        "[basis]\norder = 2\nnq = 4\n\n[mesh]\nnx = 8\nny = 8\ndx = 0.125\n"
+        "dy = 0.125\n\n[bc]\ntype = \"periodic\"\n\n[flow]\nrho = 1.3\n"
+        "u = 0.2\nv = -0.1\np = 0.9\n\n[time_marching]\nmethod = \"ssprk3\"\n"
+        "cfl = 0.18\nt_final = 0.01\n\n[initial_condition]\n"
+        "type = \"uniform\"\n\n[limiter]\ntype = \"mr-weno\"\n";
+    std::cout << "(f) clean field / detection-based / zero troubled\n";
+    const Config cfg = configFromString(toml, "/tmp/cmeles_mrw_f.toml");
+    FieldFixture fx  = makeField(cfg);
+    const std::vector<Real> u0 = readModal(*fx.field, *fx.mem);
+    MrWenoLimiter limiter(cfg, fx.device, *fx.mem, *fx.field);
+    limiter.apply(fx.field->o_u());
+    fx.device.finish();
+    check(limiter.lastTroubledCount() == 0,
+          "constant field flags no troubled cell");
+    const std::vector<Real> u1 = readModal(*fx.field, *fx.mem);
+    bool identical             = u0.size() == u1.size();
+    for (std::size_t i = 0; identical && i < u0.size(); ++i) {
+        identical = u0[i] == u1[i];
+    }
+    check(identical, "u bit-identical (reconstruction chain skipped)");
+}
+
+// ----------------------------------------------------------------------------
+// g) Mixed smooth/discontinuous field, detection-based: partial coverage
+// ----------------------------------------------------------------------------
+
+void testMixedFieldPartialCoverage() {
+    // Smooth sinusoid background with a strong density/pressure depression
+    // band (0.4 < x < 0.6): KXRCF flags the band-edge cells, the far field
+    // stays clean — the dense trouble list must touch exactly the flagged
+    // cells and leave the rest bit-identical.
+    const std::string toml =
+        "[basis]\norder = 2\nnq = 4\n\n[mesh]\nnx = 32\nny = 16\n"
+        "dx = 0.03125\ndy = 0.0625\n\n[bc]\ntype = \"periodic\"\n\n[flow]\n"
+        "rho = 1.0\nu = 0.1\nv = 0.05\np = 1.0\n\n[time_marching]\n"
+        "method = \"ssprk3\"\ncfl = 0.18\nt_final = 0.01\n\n"
+        "[initial_condition]\ntype = \"expr\"\n"
+        "rho = \"1 + 0.2*sin(2*pi*x) - ((x > 0.4) ? ((x < 0.6) ? 0.6 : 0) : "
+        "0)\"\n"
+        "u = \"0.1\"\nv = \"0.05\"\n"
+        "p = \"1 + 0.15*sin(2*pi*(x + y)) - ((x > 0.4) ? ((x < 0.6) ? 0.5 : "
+        "0) : 0)\"\n\n[limiter]\ntype = \"mr-weno\"\n";
+    std::cout << "(g) mixed field / detection-based / partial coverage\n";
+    const Config cfg = configFromString(toml, "/tmp/cmeles_mrw_g.toml");
+    FieldFixture fx  = makeField(cfg);
+    const std::vector<Real> u0    = readModal(*fx.field, *fx.mem);
+    const std::vector<Real> mean0 = cellMeans(*fx.field, u0);
+    MrWenoLimiter limiter(cfg, fx.device, *fx.mem, *fx.field);
+    limiter.apply(fx.field->o_u());
+    fx.device.finish();
+    const std::vector<Real> u1    = readModal(*fx.field, *fx.mem);
+    const std::vector<Real> mean1 = cellMeans(*fx.field, u1);
+
+    const int nElem  = fx.field->numElements();
+    const int nVars  = fx.field->numVars();
+    const int nModes = fx.field->numModes();
+    const int count  = limiter.lastTroubledCount();
+    check(count > 0 && count < nElem, "partial coverage (troubled " +
+                                          std::to_string(count) + " of " +
+                                          std::to_string(nElem) + ")");
+
+    // Per-element classification: untouched blocks must be bit-identical
+    // (the dense list never visits clean cells), flagged-region blocks
+    // must actually change.
+    int untouched = 0, touched = 0;
+    bool finite = true;
+    for (int e = 0; e < nElem; ++e) {
+        bool same = true;
+        for (int i = 0; i < nVars * nModes; ++i) {
+            const std::size_t idx =
+                (static_cast<std::size_t>(e) * nVars) * nModes +
+                static_cast<std::size_t>(i);
+            if (u0[idx] != u1[idx]) {
+                same = false;
+            }
+            finite = finite && std::isfinite(u1[idx]);
+        }
+        same ? ++untouched : ++touched;
+    }
+    check(finite, "output finite after apply");
+    check(untouched > 0, "clean cells untouched bit-exactly (" +
+                             std::to_string(untouched) + " of " +
+                             std::to_string(nElem) + ")");
+    check(touched > 0, "troubled cells reconstructed (" +
+                           std::to_string(touched) + " changed)");
+
+    Real meanDrift = Real(0);
+    for (std::size_t i = 0; i < mean0.size(); ++i) {
+        meanDrift =
+            std::max(meanDrift, std::abs(mean1[i] - mean0[i]) /
+                                    std::max(Real(1), std::abs(mean0[i])));
+    }
+    check(meanDrift <= (kSinglePrecision ? Real(5e-5) : Real(1e-12)),
+          "cell means conserved (drift " + std::to_string(meanDrift) + ")");
+}
+
 } // namespace
 
 int main() {
@@ -342,6 +449,8 @@ int main() {
     testSmoothTriangles();
     testDefaultNone();
     testStepperFamilies();
+    testCleanFieldNoTroubled();
+    testMixedFieldPartialCoverage();
 
     if (g_failures == 0) {
         std::cout << "mr_weno: all checks passed\n";

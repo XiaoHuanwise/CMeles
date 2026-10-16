@@ -1,0 +1,27 @@
+// mr_weno_lin_stage.okl — Snapshot of the LINEAR modal coefficients
+// (l = 0, 1, 2 of every variable) of all elements, consumed by
+// mr_weno_limit.okl for the lowest-order smoothness indicator
+// beta_{0,1}.
+//
+// The reconstruction kernel limits u in place, and each troubled cell
+// reads its face neighbours' linear modes; staging them here BEFORE any
+// cell is limited guarantees that every troubled cell sees the same
+// PRE-limit neighbours, so the per-cell reconstructions are order-free
+// regardless of the parallel schedule. Every element is staged
+// unconditionally — any element can be the neighbour of a troubled
+// cell. Layout: uLin[(elem * N_vars + var) * 3 + l].
+//
+// See docs/tech_docs/mr_weno_limiter.md, "并行策略" section.
+
+@kernel void mrWenoLinStage(const int N_elem, const int N_vars,
+                            const int N_modes, const Real *u, Real *uLin) {
+    for (int elem = 0; elem < N_elem; ++elem;
+         @tile(TILE_SIZE, @outer, @inner)) {
+        for (int var = 0; var < N_vars; ++var) {
+            for (int l = 0; l < 3; ++l) {
+                uLin[(elem * N_vars + var) * 3 + l] =
+                    u[elem * N_vars * N_modes + var * N_modes + l];
+            }
+        }
+    }
+}

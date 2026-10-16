@@ -48,11 +48,18 @@ MrWenoLimiter::MrWenoLimiter(const Config &cfg, occa::device &device,
     troubled_.assign(static_cast<std::size_t>(N_elem_), 0);
     o_troubled_ = mem_.wrapOrMallocInt(troubled_.data(),
                                        static_cast<occa::dim_t>(N_elem_));
+    troubleList_.assign(static_cast<std::size_t>(N_elem_), 0);
+    o_troubleList_ = mem_.wrapOrMallocInt(troubleList_.data(),
+                                          static_cast<occa::dim_t>(N_elem_));
+    u_lin_.assign(static_cast<std::size_t>(N_elem_) * N_vars_ * 3, Real(0));
+    o_uLin_     = mem_.wrapOrMalloc(u_lin_.data(),
+                                    static_cast<occa::dim_t>(u_lin_.size()));
     o_faceJump_ = mem_.wrapOrMalloc(static_cast<occa::dim_t>(N_face_));
 
-    kxrcfFaceJump_ = buildKernel("kxrcf_face_jump.okl", "kxrcfFaceJump");
-    kxrcfFlag_     = buildKernel("kxrcf_flag.okl", "kxrcfFlag");
-    mrWenoLimit_   = buildKernel("mr_weno_limit.okl", "mrWenoLimit");
+    kxrcfFaceJump_  = buildKernel("kxrcf_face_jump.okl", "kxrcfFaceJump");
+    kxrcfFlag_      = buildKernel("kxrcf_flag.okl", "kxrcfFlag");
+    mrWenoLinStage_ = buildKernel("mr_weno_lin_stage.okl", "mrWenoLinStage");
+    mrWenoLimit_    = buildKernel("mr_weno_limit.okl", "mrWenoLimit");
 }
 
 // ============================================================================
@@ -144,6 +151,14 @@ occa::kernel MrWenoLimiter::buildKernel(const std::string &file,
     props["defines/Real"] = "double";
 #endif
     props["defines/TILE_SIZE"]  = cmeles::DefaultTileSize;
+    // Tile of the list-driven reconstruction kernel: its loop bound is
+    // the SHORT troubled list, so the outer block count must track the
+    // troubled-cell count (1 work unit per cell on the unified backends;
+    // a 64-thread wavefront per block on the GPU backends). A 256-tile
+    // would collapse a few hundred troubled cells into a handful of
+    // outer blocks and serialize the heavy work on that many threads.
+    props["defines/TROUBLE_TILE_SIZE"] =
+        mem_.hasSeparateMemorySpace() ? 64 : 1;
     props["defines/N_VARS"]     = kNumVars2D;
     props["defines/NQ_MAX"]     = kMaxQuadPts1D;
     props["defines/NQ2_MAX"]    = kMaxQuadPts2D;
@@ -180,12 +195,39 @@ void MrWenoLimiter::apply(occa::memory o_u) {
                geo.o_faceTypes(), geo.o_faceNormals(), o_faceJump_,
                geo.o_vertices(), gammaGas_, o_troubled_);
 
-    // 3. Per-troubled-cell characteristic-field MR-WENO reconstruction.
-    mrWenoLimit_(
-        N_elem_, N_, N_vars_, N_modes_, N_q_, N_q2_, gammaLow_, gammaHigh_,
-        epsW_, gammaGas_, o_u, o_troubled_, geo.o_elemFaces(), geo.o_faceKL(),
-        geo.o_faceFL(), geo.o_faceKR(), geo.o_faceFR(), geo.o_faceNormals(),
-        geo.o_vertices(), field_.basis().o_V2D(), field_.o_faceVandermonde(),
-        geo.o_lambdaWJ(), geo.o_Jinv11(), geo.o_Jinv12(), geo.o_Jinv21(),
-        geo.o_Jinv22(), geo.o_elemAffine(), o_derivV_);
+    // 3. Compact the troubled flags into a dense ascending index list.
+    //    Host side on purpose: the unified backends alias the flag
+    //    buffer into troubled_ (zero-copy), and OCCA 2.0's @atomic is
+    //    not portable (the OpenCL backend silently drops it), so a
+    //    device-side compaction is not an option. A clean field
+    //    short-circuits the whole reconstruction chain.
+    mem_.copyToHost(o_troubled_, troubled_.data(),
+                    static_cast<occa::dim_t>(N_elem_));
+    int nTroubled = 0;
+    for (int e = 0; e < N_elem_; ++e) {
+        if (troubled_[e] != 0) {
+            troubleList_[nTroubled++] = e;
+        }
+    }
+    last_troubled_count_ = nTroubled;
+    if (nTroubled == 0) {
+        return;
+    }
+    mem_.copyFromHost(o_troubleList_, troubleList_.data(),
+                      static_cast<occa::dim_t>(nTroubled));
+
+    // 4. Snapshot every element's linear modes (each troubled cell reads
+    //    its neighbours' PRE-limit linear modes — order-free by
+    //    construction), then reconstruct exactly the troubled cells
+    //    from the dense list: one thread slot per troubled cell, no
+    //    idle slots, no load imbalance.
+    mrWenoLinStage_(N_elem_, N_vars_, N_modes_, o_u, o_uLin_);
+    mrWenoLimit_(nTroubled, N_, N_vars_, N_modes_, N_q_, N_q2_, gammaLow_,
+                 gammaHigh_, epsW_, gammaGas_, o_u, o_uLin_, o_troubleList_,
+                 geo.o_elemFaces(), geo.o_faceKL(), geo.o_faceFL(),
+                 geo.o_faceKR(), geo.o_faceFR(), geo.o_faceNormals(),
+                 geo.o_vertices(), field_.basis().o_V2D(),
+                 field_.o_faceVandermonde(), geo.o_lambdaWJ(), geo.o_Jinv11(),
+                 geo.o_Jinv12(), geo.o_Jinv21(), geo.o_Jinv22(),
+                 geo.o_elemAffine(), o_derivV_);
 }

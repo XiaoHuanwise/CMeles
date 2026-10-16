@@ -219,6 +219,8 @@ mem_mgr.copyToHost(o_u, u_result.data(), N_total);
 - 使用 `@tile(TILE_SIZE, @outer, @inner)` 对 `elem`（单元编号）循环分块。`@tile` 自动拆分为外层 `@outer`（GPU block / OpenMP `#pragma omp parallel for`）和内层 `@inner`（GPU thread / 串行退化）。elem 内全部串行。
 - 当前不考虑 `@shared` 共享内存，所有数据读写走全局内存。
 
+> **特例 — 列表驱动内核（`mr_weno_limit.okl`）**：循环上界是**短的稠密列表**（问题单元数）而非总单元数时，`TILE_SIZE = 256` 会让外层块数塌缩到个位数（如 600 个问题单元 → 3 个块），OpenMP 下重活挤在 3 个线程上（实测 Sod 算例 37% 回归）、GPU 下整卡只开 3 个 block。此类内核使用专用小 tile `TROUBLE_TILE_SIZE`（`MrWenoLimiter::buildKernel` 注入：统一内存后端取 1——每个问题单元即一个工作单元；GPU 后端取 64——每 block 一个 wavefront）。**新增"循环上界远小于总规模"的内核时，必须核对 tile 使外层块数至少数倍于线程数**。
+
 > **特例 — 归约核函数（`reduce.okl`）**：BLAS-1 归约操作（`dot`、`nrm2`、`asum`、`amax`、`amin`）是项目中**唯一使用 `@shared` 的例外**。块内树形归约必须依赖共享内存实现高效的并行规约，无法通过全局内存高效替代。详见 `src/blas/okl/reduce.okl`。
 
 > 分块策略的详细描述（目标硬件绑定行为、SIMD 向量化说明、`@outer`/`@inner` 语义、`TILE_SIZE` 选择依据等）见[控制方程与 DG 场](governed_equations_and_DG_field.md#occa-共享内存分块形状)。
@@ -253,6 +255,26 @@ for (int d = 0; d < N_dof; ++d) @tile(TILE_SIZE, @outer, @inner)) {
 | :--- | :--------------: | :----------------------- |
 | GPU  |       256        | 匹配 GPU warp/wavefront  |
 | CPU  |      按核数      | 通常设为物理核数的整数倍 |
+
+### 原子操作（`@atomic`）：当前版本不可移植，项目内禁用
+
+vendored OCCA 2.0.0 的 `@atomic` 仅是**语句属性**（`@atomic x += 1;`、`@atomic ++x;` 或块形式 `@atomic { ... }`），不接受参数、没有表达式形式，更没有"捕获旧值"（capture）语法——`const int i = @atomic(cnt[0] += 1);` 这样的压缩写入根本无法解析。各后端的翻译情况（源码 `third_party/occa/src/occa/internal/lang/modes/`）：
+
+| 后端 | `+=`/`-=`/`++`/`--` 语句 | 其他形式 / 块形式 |
+| :--- | :--- | :--- |
+| Serial | 直接输出普通语句（单线程，天然安全） | 同左 |
+| OpenMP | `#pragma omp atomic`（块 → `omp critical`） | 仅更新语义，无 capture |
+| CUDA | `+=` → `atomicAdd`；但 `++`/`--` 生成**单参数** `atomicInc(&x)`（非法签名）；块形式硬报错 | 部分不可用 |
+| OpenCL | **无任何翻译——静默输出非原子语句**（数据竞争、错误结果而非报错） | 同左 |
+
+最危险的是 OpenCL：`@atomic` 通过解析、通过编译，生成的是普通读-改-写，在 GPU 上产生静默数据竞争。官方测试套件中 Serial/OpenCL/CUDA 的 atomic 测试均为空桩（`TODO(dmed)`），仅 OpenMP 有断言。
+
+**项目策略**：`.okl` 内核禁用 `@atomic`。需要"压缩/归约到少量结果"的场景走两条既有路线之一：
+
+1. **宿主侧模式**（`DgField::estimateDt`、`MathOps::countNaN`，以及 `MrWenoLimiter::apply` 的问题单元压缩）：内核写满长度的中间数组（每单元/每分组一个结果），统一内存后端经零拷贝别名直接读、分离内存后端一次 D2H 读回，宿主收尾。
+2. **分组 + `@shared` 树形归约**（`src/blas/okl/reduce.okl`，项目内唯一获批的 `@shared` 文件）：每个 `@outer` 块内归约出一个部分结果，宿主 ping-pong 收尾。
+
+若未来确需设备端原子（如 GPU 上的流压缩），要么升级 OCCA 版本并逐后端验证翻译，要么按后端拆分内核源码（`OCCA_USING_GPU` 宏守卫，用原生 `atomicAdd` / `atomic_add` / `#pragma omp atomic capture`）。
 
 ### 设备端数学函数（`sqrt` / `fabs` / `pow` …）
 
