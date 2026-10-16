@@ -263,8 +263,23 @@ PseudoDtMode parsePseudoDtMode(const std::string &name) {
     if (key == "local") {
         return PseudoDtMode::Local;
     }
-    throw std::invalid_argument("parsePseudoDtMode: unknown mode name '" +
-                                name + "'");
+    throw std::invalid_argument("parsePseudoDtMode: unknown mode '" + name +
+                                "' (expected \"global\" or \"local\")");
+}
+
+PseudoNorm parsePseudoNorm(const std::string &name) {
+    const std::string key = toLower(name);
+    if (key == "inf" || key == "max" || key == "infinity") {
+        return PseudoNorm::Inf;
+    }
+    if (key == "l2" || key == "rms") {
+        return PseudoNorm::L2;
+    }
+    if (key == "mean" || key == "l1" || key == "avg" || key == "average") {
+        return PseudoNorm::Mean;
+    }
+    throw std::invalid_argument("parsePseudoNorm: unknown norm '" + name +
+                                "' (expected \"inf\", \"l2\" or \"mean\")");
 }
 
 LimiterType parseLimiterType(const std::string &name) {
@@ -442,6 +457,8 @@ void Config::setDefaults() {
     time_pseudo_method_    = TimeMethod::SspRk332;
     time_pseudo_dt_        = Real(0);
     time_pseudo_dt_mode_   = PseudoDtMode::Global;
+    time_pseudo_norm_     = PseudoNorm::Inf;
+    time_pseudo_stagnation_ = false;
     time_pseudo_reject_    = false;
     time_dual_decoupled_   = false;
 
@@ -629,6 +646,12 @@ Config::Config(const std::string &path) {
         time_pseudo_dt_   = getReal(*tbl, "pseudo_dt", time_pseudo_dt_);
         time_pseudo_rtol_ = getReal(*tbl, "pseudo_rtol", time_pseudo_rtol_);
         time_pseudo_atol_ = getReal(*tbl, "pseudo_atol", time_pseudo_atol_);
+        time_pseudo_stagnation_ =
+            getBool(*tbl, "pseudo_stagnation", time_pseudo_stagnation_);
+        if (const auto nIt = tbl->find("pseudo_norm"); nIt != tbl->end()) {
+            const std::string nname = nIt->second.value_or(std::string("inf"));
+            time_pseudo_norm_       = parsePseudoNorm(nname);
+        }
         if (const auto mIt = tbl->find("pseudo_dt_mode"); mIt != tbl->end()) {
             const std::string name =
                 mIt->second.value_or(std::string("global"));

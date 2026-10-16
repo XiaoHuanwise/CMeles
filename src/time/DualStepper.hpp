@@ -49,6 +49,33 @@ public:
         bool allowReject   = false;   ///< Retry rejected pseudo steps.
         bool decoupled     = false;   ///< Per-stage pseudo steppers (DITR).
         RungeKuttaStepper::Params rkParams{}; ///< Pseudo stepper tolerances.
+        int pseudoNorm = 0; ///< Pseudo-residual convergence norm
+                            ///< (PseudoNorm as int: 0 inf, 1 l2/RMS,
+                            ///< 2 mean/L1).
+        bool stagnationExit = false; ///< Early-exit the pseudo iteration on
+                                     ///< residual stagnation: 10 consecutive
+                                     ///< iterations without a drop below
+                                     ///< 0.98 x (best-so-far). Mechanism: the
+                                     ///< strict positivity projection can pin
+                                     ///< the march on an
+                                     ///< admissibility-boundary fixed point
+                                     ///< (measured contraction exactly
+                                     ///< 1.0000), after which further
+                                     ///< iterations are pure waste — the exit
+                                     ///< publishes the same state the
+                                     ///< max-steps cap would, ~3-4x faster.
+                                     ///< The 0.98/10 pair is a conservative
+                                     ///< parameterisation of the mechanism,
+                                     ///< NOT a tuned constant: it must only
+                                     ///< separate the frozen phase (0%
+                                     ///< improvement per iteration) from the
+                                     ///< slow tail (~3% per iteration,
+                                     ///< measured 0.97 contraction), so any
+                                     ///< threshold in [0.90, 0.995] behaves
+                                     ///< nearly identically and the 10-count
+                                     ///< bounds the wasted iterations while
+                                     ///< riding out the pseudo-dt ramp jitter
+                                     ///< (< 10 iterations, ~3%).
     };
 
     /// @param residual  Physical temporal residual (owned; its stage count
@@ -92,6 +119,9 @@ private:
     bool notConverged(Real fNorm, Real f0Norm) const;
 
     /// @brief $\|f\|_\infty$ of a pseudo stepper's current residual.
+    /// @brief Tag of the active pseudo-residual norm (log labels).
+    const char *pseudoNormTag() const;
+
     Real residualNorm(const RungeKuttaStepper &ps, occa::dim_t n);
 
     Params params_;

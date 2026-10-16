@@ -73,16 +73,17 @@ riemann_target = "flow"    # Reference state of the "riemann" bc: "flow" (the
                            # constant [flow] state — the standard usage) |
                            # "ic" (the trace of the initial field at each
                            # boundary point, for benchmark problems whose
-                           # ambient environment varies along the walls, e.g.
-                           # the four-quadrant 2-D Riemann data; a frozen
-                           # snapshot of the initial solution) | "expr"
-                           #  (analytic wall data: the [bc] rho/u/v/p
-                           #  expressions evaluated at the boundary point
-                           #  (x, y, t) and refreshed every time step — the
-                           #  reference follows moving waves instead of a
-                           #  frozen snapshot, e.g. the exact self-similar
-                           #  1-D Riemann wall states of the 2-D Riemann
-                           #  problem).
+                           # ambient environment varies along the walls, e.g. the
+                           # four-quadrant 2-D Riemann data; a frozen
+                           # snapshot of the initial solution) | "expr" (the
+                           # [bc] rho/u/v/p expressions evaluated at the
+                           # boundary point (x, y, t) and refreshed every
+                           # time step — analytic wall data, e.g. the exact
+                           # self-similar 1-D Riemann states of the 2-D
+                           # Riemann problem; anchors the incoming acoustic
+                           # invariant to a state that follows the moving
+                           # waves while the outgoing information still
+                           # leaves freely).
 # Two more boundary types: "slip" (aliases "slip-wall", "wall" — reflection
 # wall: the exterior state mirrors the interior trace with the normal
 # momentum negated, giving exactly zero wall-normal mass flux; the inviscid
@@ -125,6 +126,21 @@ max_factor = 5.0           # Maximum step-size growth factor per accepted step
                            # (must be >= min_factor).
 max_growth = 10.0          # Step-size cap: max_growth * initial step.
 max_pseudo_steps = 100     # Pseudo-time step cap per physical step (dual time).
+pseudo_stagnation = false # Early-exit the pseudo iteration on residual
+                           # stagnation (10 consecutive iterations without a 2%
+                           # drop below the best-so-far). The strict positivity
+                           # projection can pin the march on an
+                           # admissibility-boundary fixed point, after which
+                           # further iterations change nothing; the exit
+                           # publishes the same state the max-steps cap would,
+                           # ~3x faster. Off by default (classic semantics).
+pseudo_norm = "inf"        # Convergence norm of the dual-time pseudo residual:
+                           # "inf" (default; single worst DOF — strictest, but
+                           # a point singularity can block it), "l2" (RMS
+                           # per-DOF level, the standard CFD residual monitor,
+                           # robust to isolated outlier DOFs), "mean" (mean
+                           # |f|, similar robustness, looser). Same rtol/atol
+                           # semantics for all variants.
 pseudo_method = "ssprk332" # Pseudo stepper for dual time stepping (embedded RK).
 pseudo_dt = 0.0            # Fixed pseudo step; <= 0 means adaptive (takes
                            # precedence over pseudo_dt_mode).

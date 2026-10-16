@@ -243,7 +243,7 @@ $$ \boldsymbol{u}_{\text{new}} \Big|_{\Omega_0} = \frac{\sum_f |e_f|\, \boldsymb
 
 （`MeshGeometry::faceNormals()` 存储的未归一化法向 $\hat{\boldsymbol{n}}$ 的模即物理边长，可直接用作权重。）
 
-> **相邻 troubled cell 的独立性**：每个 troubled cell 读取其邻居**限制前**的模态系数（用于 $\beta_{0,1}$ 与特征分解），与邻居自身是否被限制无关。因此各单元的限制完全独立、无迭代、无顺序依赖，GPU 上无写冲突——与 DG 残差计算的并行模式一致。
+> **相邻 troubled cell 的独立性**：每个 troubled cell 读取其邻居**限制前**的模态系数（用于 $\beta_{0,1}$ 与特征分解），与邻居自身是否被限制无关。实现上邻居线性模态在重构前由 `mrWenoLinStage` 内核统一快照到侧缓冲（见 OKL 内核设计），"限制前"语义由构造保证，重构结果与线程数、调度无关。因此各单元的限制完全独立、无迭代、无顺序依赖，GPU 上无写冲突——与 DG 残差计算的并行模式一致。
 
 > **粘性流的说明**：特征分解使用的 $\mathbf{A}_f$ 是**无粘** Euler 通量的面法向 Jacobian（在 $\bar{\boldsymbol{u}}$ 处线性化）。粘性项（IPDG / LDG）是抛物型修正，不引入新的双曲特征场，限制器的特征场分解在 NS 方程下**保持不变**（Lu 2023 对 NS 方程同样仅用无粘 Jacobian）。
 
@@ -281,7 +281,7 @@ $$
 
 - **域边界的入流边**无邻居可比较，跳过该段（不贡献分子与 $\left| \partial\Omega_0^- \right|$）；
 - **周期边界面**已由 `Mesh::applyPeriodicPairing` 转为伪内面，按普通内面处理，无需特判；
-- 全部边均为出流（如超声速出口附近的单元）时指示值取 $0$，不标记。
+- 全部边均为出流（如超声速出口附近的单元）时指示值取 $0$，不标记；
 
 ### 正值保持的 CFL 上界
 
@@ -335,11 +335,12 @@ $$ \frac{\alpha\, \Delta t}{h} \;\le\; \tilde\lambda(N) \;=\; \min_m \hat\omega_
 ```
 src/limiter/
   LimiterBase.hpp          # 抽象接口
-  MrWenoLimiter.hpp/.cpp   # MR-WENO 限制器（检测 + 重构）
+  MrWenoLimiter.hpp/.cpp   # MR-WENO 限制器（检测 + 宿主压缩 + 重构）
   okl/
     kxrcf_face_jump.okl    # 核函数 1: 逐面密度跳跃积分
     kxrcf_flag.okl         # 核函数 2: 逐单元判据 → troubled 标志
-    mr_weno_limit.okl      # 核函数 3: 逐 troubled cell 重构
+    mr_weno_lin_stage.okl  # 核函数 3: 全单元线性模态快照
+    mr_weno_limit.okl      # 核函数 4: 逐 troubled cell 重构（稠密列表驱动）
 ```
 
 接口设计（供时间推进模块回调）：
@@ -355,11 +356,11 @@ public:
 };
 ```
 
-`MrWenoLimiter` 持有 `MeshGeometry`、`BasisFunctions2D`、邻接拓扑的设备句柄，负责构建上述三个核函数并按序调用。参数（$C_k$、$\gamma$、$\varepsilon_w$ 等）在构造时从 `Config` 读入，作为核函数运行期参数传入（遵循现有约定：仅 `Real`、`TILE_SIZE`、`NMODES_MAX`、`NQ2_MAX` 等数组容量上限走 JIT 宏，业务维度走 `const int` 参数以最大化 JIT 缓存命中，见[OCCA 文档](occa.md)）。
+`MrWenoLimiter` 持有 `MeshGeometry`、`BasisFunctions2D`、邻接拓扑的设备句柄，负责构建上述四个核函数并按序调用。参数（$C_k$、$\gamma$、$\varepsilon_w$ 等）在构造时从 `Config` 读入，作为核函数运行期参数传入（遵循现有约定：仅 `Real`、`TILE_SIZE`、`NMODES_MAX`、`NQ2_MAX` 等数组容量上限走 JIT 宏，业务维度走 `const int` 参数以最大化 JIT 缓存命中，见[OCCA 文档](occa.md)）。
 
 ### OKL 内核设计
 
-三个内核均按现有约定使用 `@tile(TILE_SIZE, @outer, @inner)`（`TILE_SIZE = 256`），单元内全串行、无 `@shared`。
+四个内核均按现有约定使用 `@tile(TILE_SIZE, @outer, @inner)`（`TILE_SIZE = 256`），单元内全串行、无 `@shared`。
 
 **核函数 1 `kxrcf_face_jump`（逐面）**：模仿 `surface_integral.okl` 的两趟结构——第一趟在面积分点上求值左右单元的密度迹 $\rho^-$、$\rho^+$（模态系数 × `faceWeights` 表），第二趟按积分点加权累加，输出每个面的**带符号**跳跃积分 $\displaystyle \int_{e_f} (\rho_L - \rho_R)\,\mathrm{d}\Gamma$（符号相对左→右法向 $\hat{\boldsymbol{n}}$）。每面独立并行、只写自己的结果，无原子操作。边界面的输出为哑值（由核函数 2 跳过）。
 
@@ -371,9 +372,13 @@ public:
 4. 在本单元各边积分点上求值 $\rho$ 迹取 min（归一化尺度，按配置 min/max/mean）；
 5. 计算 $h$（质心最大顶点距离，由 `elem_vertices` 现场算）、比较 $C_k$，写 `troubled[elem]`（int 0/1）。
 
-**核函数 3 `mr_weno_limit`（逐单元）**：非 troubled 单元直接跳过（`if (troubled[elem] == 0) return;` 后仍占线程槽，保持 `@tile` 结构统一）。troubled 单元执行完整算法：
+**宿主侧压缩（检测与重构之间）**：`kxrcf_flag` 写回 `troubled[]` 标志后，`MrWenoLimiter::apply()` 在宿主把标志压缩为**升序稠密索引列表** `troubleList[]` 并记下数量（`lastTroubledCount()`）。统一内存后端（Serial/OpenMP）上 `troubled` 缓冲本就是宿主向量的零拷贝别名，压缩只是一个宿主循环；分离内存后端付一次 $O(N_{\text{elem}})$ 整型 D2H 读回 + 列表 H2D 上传。**零 troubled cell 时整条重构链（快照 + 重构）直接跳过**。不在设备端做原子压缩的原因：vendored OCCA 2.0.0 的 `@atomic` 不可移植——OpenCL 后端会**静默**编译为非原子语句（错误结果而非报错），且无"捕获旧值"的形式可用，详见[OCCA 文档](occa.md)的原子操作一节。
 
-1. 读入本单元 $N_{\text{vars}} \times N_{\text{modes}}$ 模态系数与各邻居的线性模态（按 `elemFaces` + `faceKL`/`faceKR` gather，直接从全局解向量读取，EVM 布局保证邻居的模态段连续）；
+**核函数 3 `mr_weno_lin_stage`（逐单元）**：把每个单元 $N_{\text{vars}} \times 3$ 个线性模态（$l = 0, 1, 2$）快照到侧缓冲 `uLin`（布局 $[{\rm elem}][{\rm var}][0..2]$）。任何单元都可能是 troubled cell 的邻居，故全单元无条件暂存（带宽型轻内核，双精度下每单元 12 个实数）。该快照使核函数 4 对邻居线性模态的读取与并发限幅彻底解耦——"限制前"语义由构造保证。
+
+**核函数 4 `mr_weno_limit`（逐 troubled cell）**：循环上界为稠密列表长度 `N_troubled`，每个线程槽恰处理一个 troubled cell（`elem = troubleList[k]`）——非 troubled 单元不再占据线程槽，OpenMP 下消除空转与负载不均，GPU 下消除 warp 分歧浪费。注意**循环上界是短列表**，故此内核使用专用小 tile `TROUBLE_TILE_SIZE`（统一内存后端 1、GPU 后端 64）而非 `TILE_SIZE = 256`：600 个问题单元配 256-tile 只剩 3 个外层块，重活会串行挤在 3 个线程上（实测 Sod 算例 37% 回归）。troubled 单元执行完整算法：
+
+1. 读入本单元 $N_{\text{vars}} \times N_{\text{modes}}$ 模态系数与各邻居的线性模态（从 `uLin` 快照读取，按 `elemFaces` + `faceKL`/`faceKR` gather）；
 2. 逐边做特征场分解（$4 \times 4$；线性化点为真单元平均，用本单元 $M$ 第 0 行加权求出，或一次 $\Lambda_{wJ}$ 求积）；
 3. 每个特征分量执行标量算法：层级候选（按逐单元仿射标志走截断或即时投影——投影需现场组装 $M_{\ell\ell} = \mathbf{V}_\ell^T \operatorname{diag}(\Lambda_{wJ}) \mathbf{V}_\ell$ 并做小 Cholesky，$P_4$ 时最大 $10 \times 10$，仍在寄存器/线程局部数组容量内）、telescoping 递推、$\beta$（积分点求值 + $\mathbf{J}^{-1}$ 链式求导 + $\Lambda_{wJ}$ 收缩）、$\beta_{0,1}$（仿射邻居闭式 / 非仿射邻居查梯度表）、WENO-Z 权重；
 4. 按边长加权平均 4 个方向的结果，覆写本单元模态系数。
@@ -381,6 +386,18 @@ public:
 > **逐单元仿射标志**：建议在 `MeshGeometry` 中新增逐单元 int 数组（判据：逐点 $\det\mathbf{J}$ 与首点一致，或逐单元重算 $c_1 = c_2 = 0$），随 `allocateDeviceMemory` 上传。全局标志 `isOrthogonal()` 不适用于混合网格下的逐单元分支。
 >
 > **邻居梯度表（非仿射邻居的 $\beta_{0,1}$）**：预处理阶段为每个面邻接对预计算目标单元各体积分点处邻居 $\phi_1, \phi_2$ 的物理梯度（每点 4 实数）。涉及把目标积分点物理坐标反解到邻居参考坐标（双线性映射的 Newton 迭代，2–3 步收敛；几何静态故只需离线一次）。首版可先只实现仿射邻居闭式路径 + 非仿射邻居以质心单点梯度近似，观察对算例的影响后再决定是否引入完整查表。
+
+### 并行策略改造的基准（OpenMP 后端，10 线程）
+
+改造前（`if (troubled[elem])` 守卫的全单元循环）与改造后（宿主压缩 + 稠密列表 + 线性模态快照 + `TROUBLE_TILE_SIZE`）的每步墙钟时间（Sod/涡旋各 2 轮；二维黎曼为 $T = 0.05$ 的 771 步，基线 $T = 0.2$ 全程 3675 步测得 0.625 s/step，一致）：
+
+| 算例 | 问题单元画像 | 改造前 | 改造后 | 变化 |
+| :--- | :--- | :---: | :---: | :---: |
+| 等熵涡 $160^2$ P2（$T=2$，2674 步） | 0 个（干净场） | 0.0521 s/step | 0.0518 s/step | $\approx -1\%$ |
+| Sod $256\times64$ P2（$T=0.2$，1563 步） | 低占比、垂直波带（行主序下跨块分布） | 0.0821 s/step | 0.0790 s/step | $-3.8\%$ |
+| 二维黎曼 $96^2$ P3（$T=0.05$，771 步） | 高占比且螺旋聚集 | 0.596 s/step | 0.197 s/step | $\mathbf{3.0\times}$ |
+
+二维黎曼的 3× 是旧策略病征的直接体现：问题单元聚集在中心螺旋区，旧内核按 256-tile 静态均分的 36 个外层块中只有中间少数块真正有活——空块线程闲置、重块线程扛全部（负载不均的两个面孔）；稠密列表让每个工作单元都是重构活，10 线程满载。**中间消融数据点**：列表内核若沿用 `TILE_SIZE = 256`，Sod（约 600 个问题单元 $\to$ 仅 3 个外层块，10 线程只用 3 个）反而 $+38\%$，二维黎曼 2.0×——短列表必须配小 tile，`TROUBLE_TILE_SIZE`（统一内存后端 1 / GPU 后端 64）由此而来。快照内核（全单元每单元 12 个实数）与宿主压缩的开销在 Sod 的低占比下被空槽消除的收益抵消后仍净胜约 4%；干净场（等熵涡）下新旧 $\lvert res\rvert_2$ 逐位一致，佐证零问题单元路径的逐位等价。含问题单元的算例中 $\lvert res\rvert_2$ 与旧版有微小差异（如 Sod 3464.97 $\to$ 3466.89）：邻居线性模态改从 pre-limit 快照读取后 WENO-Z 权重不同，属预期且逐轮可复现（旧版的"读邻居"在 OpenMP 静态调度下偶然确定，换线程数即变）。
 
 ### 挂载点：时间推进模块的 post-stage 回调
 
@@ -463,3 +480,27 @@ epsilon = 1.0e-6        # WENO-Z 防零小量 ε_w
 6. G. Fu, C.-W. Shu, *A new troubled-cell indicator for discontinuous Galerkin methods for hyperbolic conservation laws*, J. Comput. Phys. **347** (2017) 305–327.（KXRCF 的 $h$ 幂次与归一化修正）
 7. R. Borges, M. Carmona, B. Costa, W.S. Don, *An improved weighted essentially non-oscillatory scheme for hyperbolic conservation laws*, J. Comput. Phys. **227** (2008) 3191–3211.（WENO-Z 权重）
 8. G. Jiang, C.-W. Shu, *Efficient implementation of weighted ENO schemes*, J. Comput. Phys. **126** (1996) 202–228.（光滑度指示器）
+
+
+## 附录：文献符合性审计与波纹归因（2026-10 存档）
+
+### 文献符合性审计（对 .WENO_paper 三篇逐项比对，结论：实现忠实）
+
+| 项目 | 文献 | 本实现 | 判定 |
+| :--- | :--- | :--- | :--- |
+| 层级候选 $q_\ell$（Zhu2019 式 3.2） | $L^2$ 投影 = 正交基模态截断 | 仿射截断 / 非仿射真 $L^2$ 投影 | 一致 |
+| 细节递推（式 3.3） | $p_{\zeta\zeta} = (q_\zeta - \gamma_{\zeta-1,\zeta} p_{\zeta-1,\zeta})/\gamma_{\zeta\zeta}$ | 逐字一致 | 一致 |
+| 望远镜混合（式 3.4/3.17） | $\omega_{\zeta\zeta} p_{\zeta\zeta} + \omega_{\zeta-1,\zeta} p_{\zeta-1,\zeta}$ | 逐字一致 | 一致 |
+| 线性权 $\gamma$ | Zhu2019/2021 均明文 $\gamma_{\zeta-1,\zeta}=0.01$、$\gamma_{\zeta\zeta}=0.99$ | `gamma_low/high = 0.01/0.99` | 一致 |
+| 光滑度因子 $\beta$（式 3.5） | $(\Delta x\Delta y)^{|\alpha|-1}\int(\partial^\alpha p)^2$ | `areaPow` + 精确链式（非仿射三阶以上截断，已注明） | 一致 |
+| $\beta_{0,1}$ 特例（式 3.6–3.14） | min 邻单元线性梯度能量 $\int_{\Omega_0}$ | min 邻单元 $|\nabla q|^2\cdot|\Omega_0|$（面中点求值，仿射精确） | 一致 |
+| WENO-Z $\tau$ / $\varepsilon$ | $\tau=(\beta_{\zeta\zeta}-\beta_{\zeta-1,\zeta})^2$；$\varepsilon$：Zhu2019 取 1e-10 / Zhu2021 取 1e-6 | 同式；`epsilon = 1e-6`（=Zhu2021） | 一致 |
+| KXRCF（式 3.1） | $R=1(k{=}1)/1.5(k{>}1)$、$C_k=1$、min 归一化 | `hPow`、`ckc=1`、`shock_norm=min` | 一致 |
+| 系统情形特征分解 | Zhu2019（结构网格）：$x/y$ 两方向+简单平均；Zhu2021（四面体）：**面法向 + 面测度加权平均**（Step 2.2） | 面法向 + 边长加权平均（=Zhu2021；均匀 Cartesian 网格上与 Zhu2019 双向平均数学等价） | 一致 |
+| 限制时机 | 每级推进前限制 | 每 RK 级后过滤 | 一致 |
+
+内核内嵌 $\theta$ 正性混合（下限 1e-8）为论文之外的附加安全层：只耗散不生波，均值守恒不受影响。
+
+### 波纹归因存档（二维黎曼算例观察到的流场波纹）
+
+现象：后激波平台区网格对齐条纹（t=0.4 时 UL 水平/LR 垂直，t=0.79 方向旋转 90°），螺旋核心区活跃信号为物理滑移卷起。定量（96² P2 nq3 cfl0.18 free-avg 帧）：全场中值残差 L2 能量 0.0056→0.0118（t≈0.18）后**饱和**；精确常数区（UR 角，精确解恒 1.5）数值波幅 0.012@t=0.1 **单调衰减**至 0.005@t=0.71，各向同性，约占状态 0.7%。**判定：DG 色散尾波（弯曲激波辐射、LLF+限制器持续阻尼），有界衰减，非物理失稳、非 KXRCF 漏检增长缺陷；无需改动检测参数。** force_troubled 全场限制实验经裁决不跑（预期仅以精度换阻尼）。

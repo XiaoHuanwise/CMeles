@@ -22,6 +22,8 @@ DualStepper::Params dualParams(const Config &cfg) {
     params.pseudoFixedDt  = cfg.timePseudoDt();
     params.allowReject    = cfg.timePseudoReject();
     params.decoupled      = cfg.timeDualDecoupled();
+    params.pseudoNorm     = static_cast<int>(cfg.timePseudoNorm());
+    params.stagnationExit = cfg.timePseudoStagnation();
     // Loose pseudo-local accuracy: the dual-time convergence criterion
     // governs, and a large initial pseudo step keeps the iteration count
     // sane (the Hairer heuristic otherwise starts far below the stability

@@ -4,6 +4,7 @@
 #include "DualStepper.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -84,9 +85,37 @@ void DualStepper::setPseudoStateFilter(StateFilter filter) {
     }
 }
 
+const char *DualStepper::pseudoNormTag() const {
+    switch (params_.pseudoNorm) {
+        case 1:
+            return "|F|_2";
+        case 2:
+            return "|F|_mean";
+        default:
+            return "|F|_inf";
+    }
+}
+
 Real DualStepper::residualNorm(const RungeKuttaStepper &ps, occa::dim_t n) {
     occa::memory f = ps.f();
-    return blas_.amax(n, f);
+    // Convergence norm of the pseudo residual ([time_marching]
+    // pseudo_norm). All variants keep the per-DOF O(1) scale of the
+    // infinity norm, so the rtol/atol semantics carry over unchanged:
+    //   inf  — single worst DOF (strictest; a point singularity such as
+    //          the four-state corner of the 2-D Riemann problem blocks
+    //          the criterion long after the bulk has converged),
+    //   l2   — RMS level sqrt(mean f^2), the standard CFD residual
+    //          monitor (SU2 / Fluent scaled residuals), robust to
+    //          isolated outlier DOFs,
+    //   mean — mean |f| (L1 average), similar robustness, looser.
+    switch (params_.pseudoNorm) {
+        case 1:
+            return sqrt(blas_.dot(n, f, f) / Real(n));
+        case 2:
+            return blas_.asum(n, f) / Real(n);
+        default:
+            return blas_.amax(n, f);
+    }
 }
 
 Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
@@ -136,6 +165,8 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
 
         f0Norm = residualNorm(pseudo_, nDof_);
         fNorm  = f0Norm;
+        Real fMinStag = fNorm;
+        int stag      = 0;
         while (notConverged(fNorm, f0Norm) && cnt < params_.maxPseudoSteps) {
             pseudoStep(*pseudoC2_);
             occa::memory sC2 = pseudoC2_->state();
@@ -149,6 +180,21 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
             fNorm = residualNorm(pseudo_, nDof_);
             if (cnt <= kRefStep) {
                 f0Norm = std::max(f0Norm, fNorm);
+            }
+            if (params_.stagnationExit) {
+                // Improvement = a drop below 0.98 x best-so-far. The 0.98/10
+                // pair is mechanism-level, not tuned: it separates the
+                // frozen phase (0%/iter) from the slow tail (~3%/iter) —
+                // see Params::stagnationExit for the sensitivity note.
+                if (fNorm < Real(0.98) * fMinStag) {
+                    fMinStag = fNorm;
+                    stag      = 0;
+                } else if (++stag >= 10) {
+                    CMES_LOG_DETAIL << "DualStepper[" << name()
+                                    << "] stagnation exit after " << cnt
+                                    << " pseudo steps";
+                    break;
+                }
             }
         }
     } else {
@@ -177,6 +223,8 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
 
         f0Norm = residualNorm(pseudo_, stackedN);
         fNorm  = f0Norm;
+        Real fMinStag = fNorm;
+        int stag      = 0;
         while (notConverged(fNorm, f0Norm) && cnt < params_.maxPseudoSteps) {
             pseudoStep(pseudo_);
             ++cnt;
@@ -184,13 +232,28 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
             if (cnt <= kRefStep) {
                 f0Norm = std::max(f0Norm, fNorm);
             }
+            if (params_.stagnationExit) {
+                // Improvement = a drop below 0.98 x best-so-far. The 0.98/10
+                // pair is mechanism-level, not tuned: it separates the
+                // frozen phase (0%/iter) from the slow tail (~3%/iter) —
+                // see Params::stagnationExit for the sensitivity note.
+                if (fNorm < Real(0.98) * fMinStag) {
+                    fMinStag = fNorm;
+                    stag      = 0;
+                } else if (++stag >= 10) {
+                    CMES_LOG_DETAIL << "DualStepper[" << name()
+                                    << "] stagnation exit after " << cnt
+                                    << " pseudo steps";
+                    break;
+                }
+            }
         }
     }
 
     if (notConverged(fNorm, f0Norm) && cnt >= params_.maxPseudoSteps) {
         CMES_LOG_NORMAL << "DualStepper[" << name()
-                        << "]: pseudo stepper hit max steps (|F|_inf = "
-                        << fNorm << ")";
+                        << "]: pseudo stepper hit max steps ("
+                        << pseudoNormTag() << " = " << fNorm << ")";
     }
 
     ++advances_;
@@ -218,14 +281,17 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
     // Filter contract (implicit family): project the converged stage state
     // once, OUTSIDE the implicit solve — $u^{n+1} = \pi(u^*)$ with $u^*$ the
     // solution of the limiter-free temporal residual. The pseudo iterates
-    // above were deliberately not filtered: embedding the projection in the
-    // iteration would stall the residual in a limit cycle and fake
-    // convergence (rationale in StepperBase::setPostStageFilter). The data
-    // of the NEXT physical step — R(u^n), the temporal-residual operands
-    // and u^{n-1} for U3R1 (copied above from the already-filtered o_u) —
-    // therefore sees limited physics by construction. The decoupled mode's
-    // internal u^{n+c_2} belongs to the implicit solve as well and is
-    // likewise not filtered.
+    // above deliberately carry no WENO-type limiter: embedding such a
+    // projection in the iteration would stall the residual in a limit
+    // cycle and fake convergence (rationale in
+    // StepperBase::setPostStageFilter). Continuous positivity projections
+    // installed via setPseudoStateFilter are the one exception and ride
+    // the pseudo steppers' own post-stage slots. The data of the NEXT
+    // physical step — R(u^n), the temporal-residual operands and u^{n-1}
+    // for U3R1 (copied above from the already-filtered o_u) — therefore
+    // sees limited physics by construction. The decoupled mode's internal
+    // u^{n+c_2} belongs to the implicit solve as well and receives the
+    // same treatment (positivity filter only inside, projection here).
     applyPostStageFilter(o_u);
     return dt;
 }
