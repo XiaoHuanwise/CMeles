@@ -49,9 +49,9 @@ public:
         bool allowReject   = false;   ///< Retry rejected pseudo steps.
         bool decoupled     = false;   ///< Per-stage pseudo steppers (DITR).
         RungeKuttaStepper::Params rkParams{}; ///< Pseudo stepper tolerances.
-        int pseudoNorm = 0; ///< Pseudo-residual convergence norm
-                            ///< (PseudoNorm as int: 0 inf, 1 l2/RMS,
-                            ///< 2 mean/L1).
+        int pseudoNorm = 0;          ///< Pseudo-residual convergence norm
+                                     ///< (PseudoNorm as int: 0 inf, 1 l2/RMS,
+                                     ///< 2 mean/L1).
         bool stagnationExit = false; ///< Early-exit the pseudo iteration on
                                      ///< residual stagnation: 10 consecutive
                                      ///< iterations without a drop below

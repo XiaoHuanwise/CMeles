@@ -320,8 +320,9 @@ int main() {
     // result).
     runRiemann2d("2D Riemann (Lax-Liu 3) / quad / P2 / analytic riemann bc", 2,
                  64, Real(0.1), Real(0.05), false, true);
-    runRiemann2d("2D Riemann (Lax-Liu 3) / triangles / P1 / analytic riemann bc",
-                 1, 32, Real(0.1), Real(0.05), true, false);
+    runRiemann2d(
+        "2D Riemann (Lax-Liu 3) / triangles / P1 / analytic riemann bc", 1, 32,
+        Real(0.1), Real(0.05), true, false);
     runFreeBoundaryNeutrality();
 
     if (g_failures == 0) {

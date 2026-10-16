@@ -445,8 +445,8 @@ static bool testDualTime() {
             dualStepError(device, mem, ode, Real(0.05), makeU3R1, ditrParams);
         // RMS-norm convergence variant (pseudo_norm = "l2"): same order,
         // exercises the sqrt(dot/n) branch of the convergence criterion.
-        DualStepper::Params l2Params   = ditrParams;
-        l2Params.pseudoNorm            = 1;
+        DualStepper::Params l2Params = ditrParams;
+        l2Params.pseudoNorm          = 1;
         const Real e1U2R1l2 =
             dualStepError(device, mem, ode, Real(0.1), makeU2R1, l2Params);
         const Real e2U2R1l2 =
@@ -455,9 +455,9 @@ static bool testDualTime() {
         // Stagnation-exit variant (pseudo_stagnation = true): a cleanly
         // converging ODE never stagnates, so accuracy is unchanged; the
         // early exit must not degrade the temporal order.
-        DualStepper::Params stagParams   = ditrParams;
-        stagParams.pseudoNorm            = 1;
-        stagParams.stagnationExit        = true;
+        DualStepper::Params stagParams = ditrParams;
+        stagParams.pseudoNorm          = 1;
+        stagParams.stagnationExit      = true;
         const Real e1Stag =
             dualStepError(device, mem, ode, Real(0.1), makeU2R1, stagParams);
         const Real e2Stag =

@@ -150,19 +150,18 @@ occa::kernel MrWenoLimiter::buildKernel(const std::string &file,
 #else
     props["defines/Real"] = "double";
 #endif
-    props["defines/TILE_SIZE"]  = cmeles::DefaultTileSize;
+    props["defines/TILE_SIZE"] = cmeles::DefaultTileSize;
     // Tile of the list-driven reconstruction kernel: its loop bound is
     // the SHORT troubled list, so the outer block count must track the
     // troubled-cell count (1 work unit per cell on the unified backends;
     // a 64-thread wavefront per block on the GPU backends). A 256-tile
     // would collapse a few hundred troubled cells into a handful of
     // outer blocks and serialize the heavy work on that many threads.
-    props["defines/TROUBLE_TILE_SIZE"] =
-        mem_.hasSeparateMemorySpace() ? 64 : 1;
-    props["defines/N_VARS"]     = kNumVars2D;
-    props["defines/NQ_MAX"]     = kMaxQuadPts1D;
-    props["defines/NQ2_MAX"]    = kMaxQuadPts2D;
-    props["defines/NMODES_MAX"] = kMaxModes;
+    props["defines/TROUBLE_TILE_SIZE"] = mem_.hasSeparateMemorySpace() ? 64 : 1;
+    props["defines/N_VARS"]            = kNumVars2D;
+    props["defines/NQ_MAX"]            = kMaxQuadPts1D;
+    props["defines/NQ2_MAX"]           = kMaxQuadPts2D;
+    props["defines/NMODES_MAX"]        = kMaxModes;
     cmeles::finaliseKernelProps(props, device_);
 
     return device_.buildKernel(oklDir_ + "/" + file, name, props);

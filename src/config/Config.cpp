@@ -443,33 +443,33 @@ void Config::setDefaults() {
     bc_p_.clear();
     riemann_target_ = RiemannTarget::Flow;
 
-    time_method_           = TimeMethod::SspRk3;
-    time_cfl_              = Real(0.2);
-    time_dt_               = Real(0);
-    time_final_            = Real(1);
-    time_rtol_             = Real(1e-6);
-    time_atol_             = Real(1e-6);
-    time_safety_           = Real(0.9);
-    time_min_factor_       = Real(0.2);
-    time_max_factor_       = Real(5);
-    time_max_growth_       = Real(10);
-    time_max_pseudo_steps_ = 100;
-    time_pseudo_method_    = TimeMethod::SspRk332;
-    time_pseudo_dt_        = Real(0);
-    time_pseudo_dt_mode_   = PseudoDtMode::Global;
-    time_pseudo_norm_     = PseudoNorm::Inf;
+    time_method_            = TimeMethod::SspRk3;
+    time_cfl_               = Real(0.2);
+    time_dt_                = Real(0);
+    time_final_             = Real(1);
+    time_rtol_              = Real(1e-6);
+    time_atol_              = Real(1e-6);
+    time_safety_            = Real(0.9);
+    time_min_factor_        = Real(0.2);
+    time_max_factor_        = Real(5);
+    time_max_growth_        = Real(10);
+    time_max_pseudo_steps_  = 100;
+    time_pseudo_method_     = TimeMethod::SspRk332;
+    time_pseudo_dt_         = Real(0);
+    time_pseudo_dt_mode_    = PseudoDtMode::Global;
+    time_pseudo_norm_       = PseudoNorm::Inf;
     time_pseudo_stagnation_ = false;
-    time_pseudo_reject_    = false;
-    time_dual_decoupled_   = false;
+    time_pseudo_reject_     = false;
+    time_dual_decoupled_    = false;
 
-    limiter_type_           = LimiterType::None;
-    limiter_ckc_            = Real(1);
-    limiter_shock_norm_     = ShockNorm::Min;
-    limiter_gamma_low_      = Real(0.01);
-    limiter_gamma_high_     = Real(0.99);
-    limiter_epsilon_        = Real(1e-6);
-    limiter_force_troubled_ = false;
-    limiter_positivity_     = false;
+    limiter_type_               = LimiterType::None;
+    limiter_ckc_                = Real(1);
+    limiter_shock_norm_         = ShockNorm::Min;
+    limiter_gamma_low_          = Real(0.01);
+    limiter_gamma_high_         = Real(0.99);
+    limiter_epsilon_            = Real(1e-6);
+    limiter_force_troubled_     = false;
+    limiter_positivity_         = false;
     limiter_positivity_epsilon_ = Real(1e-10);
 
     ic_type_ = IcType::Uniform;
@@ -680,8 +680,7 @@ Config::Config(const std::string &path) {
         limiter_epsilon_    = getReal(*tbl, "epsilon", limiter_epsilon_);
         limiter_force_troubled_ =
             getBool(*tbl, "force_troubled", limiter_force_troubled_);
-        limiter_positivity_ =
-            getBool(*tbl, "positivity", limiter_positivity_);
+        limiter_positivity_ = getBool(*tbl, "positivity", limiter_positivity_);
         limiter_positivity_epsilon_ =
             getReal(*tbl, "positivity_epsilon", limiter_positivity_epsilon_);
     }

@@ -163,8 +163,8 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
         pseudoC2_->setState(o_uNc2_, dt);
         pseudo_.setState(o_uN1_, dt);
 
-        f0Norm = residualNorm(pseudo_, nDof_);
-        fNorm  = f0Norm;
+        f0Norm        = residualNorm(pseudo_, nDof_);
+        fNorm         = f0Norm;
         Real fMinStag = fNorm;
         int stag      = 0;
         while (notConverged(fNorm, f0Norm) && cnt < params_.maxPseudoSteps) {
@@ -188,7 +188,7 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
                 // see Params::stagnationExit for the sensitivity note.
                 if (fNorm < Real(0.98) * fMinStag) {
                     fMinStag = fNorm;
-                    stag      = 0;
+                    stag     = 0;
                 } else if (++stag >= 10) {
                     CMES_LOG_DETAIL << "DualStepper[" << name()
                                     << "] stagnation exit after " << cnt
@@ -221,8 +221,8 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
 
         pseudo_.setState(o_uNew_, dt);
 
-        f0Norm = residualNorm(pseudo_, stackedN);
-        fNorm  = f0Norm;
+        f0Norm        = residualNorm(pseudo_, stackedN);
+        fNorm         = f0Norm;
         Real fMinStag = fNorm;
         int stag      = 0;
         while (notConverged(fNorm, f0Norm) && cnt < params_.maxPseudoSteps) {
@@ -239,7 +239,7 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
                 // see Params::stagnationExit for the sensitivity note.
                 if (fNorm < Real(0.98) * fMinStag) {
                     fMinStag = fNorm;
-                    stag      = 0;
+                    stag     = 0;
                 } else if (++stag >= 10) {
                     CMES_LOG_DETAIL << "DualStepper[" << name()
                                     << "] stagnation exit after " << cnt

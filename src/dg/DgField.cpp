@@ -355,8 +355,8 @@ void DgField::buildBoundaryData() {
     // Expression faces and the "expr" Riemann target need the [bc]
     // rho/u/v/p expressions; the evaluator lives in the solver layer, so
     // fail fast here.
-    const bool needsBcExpr = n_expr_faces_ > 0 ||
-                             (cfg_.bcType() == BcType::Riemann &&
+    const bool needsBcExpr =
+        n_expr_faces_ > 0 || (cfg_.bcType() == BcType::Riemann &&
                               cfg_.riemannTarget() == RiemannTarget::Expr);
     if (needsBcExpr && (cfg_.bcRho().empty() || cfg_.bcU().empty() ||
                         cfg_.bcV().empty() || cfg_.bcP().empty())) {

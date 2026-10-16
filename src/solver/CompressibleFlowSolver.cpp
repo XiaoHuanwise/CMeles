@@ -138,8 +138,8 @@ int CompressibleFlowSolver::run() {
             std::make_unique<MrWenoLimiter>(cfg_, device_, *mem_, *field_);
     }
     if (cfg_.limiterPositivity()) {
-        posLimiter_ = std::make_unique<PositivityLimiter>(cfg_, device_,
-                                                          *mem_, *field_);
+        posLimiter_ =
+            std::make_unique<PositivityLimiter>(cfg_, device_, *mem_, *field_);
     }
     if (limiter_ || posLimiter_) {
         stepper_->setPostStageFilter(

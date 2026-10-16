@@ -213,10 +213,10 @@ bool testRiemannExprUniform() {
 
     DgField &field            = solver->field();
     const std::vector<Real> u = readModal(field, solver->mem());
-    const Real cons[4] = {Real(1.2), Real(1.2) * Real(0.7), Real(0),
-                          Real(1.3) / Real(0.4) +
-                              Real(0.5) * Real(1.2) * Real(0.49)};
-    Real err           = Real(0);
+    const Real cons[4]        = {Real(1.2), Real(1.2) * Real(0.7), Real(0),
+                                 Real(1.3) / Real(0.4) +
+                                     Real(0.5) * Real(1.2) * Real(0.49)};
+    Real err                  = Real(0);
     for (int e = 0; e < field.numElements(); ++e) {
         for (int var = 0; var < 4; ++var) {
             const Real *c = u.data() + (static_cast<std::size_t>(e) * 4 + var) *
@@ -257,10 +257,10 @@ bool testFreeAvgUniform() {
 
     DgField &field            = solver->field();
     const std::vector<Real> u = readModal(field, solver->mem());
-    const Real cons[4] = {Real(1.2), Real(1.2) * Real(0.7), Real(0),
-                          Real(1.3) / Real(0.4) +
-                              Real(0.5) * Real(1.2) * Real(0.49)};
-    Real err           = Real(0);
+    const Real cons[4]        = {Real(1.2), Real(1.2) * Real(0.7), Real(0),
+                                 Real(1.3) / Real(0.4) +
+                                     Real(0.5) * Real(1.2) * Real(0.49)};
+    Real err                  = Real(0);
     for (int e = 0; e < field.numElements(); ++e) {
         for (int var = 0; var < 4; ++var) {
             const Real *c = u.data() + (static_cast<std::size_t>(e) * 4 + var) *

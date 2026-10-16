@@ -189,24 +189,23 @@ enum class PseudoDtMode : int {
 /// @brief Convergence norm of the dual-time pseudo residual
 ///        ([time_marching] pseudo_norm).
 enum class PseudoNorm : int {
-    Inf = 0,  ///< Infinity norm: the single worst DOF of the pseudo
-              ///< residual. Strictest criterion; a genuine point
-              ///< singularity (e.g. the four-state corner of the 2-D
-              ///< Riemann problem) becomes the bottleneck and burns
-              ///< iterations after the bulk has converged.
-    L2 = 1,   ///< RMS per-DOF level sqrt(mean f^2) — the standard CFD
-              ///< residual monitor (SU2 / Fluent scaled residuals):
-              ///< robust to isolated outlier cells, same O(1)-per-DOF
-              ///< scale as the infinity norm so the default rtol/atol
-              ///< semantics carry over.
-    Mean = 2  ///< Mean absolute residual mean |f| (L1 average): similar
-              ///< robustness, slightly looser than RMS.
+    Inf = 0, ///< Infinity norm: the single worst DOF of the pseudo
+             ///< residual. Strictest criterion; a genuine point
+             ///< singularity (e.g. the four-state corner of the 2-D
+             ///< Riemann problem) becomes the bottleneck and burns
+             ///< iterations after the bulk has converged.
+    L2 = 1,  ///< RMS per-DOF level sqrt(mean f^2) — the standard CFD
+             ///< residual monitor (SU2 / Fluent scaled residuals):
+             ///< robust to isolated outlier cells, same O(1)-per-DOF
+             ///< scale as the infinity norm so the default rtol/atol
+             ///< semantics carry over.
+    Mean = 2 ///< Mean absolute residual mean |f| (L1 average): similar
+             ///< robustness, slightly looser than RMS.
 };
 
 /// @brief Parse a pseudo-norm name ("inf" | "max" | "l2" | "rms" |
 ///        "mean" | "l1" | "avg") into a \p PseudoNorm.
 PseudoNorm parsePseudoNorm(const std::string &name);
-
 
 /// @brief Parse a pseudo-dt-mode name string into a \p PseudoDtMode.
 ///
@@ -804,19 +803,19 @@ private:
     Real time_pseudo_rtol_            = Real(0); ///< <= 0: automatic heuristic.
     Real time_pseudo_atol_            = Real(0); ///< <= 0: automatic heuristic.
     PseudoDtMode time_pseudo_dt_mode_ = PseudoDtMode::Global;
-    PseudoNorm time_pseudo_norm_ = PseudoNorm::Inf;
-    bool time_pseudo_stagnation_ = false;
+    PseudoNorm time_pseudo_norm_      = PseudoNorm::Inf;
+    bool time_pseudo_stagnation_      = false;
     bool time_pseudo_reject_          = false;
     bool time_dual_decoupled_         = false;
 
-    LimiterType limiter_type_     = LimiterType::None;
-    Real limiter_ckc_             = Real(1);
-    ShockNorm limiter_shock_norm_ = ShockNorm::Min;
-    Real limiter_gamma_low_       = Real(0.01);
-    Real limiter_gamma_high_      = Real(0.99);
-    Real limiter_epsilon_         = Real(1e-6);
-    bool limiter_force_troubled_  = false;
-    bool limiter_positivity_      = false;
+    LimiterType limiter_type_        = LimiterType::None;
+    Real limiter_ckc_                = Real(1);
+    ShockNorm limiter_shock_norm_    = ShockNorm::Min;
+    Real limiter_gamma_low_          = Real(0.01);
+    Real limiter_gamma_high_         = Real(0.99);
+    Real limiter_epsilon_            = Real(1e-6);
+    bool limiter_force_troubled_     = false;
+    bool limiter_positivity_         = false;
     Real limiter_positivity_epsilon_ = Real(1e-10);
 
     IcType ic_type_     = IcType::Uniform;
