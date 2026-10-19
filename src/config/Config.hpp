@@ -247,6 +247,30 @@ ShockNorm parseShockNorm(const std::string &name);
 /// @brief Convert a \p ShockNorm back to its canonical string name.
 const char *shockNormName(ShockNorm t) noexcept;
 
+/// @brief Driver mode of the MR-WENO reconstruction kernel ([limiter]
+///        weno_drive_mode). List mode compacts the troubled flags on the
+///        host into a dense index list, so the kernel spawns only heavy
+///        work units — balanced under the static OpenMP schedule but
+///        requiring a device-to-host flag read every apply (a
+///        queue-draining sync on separate-memory backends). Full mode
+///        launches over every element with a flag-guard early exit — no
+///        host sync at all, imbalance absorbed by the block-level
+///        oversubscription of the GPU.
+enum class WenoDriveMode : int {
+    Auto = 0, ///< List on unified-memory backends, full on separate.
+    List = 1, ///< Forced host-compacted dense troubled list.
+    Full = 2  ///< Forced full-field early-exit launch.
+};
+
+/// @brief Parse a WENO drive-mode name string into a \p WenoDriveMode.
+///
+/// Accepted names (case-insensitive): "auto", "list", "full". Throws
+/// std::invalid_argument for unknown names.
+WenoDriveMode parseWenoDriveMode(const std::string &name);
+
+/// @brief Convert a \p WenoDriveMode back to its canonical string name.
+const char *wenoDriveModeName(WenoDriveMode t) noexcept;
+
 /// @brief Initial-condition type.
 enum class IcType : int {
     Uniform = 0, ///< Constant free stream from the [flow] section.
@@ -626,6 +650,11 @@ public:
         return limiter_force_troubled_;
     }
 
+    /// @brief MR-WENO reconstruction driver mode (see \p WenoDriveMode).
+    WenoDriveMode limiterWenoDriveMode() const noexcept {
+        return limiter_weno_drive_;
+    }
+
     /// @brief Whether the positivity-preserving scaling limiter
     ///        ([limiter] positivity; Zhang & Shu) is enabled. Off by
     ///        default. Composable with the MR-WENO limiter (both run:
@@ -808,15 +837,16 @@ private:
     bool time_pseudo_reject_          = false;
     bool time_dual_decoupled_         = false;
 
-    LimiterType limiter_type_        = LimiterType::None;
-    Real limiter_ckc_                = Real(1);
-    ShockNorm limiter_shock_norm_    = ShockNorm::Min;
-    Real limiter_gamma_low_          = Real(0.01);
-    Real limiter_gamma_high_         = Real(0.99);
-    Real limiter_epsilon_            = Real(1e-6);
-    bool limiter_force_troubled_     = false;
-    bool limiter_positivity_         = false;
-    Real limiter_positivity_epsilon_ = Real(1e-10);
+    LimiterType limiter_type_         = LimiterType::None;
+    Real limiter_ckc_                 = Real(1);
+    ShockNorm limiter_shock_norm_     = ShockNorm::Min;
+    Real limiter_gamma_low_           = Real(0.01);
+    Real limiter_gamma_high_          = Real(0.99);
+    Real limiter_epsilon_             = Real(1e-6);
+    bool limiter_force_troubled_      = false;
+    WenoDriveMode limiter_weno_drive_ = WenoDriveMode::Auto;
+    bool limiter_positivity_          = false;
+    Real limiter_positivity_epsilon_  = Real(1e-10);
 
     IcType ic_type_     = IcType::Uniform;
     std::string ic_rho_ = "1";

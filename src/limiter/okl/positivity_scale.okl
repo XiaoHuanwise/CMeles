@@ -29,7 +29,14 @@
 // forms are only a starting guess: a verification pass re-checks the
 // criterion above at every point and halves theta until it holds
 // (theta -> 0 lands exactly on the admissible mean, so the loop always
-// terminates).
+// terminates). The pass is skipped ONLY when theta == 1 and the directly
+// computed pointwise minima (minRho from pass 1, minInt from pass 2)
+// already clear the floors — minInt is the exact minimum of the e_1
+// values the pass would check, so the skip is bit-equivalent for the
+// energy floor and safe by a 10-order margin for the density floor.
+// Skipping on theta == 1 alone would be WRONG in floating point: the
+// closed-form candidate can round up to exactly 1 at the min(1, .)
+// boundary while a knife-edge point still violates its floor by an ulp.
 //
 // Elements whose MEAN state is inadmissible (rhoBar <= 0 or eBar <= 0)
 // cannot be repaired by a mean-preserving scaling; they are left untouched
@@ -40,7 +47,8 @@
 // Layout: u[elem][var][mode]; V2D[q][mode] shared by all elements;
 // lambdaWJ[elem][q]; Vface[(side*4 + fOwn)][i][mode] with the element's
 // own traces selected through elemFaces / faceKL / faceFL / faceKR /
-// faceFR (same walk as kxrcf_flag).
+// faceFR. The face Vandermonde row bases are resolved ONCE per element
+// and shared by all point passes below.
 //
 // See docs/tech_docs/positivity_limiter.md.
 
@@ -71,12 +79,26 @@ static void evalState(const Real *uElem, const int N_modes, const Real *Vrow,
          @tile(TILE_SIZE, @outer, @inner)) {
         const int uOff = elem * N_vars * N_modes;
 
+        // ---- Own-side face Vandermonde row bases, resolved once and
+        //      shared by every point pass below (collapsed triangle
+        //      face slots keep -1) ---------------------------------------
+        int vBaseF[4];
+        for (int f = 0; f < 4; ++f) {
+            vBaseF[f] = -1;
+            const int F = elemFaces[elem * 4 + f];
+            if (F >= 0) {
+                const int side = (elem == faceKL[F]) ? 0 : 1;
+                const int fOwn = (side == 0) ? faceFL[F] : faceFR[F];
+                vBaseF[f]     = (side * 4 + fOwn) * (N_q * N_modes);
+            }
+        }
+
         // ---- Pass 1: exact cell means (volume quadrature, valid on
         //      non-affine elements) + pointwise min of rho over the
         //      volume Gauss and face Gauss points -----------------------
-        Real area   = 0.0;
+        Real area    = 0.0;
         Real meanRho = 0.0, meanMx = 0.0, meanMy = 0.0, meanE = 0.0;
-        Real minRho = 1.0e300;
+        Real minRho  = 1.0e300;
         for (int q = 0; q < N_q2; ++q) {
             const Real lam = lambdaWJ[elem * N_q2 + q];
             Real rh, mx, my, en;
@@ -96,13 +118,10 @@ static void evalState(const Real *uElem, const int N_modes, const Real *Vrow,
         meanMy /= area;
         meanE /= area;
         for (int f = 0; f < 4; ++f) {
-            const int F = elemFaces[elem * 4 + f];
-            if (F < 0) {
-                continue; // collapsed (triangle) face slot
+            if (vBaseF[f] < 0) {
+                continue;
             }
-            const int side = (elem == faceKL[F]) ? 0 : 1;
-            const int fOwn = (side == 0) ? faceFL[F] : faceFR[F];
-            const Real *Vf = Vface + (side * 4 + fOwn) * (N_q * N_modes);
+            const Real *Vf = Vface + vBaseF[f];
             for (int i = 0; i < N_q; ++i) {
                 Real rh, mx, my, en;
                 evalState(&u[uOff], N_modes, Vf + i * N_modes, &rh, &mx, &my,
@@ -123,7 +142,7 @@ static void evalState(const Real *uElem, const int N_modes, const Real *Vrow,
             if (meanInt <= 0.0) {
                 flags[elem] = 2;
             } else {
-                // ---- theta_1 (density) ------------------------------------
+                // ---- theta_1 (density) --------------------------------
                 Real theta = 1.0;
                 if (minRho < meanRho) {
                     const Real cand =
@@ -132,7 +151,7 @@ static void evalState(const Real *uElem, const int N_modes, const Real *Vrow,
                 }
 
                 // ---- theta_2 (internal energy of the theta_1-scaled
-                //      points) -----------------------------------------------
+                //      points) -------------------------------------------
                 Real minInt = 1.0e300;
                 for (int q = 0; q < N_q2; ++q) {
                     Real rh, mx, my, en;
@@ -149,14 +168,10 @@ static void evalState(const Real *uElem, const int N_modes, const Real *Vrow,
                     }
                 }
                 for (int f = 0; f < 4; ++f) {
-                    const int F = elemFaces[elem * 4 + f];
-                    if (F < 0) {
+                    if (vBaseF[f] < 0) {
                         continue;
                     }
-                    const int side = (elem == faceKL[F]) ? 0 : 1;
-                    const int fOwn = (side == 0) ? faceFL[F] : faceFR[F];
-                    const Real *Vf =
-                        Vface + (side * 4 + fOwn) * (N_q * N_modes);
+                    const Real *Vf = Vface + vBaseF[f];
                     for (int i = 0; i < N_q; ++i) {
                         Real rh, mx, my, en;
                         evalState(&u[uOff], N_modes, Vf + i * N_modes, &rh,
@@ -180,60 +195,76 @@ static void evalState(const Real *uElem, const int N_modes, const Real *Vrow,
 
                 // ---- Verification with halving fallback: enforce the
                 //      actual criterion at every point. The closed forms
-                //      above are derived for Gauss-Lobatto point sets and
-                //      may undershoot on plain Gauss points. --------------
-                int ok   = 0;
-                int iter = 0;
-                while (!ok && iter < 60) {
-                    ok = 1;
-                    const Real rhoFloor = epsRel * meanRho;
-                    const Real intFloor = epsRel * meanInt;
-                    for (int q = 0; q < N_q2 && ok == 1; ++q) {
-                        Real rh, mx, my, en;
-                        evalState(&u[uOff], N_modes, V2D + q * N_modes, &rh,
-                                  &mx, &my, &en);
-                        const Real rh1 = meanRho + theta * (rh - meanRho);
-                        const Real mx1 = meanMx + theta * (mx - meanMx);
-                        const Real my1 = meanMy + theta * (my - meanMy);
-                        const Real en1 = meanE + theta * (en - meanE);
-                        const Real e1 =
-                            en1 - 0.5 * (mx1 * mx1 + my1 * my1) / rh1;
-                        if (rh1 < rhoFloor || e1 < intFloor) {
-                            ok = 0;
-                        }
-                    }
-                    for (int f = 0; f < 4 && ok == 1; ++f) {
-                        const int F = elemFaces[elem * 4 + f];
-                        if (F < 0) {
-                            continue;
-                        }
-                        const int side = (elem == faceKL[F]) ? 0 : 1;
-                        const int fOwn = (side == 0) ? faceFL[F] : faceFR[F];
-                        const Real *Vf =
-                            Vface + (side * 4 + fOwn) * (N_q * N_modes);
-                        for (int i = 0; i < N_q && ok == 1; ++i) {
+                //      above are derived for Gauss-Lobatto point sets
+                //      and may undershoot on plain Gauss points.
+                //      SKIPPED only when theta == 1 AND the directly
+                //      computed pointwise minima already clear the
+                //      floors: minInt is the exact minimum of the very
+                //      e_1 values this pass would check (bitwise
+                //      equivalence for the energy floor), and a
+                //      minRho below eps*rhoBar cannot be rescued by the
+                //      2-ulp reassociation slack of the theta = 1 point
+                //      values. Theta == 1 alone is NOT sufficient: the
+                //      closed-form candidate can round UP to exactly 1
+                //      at the min(1, .) boundary while a point still
+                //      violates its floor by an ulp (observed as a few
+                //      knife-edge elements differing by O(1) against
+                //      the unconditional-verification reference) ----
+                if (theta < 1.0 || minRho < epsRel * meanRho ||
+                    minInt < epsRel * meanInt) {
+                    int ok   = 0;
+                    int iter = 0;
+                    while (!ok && iter < 60) {
+                        ok = 1;
+                        const Real rhoFloor = epsRel * meanRho;
+                        const Real intFloor = epsRel * meanInt;
+                        for (int q = 0; q < N_q2 && ok == 1; ++q) {
                             Real rh, mx, my, en;
-                            evalState(&u[uOff], N_modes, Vf + i * N_modes,
+                            evalState(&u[uOff], N_modes, V2D + q * N_modes,
                                       &rh, &mx, &my, &en);
                             const Real rh1 = meanRho + theta * (rh - meanRho);
                             const Real mx1 = meanMx + theta * (mx - meanMx);
                             const Real my1 = meanMy + theta * (my - meanMy);
                             const Real en1 = meanE + theta * (en - meanE);
                             const Real e1 =
-                                en1 -
-                                0.5 * (mx1 * mx1 + my1 * my1) / rh1;
+                                en1 - 0.5 * (mx1 * mx1 + my1 * my1) / rh1;
                             if (rh1 < rhoFloor || e1 < intFloor) {
                                 ok = 0;
                             }
                         }
-                    }
-                    if (ok == 0) {
-                        theta *= 0.5;
-                        ++iter;
+                        for (int f = 0; f < 4 && ok == 1; ++f) {
+                            if (vBaseF[f] < 0) {
+                                continue;
+                            }
+                            const Real *Vf = Vface + vBaseF[f];
+                            for (int i = 0; i < N_q && ok == 1; ++i) {
+                                Real rh, mx, my, en;
+                                evalState(&u[uOff], N_modes, Vf + i * N_modes,
+                                          &rh, &mx, &my, &en);
+                                const Real rh1 =
+                                    meanRho + theta * (rh - meanRho);
+                                const Real mx1 =
+                                    meanMx + theta * (mx - meanMx);
+                                const Real my1 =
+                                    meanMy + theta * (my - meanMy);
+                                const Real en1 =
+                                    meanE + theta * (en - meanE);
+                                const Real e1 =
+                                    en1 - 0.5 * (mx1 * mx1 + my1 * my1) /
+                                rh1;
+                                if (rh1 < rhoFloor || e1 < intFloor) {
+                                    ok = 0;
+                                }
+                            }
+                        }
+                        if (ok == 0) {
+                            theta *= 0.5;
+                            ++iter;
+                        }
                     }
                 }
 
-                // ---- Apply: scale the m > 0 modes of all variables -----
+                // ---- Apply: scale the m > 0 modes of all variables ----
                 if (theta < 1.0) {
                     for (int m = 1; m < N_modes; ++m) {
                         u[uOff + m] *= theta;

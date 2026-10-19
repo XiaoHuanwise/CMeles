@@ -173,6 +173,16 @@ epsilon = 1.0e-6           # WENO-Z anti-zero epsilon.
 force_troubled = false     # Diagnostic: flag every element as troubled
                            # (accuracy-acceptance tests only; never enable in
                            # production).
+weno_drive_mode = "auto"   # Driver of the mr-weno reconstruction kernel:
+                           # "auto" (list on unified-memory backends/OpenMP,
+                           # full on separate-memory/GPU) | "list" (host
+                           # compacts the flags into a dense index list —
+                           # balanced heavy-only work units for the static
+                           # OpenMP schedule, needs a flag readback per
+                           # apply) | "full" (full-field launch, clean cells
+                           # exit on one flag load — zero host readback; the
+                           # readback would otherwise drain the device
+                           # command queue once per stage on GPUs).
 positivity = false         # Zhang & Shu positivity-preserving scaling
                            # limiter, applied to ALL steppers after any
                            # mr-weno pass: scales each element's high-order

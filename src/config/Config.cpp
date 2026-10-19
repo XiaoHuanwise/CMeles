@@ -333,6 +333,34 @@ const char *shockNormName(ShockNorm t) noexcept {
     }
 }
 
+WenoDriveMode parseWenoDriveMode(const std::string &name) {
+    const std::string key = toLower(name);
+    if (key == "auto") {
+        return WenoDriveMode::Auto;
+    }
+    if (key == "list") {
+        return WenoDriveMode::List;
+    }
+    if (key == "full") {
+        return WenoDriveMode::Full;
+    }
+    throw std::invalid_argument("parseWenoDriveMode: unknown drive mode '" +
+                                name + "'");
+}
+
+const char *wenoDriveModeName(WenoDriveMode t) noexcept {
+    switch (t) {
+        case WenoDriveMode::Auto:
+            return "auto";
+        case WenoDriveMode::List:
+            return "list";
+        case WenoDriveMode::Full:
+            return "full";
+        default:
+            return "unknown";
+    }
+}
+
 IcType parseIcType(const std::string &name) {
     const std::string key = toLower(name);
     if (key == "uniform") {
@@ -469,6 +497,7 @@ void Config::setDefaults() {
     limiter_gamma_high_         = Real(0.99);
     limiter_epsilon_            = Real(1e-6);
     limiter_force_troubled_     = false;
+    limiter_weno_drive_         = WenoDriveMode::Auto;
     limiter_positivity_         = false;
     limiter_positivity_epsilon_ = Real(1e-10);
 
@@ -680,6 +709,10 @@ Config::Config(const std::string &path) {
         limiter_epsilon_    = getReal(*tbl, "epsilon", limiter_epsilon_);
         limiter_force_troubled_ =
             getBool(*tbl, "force_troubled", limiter_force_troubled_);
+        if (const auto dIt = tbl->find("weno_drive_mode"); dIt != tbl->end()) {
+            const std::string name = dIt->second.value_or(std::string("auto"));
+            limiter_weno_drive_    = parseWenoDriveMode(name);
+        }
         limiter_positivity_ = getBool(*tbl, "positivity", limiter_positivity_);
         limiter_positivity_epsilon_ =
             getReal(*tbl, "positivity_epsilon", limiter_positivity_epsilon_);

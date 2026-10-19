@@ -19,6 +19,9 @@
 ///   g. Mixed smooth/discontinuous field, detection-based: partial trouble
 ///      list coverage; untroubled cells untouched bit-exactly, cell means
 ///      conserved everywhere.
+///   h. Drive-mode equivalence: the same mixed field limited through the
+///      list-driven and full-field (early-exit) reconstruction kernels
+///      must give bit-identical modal states.
 
 #include <Eigen/Dense>
 #include <occa.hpp>
@@ -441,6 +444,52 @@ void testMixedFieldPartialCoverage() {
           "cell means conserved (drift " + std::to_string(meanDrift) + ")");
 }
 
+// ----------------------------------------------------------------------------
+// h) Drive-mode equivalence: list-driven vs full-field reconstruction
+// ----------------------------------------------------------------------------
+
+void testDriveModeEquivalence() {
+    // The reconstruction kernel is compiled per drive mode (WENO_LIST_DRIVEN
+    // JIT define); both modes must produce exactly the same field — the
+    // full-field loop only adds a flag-guard early exit for clean cells.
+    const std::string tomlBase =
+        "[basis]\norder = 2\nnq = 4\n\n[mesh]\nnx = 32\nny = 16\n"
+        "dx = 0.03125\ndy = 0.0625\n\n[bc]\ntype = \"periodic\"\n\n[flow]\n"
+        "rho = 1.0\nu = 0.1\nv = 0.05\np = 1.0\n\n[time_marching]\n"
+        "method = \"ssprk3\"\ncfl = 0.18\nt_final = 0.01\n\n"
+        "[initial_condition]\ntype = \"expr\"\n"
+        "rho = \"1 + 0.2*sin(2*pi*x) - ((x > 0.4) ? ((x < 0.6) ? 0.6 : 0) : "
+        "0)\"\n"
+        "u = \"0.1\"\nv = \"0.05\"\n"
+        "p = \"1 + 0.15*sin(2*pi*(x + y)) - ((x > 0.4) ? ((x < 0.6) ? 0.5 : "
+        "0) : 0)\"\n\n[limiter]\ntype = \"mr-weno\"\n";
+    std::cout << "(h) drive-mode equivalence (list vs full)\n";
+
+    const Config cfgList =
+        configFromString(tomlBase, "/tmp/cmeles_mrw_h_list.toml");
+    FieldFixture fxList = makeField(cfgList);
+    MrWenoLimiter limList(cfgList, fxList.device, *fxList.mem, *fxList.field);
+    limList.apply(fxList.field->o_u());
+    fxList.device.finish();
+    const std::vector<Real> uList = readModal(*fxList.field, *fxList.mem);
+
+    const Config cfgFull =
+        configFromString(tomlBase + "weno_drive_mode = \"full\"\n",
+                         "/tmp/cmeles_mrw_h_full.toml");
+    FieldFixture fxFull = makeField(cfgFull);
+    MrWenoLimiter limFull(cfgFull, fxFull.device, *fxFull.mem, *fxFull.field);
+    limFull.apply(fxFull.field->o_u());
+    fxFull.device.finish();
+    const std::vector<Real> uFull = readModal(*fxFull.field, *fxFull.mem);
+
+    check(limList.lastTroubledCount() > 0, "list mode flags troubled cells");
+    bool identical = uList.size() == uFull.size();
+    for (std::size_t i = 0; identical && i < uList.size(); ++i) {
+        identical = uList[i] == uFull[i];
+    }
+    check(identical, "list and full drive modes bit-identical");
+}
+
 } // namespace
 
 int main() {
@@ -451,6 +500,7 @@ int main() {
     testStepperFamilies();
     testCleanFieldNoTroubled();
     testMixedFieldPartialCoverage();
+    testDriveModeEquivalence();
 
     if (g_failures == 0) {
         std::cout << "mr_weno: all checks passed\n";

@@ -19,7 +19,16 @@
 // and treated like interior faces. All-outflow elements take indicator 0
 // (not troubled).
 //
-// Inputs: the per-face signed jump integrals from kxrcf_face_jump.okl.
+// The per-face signed jump integral
+//   jump = sum_i w_i |J_f| (rho_own(t_i) - rho_nb(t_i))
+// is evaluated inline on each INFLOW interior/periodic face (fused from
+// the former kxrcf_face_jump.okl face-parallel kernel, which staged the
+// jumps of ALL faces through a global buffer). Both traces are
+// interpolated from the modal coefficients through the respective side's
+// face Vandermonde rows; the sign flips with the owning side, the
+// absolute value does not — a converging face classified as inflow by
+// BOTH sides contributes the same |jump| to each, exactly as before.
+//
 // Output: troubled[elem] in {0, 1}.
 //
 // See docs/tech_docs/mr_weno_limiter.md, "问题单元检测" section.
@@ -32,8 +41,9 @@
                        const int *faceKL, const int *faceFL,
                        const int *faceKR, const int *faceFR,
                        const int *faceTypes, const Real *faceN,
-                       const Real *faceJump, const Real *vertices,
-                       const Real gammaGas, int *troubled) {
+                       const Real *faceW, const Real *faceJ,
+                       const Real *vertices, const Real gammaGas,
+                       int *troubled) {
     for (int elem = 0; elem < N_elem; ++elem;
          @tile(TILE_SIZE, @outer, @inner)) {
         // --- True cell means of (rho, rho u, rho v) via the volume
@@ -110,8 +120,10 @@
             // (a) Own density trace at the boundary quadrature points of
             //     this face (contributes to the normalisation scale; the
             //     trace exists on domain-boundary edges as well) and the
-            //     positivity trigger's face-point check.
+            //     positivity trigger's face-point check. The point values
+            //     are kept for the inflow jump below.
             const int vBase = (side * 4 + fOwn) * (N_q * N_modes);
+            Real rI[NQ_MAX];
             for (int i = 0; i < N_q; ++i) {
                 Real rhoI = 0.0;
                 Real ruI = 0.0, rvI = 0.0, enI = 0.0;
@@ -122,6 +134,7 @@
                     rvI += Vface[vRowF + m] * u[uOff + 2 * N_modes + m];
                     enI += Vface[vRowF + m] * u[uOff + 3 * N_modes + m];
                 }
+                rI[i] = rhoI;
                 if (rhoI < traceMin) {
                     traceMin = rhoI;
                 }
@@ -141,10 +154,30 @@
                 }
             }
 
-            // (b) Inflow jump accumulation on interior / periodic faces.
+            // (b) Inflow jump accumulation on interior / periodic faces:
+            //     the neighbour's density trace is evaluated inline from
+            //     its modal coefficients (fused from the former
+            //     face-parallel kxrcfFaceJump kernel). The sign of the
+            //     own-minus-neighbour jump flips with the owning side,
+            //     the absolute value does not.
             if (KR >= 0 && faceTypes[F] != 1) {
                 if (meanRhou * nxo + meanRhov * nyo < 0.0) {
-                    const Real jump = faceJump[F];
+                    const int Kn =
+                        isLeft ? KR : KL; // the neighbour across e_F
+                    const int nbSide = 1 - side;
+                    const int nbOwn  = (nbSide == 0) ? faceFL[F] : faceFR[F];
+                    const int nbU    = Kn * N_vars * N_modes;
+                    const int nbBase = (nbSide * 4 + nbOwn) *
+                                       (N_q * N_modes);
+                    Real jump = 0.0;
+                    for (int i = 0; i < N_q; ++i) {
+                        Real rN = 0.0;
+                        const int vRowN = nbBase + i * N_modes;
+                        for (int m = 0; m < N_modes; ++m) {
+                            rN += Vface[vRowN + m] * u[nbU + m];
+                        }
+                        jump += faceW[i] * faceJ[F] * (rI[i] - rN);
+                    }
                     numerator += (jump >= 0.0) ? jump : -jump;
                     inflowLen += sqrt(faceN[F * 2] * faceN[F * 2] +
                                       faceN[F * 2 + 1] * faceN[F * 2 + 1]);
