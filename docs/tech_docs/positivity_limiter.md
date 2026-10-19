@@ -33,13 +33,22 @@ $$ \rho_q(\theta) \ge \varepsilon \bar\rho, \qquad e_q(\theta) \ge \varepsilon \
 
 不满足则 $\theta \leftarrow \theta/2$ 重验（上限 60 次）。由于 $\theta \to 0$ 时点值连续收敛到可容许的均值，回退必然终止，因此对任意点集（含 Gauss 点与面迹点的并集）判据都**构造性成立**。
 
+> **验证跳过的守卫条件**：验证遍仅在 θ < 1 **或**直接算出的逐点最小值未清地板（$\min_q\rho_q < \varepsilon\bar\rho$ 或 $\min_q e_q < \varepsilon\bar e$）时执行。只用 θ = 1 判断**不够**：闭式候选在 $\min(1,\cdot)$ 边界处的浮点舍入可取到恰好 1.0，而某个刀口点仍差一个 ulp 地违反地板（首版跳过即因此与无条件验证参考在个别近退化单元上产生 O(1) 差异）。守卫版的安全性：$\min_q e_q$ 与验证遍检查的是**同一组** $e_1$ 值（逐位等价），密度侧以 $\varepsilon=10^{-10}$ 的裕度覆盖 θ=1 点值重组的 2-ulp 松弛。该内核在双时间族里每个伪迭代 RK stage + 候选态各跑一次（最热限制器内核），而绝大多数单元 θ = 1 且最小值远清地板：跳过使健康单元的点求值从三遍降为两遍。
+>
+> **教训存档**（2026-10 基准期间）：一次内核重构曾丢失体积求积后的均值归一化
+> （$\bar u \mathrel{+}= \lambda u$ 后漏除 $\sum\lambda$），所有均值缩小
+> $|\Omega|$ 倍、θ 几乎永不触发——限制器退化为准 no-op 而**全部不变式单测仍通过**
+> （任意 θ∈[0,1] 均保守恒与可容许，且缩放只作用于高阶模态、不显式使用均值）。
+> 该 bug 由**场文件逐位对比**（同二进制换内核源、显式短跑逐步输出 HDF5）捕获。
+> 重构此类内核时，均值归一化与"apply 只乘模态"的隐式耦合是必须逐位核对的点。
+
 **均值不可容许情形**（$\bar\rho \le 0$ 或 $\bar e \le 0$）：保均值的缩放无法修复均值本身，此类单元被跳过并打标志 2（保持原样、随后 loudly 失败，绝不静默）。显式路径上由 Zhang-Shu 定理保证均值恒可容许；双时间路径无定理，均值破坏会显式暴露。
 
 ## 实现
 
 | 组件 | 文件 | 说明 |
 | --- | --- | --- |
-| 内核 | `src/limiter/okl/positivity_scale.okl` | 单元局部三段式：均值 + $\min\rho_q$ 扫描（复用 `kxrcf_flag.okl` 的 `V2D`/`lambdaWJ`/`Vface` 点值求值与面遍历模式）→ $\theta_1$/$\theta_2$ 闭式 → 验证减半回退 → 缩放 $m>0$ 模态。标准 `@tile(TILE_SIZE)` 全单元循环（无短列表问题），无邻接数据依赖 |
+| 内核 | `src/limiter/okl/positivity_scale.okl` | 单元局部：本侧面迹 Vandermonde 行基址**一次预取**供三遍复用；均值 + $\min\rho_q$ 扫描（复用 `kxrcf_flag.okl` 的 `V2D`/`lambdaWJ`/`Vface` 点值求值与面遍历模式）→ $\theta_1$/$\theta_2$ 闭式 → 验证减半回退（仅 $\theta<1$，见上）→ 缩放 $m>0$ 模态。标准 `@tile(TILE_SIZE)` 全单元循环（无短列表问题），无邻接数据依赖 |
 | 宿主 | `src/limiter/PositivityLimiter.{hpp,cpp}` | `LimiterBase` 子类；`apply()` 识别双时间 coupled 模式的堆叠态（长度 $2N$ 时切半分别投影）；`readFlags()` 供诊断/测试读取逐单元动作标志（0 未动 / 1 缩放 / 2 均值不可容许） |
 | 配置 | `src/config/Config.{hpp,cpp}` | `[limiter] positivity`（bool，默认 false）、`positivity_epsilon`（相对裕度 $\varepsilon$，默认 1e-10，须在 (0,1)） |
 

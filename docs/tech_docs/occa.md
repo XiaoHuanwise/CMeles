@@ -219,7 +219,7 @@ mem_mgr.copyToHost(o_u, u_result.data(), N_total);
 - 使用 `@tile(TILE_SIZE, @outer, @inner)` 对 `elem`（单元编号）循环分块。`@tile` 自动拆分为外层 `@outer`（GPU block / OpenMP `#pragma omp parallel for`）和内层 `@inner`（GPU thread / 串行退化）。elem 内全部串行。
 - 当前不考虑 `@shared` 共享内存，所有数据读写走全局内存。
 
-> **特例 — 列表驱动内核（`mr_weno_limit.okl`）**：循环上界是**短的稠密列表**（问题单元数）而非总单元数时，`TILE_SIZE = 256` 会让外层块数塌缩到个位数（如 600 个问题单元 → 3 个块），OpenMP 下重活挤在 3 个线程上（实测 Sod 算例 37% 回归）、GPU 下整卡只开 3 个 block。此类内核使用专用小 tile `TROUBLE_TILE_SIZE`（`MrWenoLimiter::buildKernel` 注入：统一内存后端取 1——每个问题单元即一个工作单元；GPU 后端取 64——每 block 一个 wavefront）。**新增"循环上界远小于总规模"的内核时，必须核对 tile 使外层块数至少数倍于线程数**。
+> **特例 — 双驱动内核（`mr_weno_limit.okl`）**：该内核经 JIT 宏 `WENO_LIST_DRIVEN` 提供两种循环形态（`[limiter] weno_drive_mode` 选择，`auto` = 统一内存后端 list / 分离内存后端 full）：`list` 模式循环上界是**短的稠密列表**（问题单元数），`full` 模式上界是总单元数但干净单元一次标志加载即整体跳过（守卫用 `if (...) { ... }` 包裹——OKL 不接受 `@inner` 循环体内的裸 `continue` 语句）。两种形态下重单元都稀疏/成簇，`TILE_SIZE = 256` 会让外层块数塌缩（list 模式：600 个问题单元 → 3 个块，OpenMP 下重活挤在 3 个线程上，实测 Sod 算例 37% 回归）或单块负载过重，故使用专用小 tile `TROUBLE_TILE_SIZE`（`MrWenoLimiter::buildKernel` 注入：统一内存后端取 1——每个单元即一个工作单元；GPU 后端取 64——每 block 一个 wavefront）。**新增"循环上界远小于总规模"或"少数重单元 + 多数早退"的内核时，必须核对 tile 使外层块数至少数倍于线程数**。
 
 > **特例 — 归约核函数（`reduce.okl`）**：BLAS-1 归约操作（`dot`、`nrm2`、`asum`、`amax`、`amin`）是项目中**唯一使用 `@shared` 的例外**。块内树形归约必须依赖共享内存实现高效的并行规约，无法通过全局内存高效替代。详见 `src/blas/okl/reduce.okl`。
 
@@ -271,7 +271,7 @@ vendored OCCA 2.0.0 的 `@atomic` 仅是**语句属性**（`@atomic x += 1;`、`
 
 **项目策略**：`.okl` 内核禁用 `@atomic`。需要"压缩/归约到少量结果"的场景走两条既有路线之一：
 
-1. **宿主侧模式**（`DgField::estimateDt`、`MathOps::countNaN`，以及 `MrWenoLimiter::apply` 的问题单元压缩）：内核写满长度的中间数组（每单元/每分组一个结果），统一内存后端经零拷贝别名直接读、分离内存后端一次 D2H 读回，宿主收尾。
+1. **宿主侧模式**（`DgField::estimateDt`、`MathOps::countNaN`，以及 `MrWenoLimiter::apply` 的问题单元压缩——仅 `weno_drive_mode = "list"` 路径；GPU 的 `"full"` 路径以全场早退回避读回）：内核写满长度的中间数组（每单元/每分组一个结果），统一内存后端经零拷贝别名直接读、分离内存后端一次 D2H 读回，宿主收尾。分离内存后端上每次 D2H 都是排空命令队列的同步点——高频调用（每 RK stage）的场景应像 WENO 一样改用标志守卫早退。
 2. **分组 + `@shared` 树形归约**（`src/blas/okl/reduce.okl`，项目内唯一获批的 `@shared` 文件）：每个 `@outer` 块内归约出一个部分结果，宿主 ping-pong 收尾。
 
 若未来确需设备端原子（如 GPU 上的流压缩），要么升级 OCCA 版本并逐后端验证翻译，要么按后端拆分内核源码（`OCCA_USING_GPU` 宏守卫，用原生 `atomicAdd` / `atomic_add` / `#pragma omp atomic capture`）。

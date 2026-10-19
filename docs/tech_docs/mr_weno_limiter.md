@@ -127,7 +127,7 @@ $$ M_{\ell\ell}\, c^{(\ell)} = (M u^{(\cdot)})_\ell $$
 $$ (M u^{(\cdot)})_l = \int_{\Omega_0} u_h \phi_l \, \mathrm{d}\Omega = \sum_q \lambda_{WJ}[q]\, \phi_l(q) \left( \sum_m u^{(m)} \phi_m(q) \right), \qquad
 M_{\ell\ell} = \mathbf{V}_{\ell}^{T} \operatorname{diag}(\Lambda_{wJ})\, \mathbf{V}_{\ell} $$
 
-$\mathbf{V}_\ell$ 为二维 Vandermonde 矩阵的前 $N_\ell$ 列（[基函数文档 2.3 节](basis_functions.md#23-二维-vandermonde-矩阵)），$\Lambda_{wJ}$ 由几何模块逐积分点提供。每级一个 $N_\ell \times N_\ell$ 稠密 Cholesky（$P_2$ 只有 $3 \times 3$；$q_N = u_h$ 本身无需投影），只在 troubled cell 上执行，代价可忽略。
+$\mathbf{V}_\ell$ 为二维 Vandermonde 矩阵的前 $N_\ell$ 列（[基函数文档 2.3 节](basis_functions.md#23-二维-vandermonde-矩阵)），$\Lambda_{wJ}$ 由几何模块逐积分点提供。每级一个 $N_\ell \times N_\ell$ 稠密 Cholesky（$P_2$ 只有 $3 \times 3$；$q_N = u_h$ 本身无需投影）。$M_{\ell\ell}$ 只依赖**静止的单元几何**，故其逆由宿主在构造时**一次性预计算**（`MrWenoLimiter::buildGramTables`，组装乘积次序与求逆运算与原内核逐操作一致，暂存值位级等价）并按 `minvIdx[elem]`（仿射单元为 $-1$）紧凑上传，内核只做加载——原先每次 apply 每个 troubled cell 重组装 + 重求逆的代价随之消失。
 
 投影路径恢复论文全部性质：$q_0$ 成为**真单元平均常数**，凸组合链严格保平均；光滑极限链条仍精确还原 $u_h$。**仿射单元上 $M_{\ell\ell} = \|\mathbf{J}\| I$，投影自动退化为截断**——同一套代码按逐单元仿射标志分支即可。
 
@@ -335,12 +335,11 @@ $$ \frac{\alpha\, \Delta t}{h} \;\le\; \tilde\lambda(N) \;=\; \min_m \hat\omega_
 ```
 src/limiter/
   LimiterBase.hpp          # 抽象接口
-  MrWenoLimiter.hpp/.cpp   # MR-WENO 限制器（检测 + 宿主压缩 + 重构）
+  MrWenoLimiter.hpp/.cpp   # MR-WENO 限制器（检测 + 驱动模式 + 重构 + Gram 预计算）
   okl/
-    kxrcf_face_jump.okl    # 核函数 1: 逐面密度跳跃积分
-    kxrcf_flag.okl         # 核函数 2: 逐单元判据 → troubled 标志
-    mr_weno_lin_stage.okl  # 核函数 3: 全单元线性模态快照
-    mr_weno_limit.okl      # 核函数 4: 逐 troubled cell 重构（稠密列表驱动）
+    kxrcf_flag.okl         # 核函数 1: 逐单元判据（含入流面跳跃积分）→ troubled 标志
+    mr_weno_lin_stage.okl  # 核函数 2: 全单元线性模态快照
+    mr_weno_limit.okl      # 核函数 3: troubled cell 重构（列表/全场双驱动模式）
 ```
 
 接口设计（供时间推进模块回调）：
@@ -356,31 +355,33 @@ public:
 };
 ```
 
-`MrWenoLimiter` 持有 `MeshGeometry`、`BasisFunctions2D`、邻接拓扑的设备句柄，负责构建上述四个核函数并按序调用。参数（$C_k$、$\gamma$、$\varepsilon_w$ 等）在构造时从 `Config` 读入，作为核函数运行期参数传入（遵循现有约定：仅 `Real`、`TILE_SIZE`、`NMODES_MAX`、`NQ2_MAX` 等数组容量上限走 JIT 宏，业务维度走 `const int` 参数以最大化 JIT 缓存命中，见[OCCA 文档](occa.md)）。
+`MrWenoLimiter` 持有 `MeshGeometry`、`BasisFunctions2D`、邻接拓扑的设备句柄，负责构建上述三个核函数并按序调用，并在构造期完成非仿射单元逆 Gram 块的一次性预计算（`buildGramTables`）。参数（$C_k$、$\gamma$、$\varepsilon_w$ 等）在构造时从 `Config` 读入，作为核函数运行期参数传入（遵循现有约定：仅 `Real`、`TILE_SIZE`、`NMODES_MAX`、`NQ2_MAX` 等数组容量上限走 JIT 宏，业务维度走 `const int` 参数以最大化 JIT 缓存命中，见[OCCA 文档](occa.md)）。
 
 ### OKL 内核设计
 
-四个内核均按现有约定使用 `@tile(TILE_SIZE, @outer, @inner)`（`TILE_SIZE = 256`），单元内全串行、无 `@shared`。
+三个内核均按现有约定使用 `@tile(TILE_SIZE, @outer, @inner)`（`kxrcf_flag`、`mr_weno_lin_stage` 用 `TILE_SIZE = 256`；`mr_weno_limit` 用专用小 tile，见下），单元内全串行、无 `@shared`。
 
-**核函数 1 `kxrcf_face_jump`（逐面）**：模仿 `surface_integral.okl` 的两趟结构——第一趟在面积分点上求值左右单元的密度迹 $\rho^-$、$\rho^+$（模态系数 × `faceWeights` 表），第二趟按积分点加权累加，输出每个面的**带符号**跳跃积分 $\displaystyle \int_{e_f} (\rho_L - \rho_R)\,\mathrm{d}\Gamma$（符号相对左→右法向 $\hat{\boldsymbol{n}}$）。每面独立并行、只写自己的结果，无原子操作。边界面的输出为哑值（由核函数 2 跳过）。
-
-**核函数 2 `kxrcf_flag`（逐单元）**：逐单元遍历其面表（`elemFaces`，四边形 4 条、三角形退化槽位为 $-1$ 跳过）：
+**核函数 1 `kxrcf_flag`（逐单元）**：逐单元遍历其面表（`elemFaces`，四边形 4 条、三角形退化槽位为 $-1$ 跳过）：
 
 1. 由面两侧标志（`faceKL`/`faceKR` 等）确定本单元在该面的朝向，得外法向；
 2. 用本单元平均速度 $\bar{\boldsymbol{u}}$（真平均，见记号约定）与外法向点积分类入流/出流；
-3. 对入流内面累加 $|\text{jump}_f|$，得分子；累加入流边长得 $\left| \partial\Omega_0^- \right|$；
+3. 对入流内面**现场**求值两侧密度迹并累加带符号跳跃积分 $\sum_i w_i |J_f| (\rho_{\rm own} - \rho_{\rm own\text{-}nb})$ 的绝对值得分子（本侧迹复用第 4 步已求的点值，邻居迹由其模态系数 × 邻居侧 `faceVandermonde` 行内插）；累加入流边长得 $\left| \partial\Omega_0^- \right|$。*（原独立面并行内核 `kxrcf_face_jump` 与其全场中间缓冲 `o_faceJump_` 已融合至此：算术与累加次序不变、逐位等价，但每条检测链少一次内核启动与一次全场写读；符号随拥有侧翻转、绝对值不变，双侧同判入流的汇流面与融合前行为一致）*；
 4. 在本单元各边积分点上求值 $\rho$ 迹取 min（归一化尺度，按配置 min/max/mean）；
 5. 计算 $h$（质心最大顶点距离，由 `elem_vertices` 现场算）、比较 $C_k$，写 `troubled[elem]`（int 0/1）。
 
-**宿主侧压缩（检测与重构之间）**：`kxrcf_flag` 写回 `troubled[]` 标志后，`MrWenoLimiter::apply()` 在宿主把标志压缩为**升序稠密索引列表** `troubleList[]` 并记下数量（`lastTroubledCount()`）。统一内存后端（Serial/OpenMP）上 `troubled` 缓冲本就是宿主向量的零拷贝别名，压缩只是一个宿主循环；分离内存后端付一次 $O(N_{\text{elem}})$ 整型 D2H 读回 + 列表 H2D 上传。**零 troubled cell 时整条重构链（快照 + 重构）直接跳过**。不在设备端做原子压缩的原因：vendored OCCA 2.0.0 的 `@atomic` 不可移植——OpenCL 后端会**静默**编译为非原子语句（错误结果而非报错），且无"捕获旧值"的形式可用，详见[OCCA 文档](occa.md)的原子操作一节。
+**驱动模式（检测与重构之间）**：重构内核如何圈定 troubled 集合由 `[limiter] weno_drive_mode` 选择（构造期一次性解析）：
 
-**核函数 3 `mr_weno_lin_stage`（逐单元）**：把每个单元 $N_{\text{vars}} \times 3$ 个线性模态（$l = 0, 1, 2$）快照到侧缓冲 `uLin`（布局 $[{\rm elem}][{\rm var}][0..2]$）。任何单元都可能是 troubled cell 的邻居，故全单元无条件暂存（带宽型轻内核，双精度下每单元 12 个实数）。该快照使核函数 4 对邻居线性模态的读取与并发限幅彻底解耦——"限制前"语义由构造保证。
+- **`"list"`（宿主压缩稠密列表）**：`MrWenoLimiter::apply()` 在宿主把标志压缩为**升序稠密索引列表** `troubleList[]` 并记下数量（`lastTroubledCount()`）。统一内存后端（Serial/OpenMP）上 `troubled` 缓冲本就是宿主向量的零拷贝别名，压缩只是一个宿主循环。**零 troubled cell 时整条重构链（快照 + 重构）直接跳过**。
+- **`"full"`（全场早退）**：无任何读回——重构内核遍历全部单元，干净单元一次标志加载后立即退出（`linStage` 在干净场也会跑，代价是一次全场 12 实数/单元的轻拷贝）。
+- **`"auto"`（默认）**：统一内存后端取 `list`、分离内存后端（GPU）取 `full`。取舍：`list` 在静态调度的 OpenMP 下负载均衡（列表内全为等重重构工作单元），读回代价在统一后端为零；但分离内存后端上每次 `copyToHost` 都会**排空整个命令队列**（不止限制器链，含 RHS/BLAS 全部在队内核）——显式法每 RK stage 一次的流水线同步点，宿主永远无法跑到设备前面。`full` 的空槽成本在 GPU 上可忽略（block 级过度订阅消化空间成簇的重单元），这正是**最原始实现的形态**——其在 OpenMP 上的 37% 回归（见下方基准）源于静态调度下的负载不均，而非形态本身的问题，因此按后端分别选择（锁频交错基准实测 CPU 强制 `full` 模式：64² **+66%**、96² **+129%**——troubled cell 强簇聚于激波带，网格越大静态条纹越长失衡越甚——印证 `auto` 默认的正确性）。不在设备端做原子压缩的原因：vendored OCCA 2.0.0 的 `@atomic` 不可移植——OpenCL 后端会**静默**编译为非原子语句（错误结果而非报错），且无"捕获旧值"的形式可用，详见[OCCA 文档](occa.md)的原子操作一节。
 
-**核函数 4 `mr_weno_limit`（逐 troubled cell）**：循环上界为稠密列表长度 `N_troubled`，每个线程槽恰处理一个 troubled cell（`elem = troubleList[k]`）——非 troubled 单元不再占据线程槽，OpenMP 下消除空转与负载不均，GPU 下消除 warp 分歧浪费。注意**循环上界是短列表**，故此内核使用专用小 tile `TROUBLE_TILE_SIZE`（统一内存后端 1、GPU 后端 64）而非 `TILE_SIZE = 256`：600 个问题单元配 256-tile 只剩 3 个外层块，重活会串行挤在 3 个线程上（实测 Sod 算例 37% 回归）。troubled 单元执行完整算法：
+**核函数 2 `mr_weno_lin_stage`（逐单元）**：把每个单元 $N_{\text{vars}} \times 3$ 个线性模态（$l = 0, 1, 2$）快照到侧缓冲 `uLin`（布局 $[{\rm elem}][{\rm var}][0..2]$）。任何单元都可能是 troubled cell 的邻居，故全单元无条件暂存（带宽型轻内核，双精度下每单元 12 个实数）。该快照使核函数 3 对邻居线性模态的读取与并发限幅彻底解耦——"限制前"语义由构造保证。
+
+**核函数 3 `mr_weno_limit`（逐 troubled cell）**：驱动模式经 JIT 宏 `WENO_LIST_DRIVEN` 在同一份源码内二选一（先例：`surface_integral.okl` 的 `FLUX_TYPE`）——`list` 模式循环上界为稠密列表长度、`elem = troubleList[k]`，每个线程槽恰处理一个 troubled cell；`full` 模式循环上界为总单元数、干净单元经 `if (troubled[elem])` 守卫整体跳过（守卫而非 `continue`：OKL 不接受 `@inner` 循环体内的裸 `continue` 语句）。两种模式下**循环上界都远短于名义规模或重单元稀疏**，故此内核使用专用小 tile `TROUBLE_TILE_SIZE`（统一内存后端 1、GPU 后端 64）而非 `TILE_SIZE = 256`：600 个问题单元配 256-tile 只剩 3 个外层块，重活会串行挤在 3 个线程上（实测 Sod 算例 37% 回归）。troubled 单元执行完整算法：
 
 1. 读入本单元 $N_{\text{vars}} \times N_{\text{modes}}$ 模态系数与各邻居的线性模态（从 `uLin` 快照读取，按 `elemFaces` + `faceKL`/`faceKR` gather）；
 2. 逐边做特征场分解（$4 \times 4$；线性化点为真单元平均，用本单元 $M$ 第 0 行加权求出，或一次 $\Lambda_{wJ}$ 求积）；
-3. 每个特征分量执行标量算法：层级候选（按逐单元仿射标志走截断或即时投影——投影需现场组装 $M_{\ell\ell} = \mathbf{V}_\ell^T \operatorname{diag}(\Lambda_{wJ}) \mathbf{V}_\ell$ 并做小 Cholesky，$P_4$ 时最大 $10 \times 10$，仍在寄存器/线程局部数组容量内）、telescoping 递推、$\beta$（积分点求值 + $\mathbf{J}^{-1}$ 链式求导 + $\Lambda_{wJ}$ 收缩）、$\beta_{0,1}$（仿射邻居闭式 / 非仿射邻居查梯度表）、WENO-Z 权重；
+3. 每个特征分量执行标量算法：层级候选（按逐单元仿射标志走截断或投影——投影用**宿主预计算**的逆 Gram 块 $M_{\ell\ell}^{-1}$（`minvBlkDev`，见上文投影路径注记），$(Mu)_l$ 由**守恒变量质量作用与特征投影的交换律**复用：$M(\mathrm{Lr}\, u)_c = \sum_j \mathrm{Lr}_{cj}\,(M u)_j$，每单元只做 4 次质量作用 + 每（面，分量）一次 $4 \times 4$ 标量收缩，替代原先 4 面 $\times$ 4 分量共 16 次完整求积作用）、telescoping 递推、$\beta$（积分点求值 + $\mathbf{J}^{-1}$ 链式求导 + $\Lambda_{wJ}$ 收缩）、$\beta_{0,1}$（仿射邻居闭式 / 非仿射邻居查梯度表）、WENO-Z 权重；
 4. 按边长加权平均 4 个方向的结果，覆写本单元模态系数。
 
 > **逐单元仿射标志**：建议在 `MeshGeometry` 中新增逐单元 int 数组（判据：逐点 $\det\mathbf{J}$ 与首点一致，或逐单元重算 $c_1 = c_2 = 0$），随 `allocateDeviceMemory` 上传。全局标志 `isOrthogonal()` 不适用于混合网格下的逐单元分支。
