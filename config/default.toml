@@ -134,6 +134,12 @@ pseudo_stagnation = false # Early-exit the pseudo iteration on residual
                            # further iterations change nothing; the exit
                            # publishes the same state the max-steps cap would,
                            # ~3x faster. Off by default (classic semantics).
+pseudo_stagnation_tol = 0.98 # Improvement threshold of the stagnation exit:
+                           # an iteration counts as progress only if the
+                           # residual drops below tol x best-so-far. Any value
+                           # in [0.90, 0.995] separates the frozen phase from
+                           # the slow tail (see DualStepper.hpp); stricter
+                           # values ride the tail longer.
 pseudo_norm = "inf"        # Convergence norm of the dual-time pseudo residual:
                            # "inf" (default; single worst DOF — strictest, but
                            # a point singularity can block it), "l2" (RMS

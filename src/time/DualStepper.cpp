@@ -186,7 +186,7 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
                 // pair is mechanism-level, not tuned: it separates the
                 // frozen phase (0%/iter) from the slow tail (~3%/iter) —
                 // see Params::stagnationExit for the sensitivity note.
-                if (fNorm < Real(0.98) * fMinStag) {
+                if (fNorm < params_.stagnationTol * fMinStag) {
                     fMinStag = fNorm;
                     stag     = 0;
                 } else if (++stag >= 10) {
@@ -237,7 +237,7 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
                 // pair is mechanism-level, not tuned: it separates the
                 // frozen phase (0%/iter) from the slow tail (~3%/iter) —
                 // see Params::stagnationExit for the sensitivity note.
-                if (fNorm < Real(0.98) * fMinStag) {
+                if (fNorm < params_.stagnationTol * fMinStag) {
                     fMinStag = fNorm;
                     stag     = 0;
                 } else if (++stag >= 10) {
@@ -258,8 +258,16 @@ Real DualStepper::advance(occa::memory o_u, Real /*t*/, Real dt) {
 
     ++advances_;
     totalPseudoSteps_ += cnt;
+    // Exit forensics: why the pseudo loop stopped and how converged the
+    // published state was (ratio = |F|/|F0| vs rtol). Log-only diagnostics.
+    const char *exitTag =
+        notConverged(fNorm, f0Norm)
+            ? (cnt >= params_.maxPseudoSteps ? "max" : "stagnation")
+            : "tol";
     CMES_LOG_DETAIL << "DualStepper[" << name() << "] step " << advances_
-                    << ": pseudo_iters=" << cnt;
+                    << ": pseudo_iters=" << cnt << " exit=" << exitTag << " "
+                    << pseudoNormTag() << "=" << fNorm
+                    << " ratio=" << fNorm / f0Norm;
 
     // Publish: u^{n-1} <- u^n (U3R1 only), u^{n+1} <- the marched pseudo
     // state. The pseudo steppers own copies of the state (setState copies

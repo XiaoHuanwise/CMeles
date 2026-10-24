@@ -471,24 +471,25 @@ void Config::setDefaults() {
     bc_p_.clear();
     riemann_target_ = RiemannTarget::Flow;
 
-    time_method_            = TimeMethod::SspRk3;
-    time_cfl_               = Real(0.2);
-    time_dt_                = Real(0);
-    time_final_             = Real(1);
-    time_rtol_              = Real(1e-6);
-    time_atol_              = Real(1e-6);
-    time_safety_            = Real(0.9);
-    time_min_factor_        = Real(0.2);
-    time_max_factor_        = Real(5);
-    time_max_growth_        = Real(10);
-    time_max_pseudo_steps_  = 100;
-    time_pseudo_method_     = TimeMethod::SspRk332;
-    time_pseudo_dt_         = Real(0);
-    time_pseudo_dt_mode_    = PseudoDtMode::Global;
-    time_pseudo_norm_       = PseudoNorm::Inf;
-    time_pseudo_stagnation_ = false;
-    time_pseudo_reject_     = false;
-    time_dual_decoupled_    = false;
+    time_method_                = TimeMethod::SspRk3;
+    time_cfl_                   = Real(0.2);
+    time_dt_                    = Real(0);
+    time_final_                 = Real(1);
+    time_rtol_                  = Real(1e-6);
+    time_atol_                  = Real(1e-6);
+    time_safety_                = Real(0.9);
+    time_min_factor_            = Real(0.2);
+    time_max_factor_            = Real(5);
+    time_max_growth_            = Real(10);
+    time_max_pseudo_steps_      = 100;
+    time_pseudo_method_         = TimeMethod::SspRk332;
+    time_pseudo_dt_             = Real(0);
+    time_pseudo_dt_mode_        = PseudoDtMode::Global;
+    time_pseudo_norm_           = PseudoNorm::Inf;
+    time_pseudo_stagnation_     = false;
+    time_pseudo_stagnation_tol_ = Real(0.98);
+    time_pseudo_reject_         = false;
+    time_dual_decoupled_        = false;
 
     limiter_type_               = LimiterType::None;
     limiter_ckc_                = Real(1);
@@ -677,6 +678,8 @@ Config::Config(const std::string &path) {
         time_pseudo_atol_ = getReal(*tbl, "pseudo_atol", time_pseudo_atol_);
         time_pseudo_stagnation_ =
             getBool(*tbl, "pseudo_stagnation", time_pseudo_stagnation_);
+        time_pseudo_stagnation_tol_ =
+            getReal(*tbl, "pseudo_stagnation_tol", time_pseudo_stagnation_tol_);
         if (const auto nIt = tbl->find("pseudo_norm"); nIt != tbl->end()) {
             const std::string nname = nIt->second.value_or(std::string("inf"));
             time_pseudo_norm_       = parsePseudoNorm(nname);

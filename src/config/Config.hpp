@@ -588,6 +588,13 @@ public:
         return time_pseudo_stagnation_;
     }
 
+    /// @brief Stagnation-improvement threshold of the early exit
+    ///        (`pseudo_stagnation_tol`): a pseudo iteration counts as
+    ///        progress only if the residual drops below tol x (best-so-far).
+    Real timePseudoStagnationTol() const noexcept {
+        return time_pseudo_stagnation_tol_;
+    }
+
     PseudoNorm timePseudoNorm() const noexcept {
         return time_pseudo_norm_;
     }
@@ -834,6 +841,7 @@ private:
     PseudoDtMode time_pseudo_dt_mode_ = PseudoDtMode::Global;
     PseudoNorm time_pseudo_norm_      = PseudoNorm::Inf;
     bool time_pseudo_stagnation_      = false;
+    Real time_pseudo_stagnation_tol_  = Real(0.98);
     bool time_pseudo_reject_          = false;
     bool time_dual_decoupled_         = false;
 
