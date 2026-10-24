@@ -16,6 +16,7 @@
 
 #include "ExprBoundaryCondition.hpp"
 #include "ExprInitialCondition.hpp"
+#include "common/KernelProps.hpp"
 #include "common/Log.hpp"
 #include "common/Timer.hpp"
 #include "io/FieldOutput.hpp"
@@ -98,6 +99,9 @@ Real CompressibleFlowSolver::computeDt(Real t) {
 int CompressibleFlowSolver::run() {
     cmeles::Log::setLevel(cfg_.logLevel());
     logInterval_ = cfg_.logInterval();
+    // Gate the OpenCL -O3 kernel flag before any kernel is built ([occa]
+    // opencl_o3; NVIDIA's OpenCL rejects the flag — see OpenclO3).
+    cmeles::OpenclO3::setEnabled(cfg_.occaOpenclO3());
     // OCCA's OpenMP backend emits `#pragma omp parallel for` with no
     // num_threads clause, so the runtime ICV governs every kernel; set it
     // before the first parallel region (no-op for the non-OpenMP backends).

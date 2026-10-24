@@ -80,6 +80,7 @@ static bool testDefaults() {
     ok &= checkInt(cfg.occaThreads(), 0, "occaThreads default");
     ok &= checkInt(cfg.occaPlatform(), 0, "occaPlatform default");
     ok &= checkInt(cfg.occaDevice(), 0, "occaDevice default");
+    ok &= check(cfg.occaOpenclO3(), "occaOpenclO3 default");
     ok &= check(cfg.fluxType() == FluxType::Llf, "fluxType == Llf");
     ok &= checkInt(cfg.fluxTypeInt(), 0, "fluxTypeInt");
     ok &= checkInt(cfg.logLevel(), 1, "logLevel default");
@@ -126,6 +127,7 @@ mode = "OpenMP"
 threads = 8
 platform = 1
 device = 2
+opencl_o3 = false
 
 [log]
 level = 2
@@ -161,6 +163,7 @@ interval = 25
     ok &= checkInt(cfg.occaThreads(), 8, "occaThreads (parsed)");
     ok &= checkInt(cfg.occaPlatform(), 1, "occaPlatform (parsed)");
     ok &= checkInt(cfg.occaDevice(), 2, "occaDevice (parsed)");
+    ok &= check(!cfg.occaOpenclO3(), "occaOpenclO3 (parsed)");
     ok &= checkInt(cfg.logLevel(), 2, "logLevel (parsed)");
     ok &= checkInt(cfg.logInterval(), 25, "logInterval (parsed)");
 

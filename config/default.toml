@@ -226,6 +226,17 @@ threads = 0               # OpenMP thread count; 0 keeps the OMP_NUM_THREADS
                           # environment default. Ignored by other backends.
 platform = 0              # Platform index (OpenCL / dpcpp multi-platform systems).
 device = 0                # Device index within the platform (also CUDA/HIP id).
+opencl_o3 = true          # Append "-O3" to the OpenCL kernel build
+                          # (clBuildProgram). An implementation-defined option:
+                          # accepted by the clang-based OpenCL stacks
+                          # (AMD / Intel / POCL), where it guards against
+                          # conservative driver defaults — but NVIDIA's OpenCL
+                          # implementation rejects it outright ("Don't
+                          # understand command line argument \"-O3\""), making
+                          # every kernel build abort. On NVIDIA GPUs set
+                          # opencl_o3 = false; their compiler already optimises
+                          # fully by default, so nothing is lost. Ignored by
+                          # the other backends.
 
 # ---- Output ----
 [output]

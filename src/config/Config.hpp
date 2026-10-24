@@ -452,6 +452,15 @@ public:
         return occa_device_;
     }
 
+    /// @brief Whether the OpenCL kernel build appends the
+    ///        implementation-defined `-O3` flag ([occa] opencl_o3, default
+    ///        true). Accepted by the clang-based OpenCL stacks
+    ///        (AMD/Intel/POCL); NVIDIA's OpenCL implementation rejects it,
+    ///        so set false on NVIDIA devices.
+    bool occaOpenclO3() const noexcept {
+        return occa_opencl_o3_;
+    }
+
     // ---- Boundary condition ----
 
     BcType bcType() const noexcept {
@@ -814,6 +823,7 @@ private:
     int occa_threads_      = 0;
     int occa_platform_     = 0;
     int occa_device_       = 0;
+    bool occa_opencl_o3_   = true;
 
     BcType bc_type_ = BcType::Farfield;
     SideBc bc_side_[4];  ///< Per-side [bc] overrides (empty by default).

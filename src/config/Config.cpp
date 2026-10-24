@@ -590,6 +590,7 @@ Config::Config(const std::string &path) {
         occa_threads_   = getInt(*tbl, "threads", occa_threads_);
         occa_platform_  = getInt(*tbl, "platform", occa_platform_);
         occa_device_    = getInt(*tbl, "device", occa_device_);
+        occa_opencl_o3_ = getBool(*tbl, "opencl_o3", occa_opencl_o3_);
     }
 
     // [bc]
