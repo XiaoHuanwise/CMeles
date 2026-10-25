@@ -47,6 +47,17 @@ void Mesh::buildFaces() {
     // of boundary faces is deterministic across runs (ordered iteration).
     std::map<std::pair<int, int>, FaceRecord> edgeMap;
 
+    // Face records are staged in flat buffers and copied into the Eigen
+    // members once at the end. Growing the Eigen members per face instead
+    // (conservativeResize per discovery) costs O(N_face^2) total copying and
+    // dominated host startup at fine meshes (512^2: ~20 min).
+    // Global face numbering is unchanged: interior faces in phase-1
+    // discovery order, boundary faces in edgeMap (ordered) iteration order.
+    std::vector<int> fe;  // 4 per face: (K_L, f_L, K_R, f_R)
+    std::vector<int> ft;  // 1 per face: FaceType
+    fe.reserve(2 * 4 * static_cast<std::size_t>(N_elem_)); // each element
+    ft.reserve(2 * static_cast<std::size_t>(N_elem_));     // claims <= 2 faces
+
     // Phase 1: match shared edges between elements.
     for (int e = 0; e < N_elem_; ++e) {
         for (int f = 0; f < 4; ++f) {
@@ -72,12 +83,13 @@ void Mesh::buildFaces() {
                         std::to_string(rec.elem) + " and " + std::to_string(e));
                 }
                 const int F = N_face_++;
-                face_elements_.conservativeResize(N_face_, Eigen::NoChange);
-                face_elements_.row(F) << rec.elem, rec.face, e, f;
+                fe.push_back(rec.elem);
+                fe.push_back(rec.face);
+                fe.push_back(e);
+                fe.push_back(f);
                 elem_faces_(rec.elem, rec.face) = F;
                 elem_faces_(e, f)               = F;
-                face_types_.conservativeResize(N_face_);
-                face_types_(F) = int(FaceType::Interior);
+                ft.push_back(int(FaceType::Interior));
                 edgeMap.erase(it);
             }
         }
@@ -92,11 +104,22 @@ void Mesh::buildFaces() {
     for (const auto &[key, rec] : edgeMap) {
         (void)key;
         const int F = N_face_++;
-        face_elements_.conservativeResize(N_face_, Eigen::NoChange);
-        face_elements_.row(F) << rec.elem, rec.face, -1, -1;
+        fe.push_back(rec.elem);
+        fe.push_back(rec.face);
+        fe.push_back(-1);
+        fe.push_back(-1);
         elem_faces_(rec.elem, rec.face) = F;
-        face_types_.conservativeResize(N_face_);
-        face_types_(F) = int(FaceType::Boundary);
+        ft.push_back(int(FaceType::Boundary));
+    }
+
+    face_elements_.resize(N_face_, 4);
+    face_types_.resize(N_face_);
+    for (int F = 0; F < N_face_; ++F) {
+        face_elements_(F, 0) = fe[4 * F];
+        face_elements_(F, 1) = fe[4 * F + 1];
+        face_elements_(F, 2) = fe[4 * F + 2];
+        face_elements_(F, 3) = fe[4 * F + 3];
+        face_types_(F)       = ft[F];
     }
 }
 
