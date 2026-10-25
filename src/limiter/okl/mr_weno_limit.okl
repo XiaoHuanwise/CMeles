@@ -313,16 +313,6 @@ static Real rotT(const int k, const int j, const Real nx, const Real ny) {
                          const Real *Jinv21, const Real *Jinv22,
                          const int *elemAffine, const int *minvIdx,
                          const Real *minvBlkDev, const Real *derivV) {
-    // Reference-coordinate midpoint of local face g (g-th row), used for
-    // the neighbour-side gradient evaluation of beta_{0,1}.
-    const Real kFaceMid[4][2] = {{-1.0, 0.0},
-                                 {0.0, -1.0},
-                                 {1.0, 0.0},
-                                 {0.0, 1.0}};
-    // d(r)/dx-independent part of the linear-basis reference gradients:
-    // d(phi_1)/dr = d(phi_2)/ds = sqrt(3)/2, the cross terms vanish.
-    const Real cLin = sqrt(3.0) / 2.0;
-
 #if WENO_LIST_DRIVEN
     for (int k = 0; k < N_work; ++k;
          @tile(TROUBLE_TILE_SIZE, @outer, @inner)) {
@@ -335,6 +325,21 @@ static Real rotT(const int k, const int j, const Real nx, const Real ny) {
         // continue as a direct statement inside an @inner loop).
         if (troubled[elem] != 0) {
 #endif
+            // Reference-coordinate midpoint of local face g (g-th row),
+            // used for the neighbour-side gradient evaluation of
+            // beta_{0,1}.  Declared inside the tile body: OCCA's CUDA
+            // backend extracts the @tile body into a device function and
+            // drops kernel-scope locals, so declarations outside the
+            // loop do not survive the translation.
+            const Real kFaceMid[4][2] = {{-1.0, 0.0},
+                                         {0.0, -1.0},
+                                         {1.0, 0.0},
+                                         {0.0, 1.0}};
+            // d(r)/dx-independent part of the linear-basis reference
+            // gradients: d(phi_1)/dr = d(phi_2)/ds = sqrt(3)/2, the
+            // cross terms vanish.
+            const Real cLin = sqrt(3.0) / 2.0;
+
             const int eOff = elem * Nq2;
             const int uOff = elem * N_vars * N_modes;
 
